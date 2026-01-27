@@ -68,4 +68,8 @@ result = sentinel.evaluate({
     "policy_pressure": 0.73
 })
 
+print("GV:", result["gv_score"])
+print("Band:", result["risk_band"])
+print("Actions:", result["actions"])
+
 print(result["gv_score"])
