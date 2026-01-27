@@ -1,3 +1,5 @@
+![tests](https://github.com/willshacklett/gvai-safety-systems/actions/workflows/tests.yml/badge.svg)
+
 # GvAI Safety Systems
 
 **Runtime AI Safety & Security Infrastructure**
