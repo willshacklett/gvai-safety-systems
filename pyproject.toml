@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gvai-safety-systems"
+version = "0.1.0"
+description = "Constraint-aware runtime safety & security monitoring for AI systems."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Will Shacklett" }
+]
+keywords = ["ai-safety", "ai-security", "observability", "governance", "monitoring", "risk"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Operating System :: OS Independent",
+]
+
+[tool.setuptools]
+packages = ["gvai"]
