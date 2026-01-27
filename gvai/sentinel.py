@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 from .gv_core import compute_gv
+from .thresholds import classify_gv
 
 
 class Sentinel:
@@ -31,16 +32,20 @@ class Sentinel:
                      (e.g. uncertainty, drift, policy_pressure)
 
         Returns:
-            Dictionary containing GV score and metadata
+            Dictionary containing GV score, risk band, and actions
         """
         gv_score = compute_gv(
             signals=signals,
             constraint_strength=self.constraint_strength,
         )
 
+        threshold = classify_gv(gv_score)
+
         record = {
             "system_id": self.system_id,
             "gv_score": gv_score,
+            "risk_band": threshold.risk_band,
+            "actions": threshold.actions,
             "signals": signals,
             "timestamp": datetime.utcnow().isoformat(),
         }
