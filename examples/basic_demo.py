@@ -15,6 +15,8 @@ def main():
     print("GV Sentinel Demo")
     print("System:", result["system_id"])
     print("GV Score:", result["gv_score"])
+    print("Risk Band:", result["risk_band"])
+    print("Actions:", result["actions"])
     print("Signals:", result["signals"])
     print("Timestamp:", result["timestamp"])
 
