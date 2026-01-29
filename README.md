@@ -1,75 +1,61 @@
-![tests](https://github.com/willshacklett/gvai-safety-systems/actions/workflows/tests.yml/badge.svg)
-
 # GvAI Safety Systems
 
-**Runtime AI Safety & Security Infrastructure**
+**GvAI** is a lightweight, open-source framework for **runtime AI safety** built around a simple idea:
 
-GvAI Safety Systems provides continuous, quantitative monitoring for AI systems in production.  
-We detect when AI systems accumulate operational risk faster than constraints can control it — and intervene before failure occurs.
+> Measure strain while systems are running — not just intent before deployment.
 
----
+At the core of GvAI is the **GV (God Variable)**: a bounded scalar that tracks accumulated constraint strain in an AI system over time.
 
-## Why GvAI
-
-AI systems rarely fail all at once.
-
-They drift.
-They strain constraints.
-They quietly accumulate risk.
-
-Most tools tell you **what already happened**.  
-GvAI tells you **when systems are becoming unsafe** — while you still have time to act.
+This repository provides practical, engineer-friendly tools for:
+- Runtime risk signaling
+- Agent safety instrumentation
+- Constraint-aware observability
+- Early intervention before runaway behavior
 
 ---
 
-## Core Concept: GV (Constraint Strain Score)
+## Why GvAI?
 
-GV is a continuous signal that measures how much operational risk an AI system is accumulating relative to its controls.
+Most AI safety work focuses on:
+- Training-time alignment
+- Static evaluations
+- Pre-deployment controls
 
-It captures:
-- Behavioral drift
-- Rising uncertainty
-- Policy boundary pressure
-- Constraint erosion over time
+GvAI focuses on **runtime survivability**.
 
-GV is:
-- **Model-agnostic**
-- **Runtime, not retrospective**
-- **Quantitative, not subjective**
-- **Actionable by design**
+It answers questions like:
+- *Is this agent starting to thrash?*
+- *Are tool calls escalating?*
+- *Is the system entering an error or recursion loop?*
+- *Should we slow it down or halt execution?*
 
----
-
-## Product: GV Sentinel
-
-**GV Sentinel** is a lightweight runtime safety monitor that sits between AI systems and real-world execution.
-
-It provides:
-- Live GV score
-- Trend and acceleration detection
-- Threshold-based alerts
-- Automated intervention hooks
-- Audit-ready safety logs
-
-Think: **Datadog + circuit breaker for AI systems**
+All without model introspection.
 
 ---
 
-## Example
+## GV Runtime Guard (MVP)
 
-```python
-from gvai import Sentinel
+GvAI includes a lightweight **runtime guard** that computes a **GV risk signal**
+from live agent / tool-loop telemetry.
 
-sentinel = Sentinel(system_id="agent-prod")
+### What it does
+- Converts simple runtime signals into a `gv` score (0–100)
+- Emits a risk band: `green | yellow | red`
+- Recommends an action: `continue | slow | halt`
+- Self-damps when behavior stabilizes
 
-result = sentinel.evaluate({
-    "uncertainty": 0.61,
-    "drift": 0.19,
-    "policy_pressure": 0.73
-})
+### Signals observed
+- Token generation velocity
+- Tool call frequency
+- Error / exception rate
+- Repeated identical actions
+- Recursion depth
+- Optional latency correlation
 
-print("GV:", result["gv_score"])
-print("Band:", result["risk_band"])
-print("Actions:", result["actions"])
+---
 
-print(result["gv_score"])
+## Quick Demo (CLI)
+
+```bash
+echo '{"token_delta":800,"tool_calls_delta":2,"error_delta":1,"repeated_action_delta":2,"recursion_depth":1}' \
+| python -m gvai.runtime_guard.cli
