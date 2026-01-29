@@ -2,9 +2,10 @@
 
 **GvAI** is a lightweight, open-source framework for **runtime AI safety** built around a simple idea:
 
-> Measure strain while systems are running — not just intent before deployment.
+> **Measure strain while systems are running — not just intent before deployment.**
 
-At the core of GvAI is the **GV (God Variable)**: a bounded scalar that tracks accumulated constraint strain in an AI system over time.
+At the core of GvAI is the **GV (God Variable)**: a bounded scalar that tracks accumulated
+constraint strain in an AI system over time.
 
 This repository provides practical, engineer-friendly tools for:
 - Runtime risk signaling
@@ -37,18 +38,6 @@ All without model introspection.
 
 GvAI includes a lightweight **runtime guard** that computes a **GV risk signal**
 from live agent / tool-loop telemetry.
-
----
-
-## Live Demo (Simulated Agent Loop)
-
-Run the demo script to watch GV climb from **green → yellow → red** as a simulated agent
-begins to thrash, repeat actions, and escalate tool usage.
-
-```bash
-python examples/runtime_guard_demo.py
-
----
 
 ### What it does
 - Converts simple runtime signals into a `gv` score (0–100)
