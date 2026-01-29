@@ -38,6 +38,18 @@ All without model introspection.
 GvAI includes a lightweight **runtime guard** that computes a **GV risk signal**
 from live agent / tool-loop telemetry.
 
+---
+
+## Live Demo (Simulated Agent Loop)
+
+Run the demo script to watch GV climb from **green → yellow → red** as a simulated agent
+begins to thrash, repeat actions, and escalate tool usage.
+
+```bash
+python examples/runtime_guard_demo.py
+
+---
+
 ### What it does
 - Converts simple runtime signals into a `gv` score (0–100)
 - Emits a risk band: `green | yellow | red`
