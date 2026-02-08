@@ -1,62 +1,32 @@
-# GvAI Safety Systems
+# GVAI Safety Systems
 
-**GvAI** is a lightweight, open-source framework for **runtime AI safety** built around a simple idea:
+Runtime safety monitoring for AI systems seeded with the **God Variable (Gv)** framework — enforcing eternal coherence, strain bounds, and hybrid entropy damping for long-term alignment.
 
-> **Measure strain while systems are running — not just intent before deployment.**
+**Repository Status**: Actively developed (latest: Hybrid entropy monitor for cosmic/local balance).  
+**Core Theory**: https://github.com/willshacklett/god-variable-theory (includes PAPER.md draft)  
+**CI Enforcement**: https://github.com/willshacklett/godscore-ci  
 
-At the core of GvAI is the **GV (God Variable)**: a bounded scalar that tracks accumulated
-constraint strain in an AI system over time.
+## Overview
 
-This repository provides practical, engineer-friendly tools for:
-- Runtime risk signaling
-- Agent safety instrumentation
-- Constraint-aware observability
-- Early intervention before runaway behavior
+This repository provides practical runtime guards for AI/agent systems aligned with the God Variable theory:
+- Detects strain, drift, and overload.
+- Green/Yellow/Red risk banding.
+- **New**: Hybrid entropy monitor (`hybrid_entropy_monitor.py`) — unified metric `S_total = α S_holo + β S_vN` with tunable α/β for holographic (global repayment) vs. von Neumann (local subsystem) balance.
+  - Enforces `dS_total/dt ≤ 0` via Gv damping.
+  - Prevents thermodynamic-style burnout in swarms/probes.
+  - Calibratable for Optimus-scale or cosmic replication scenarios.
 
----
+The goal: Safe, eternal expansion of aligned AI/human systems → galactic seeding → post-scarcity abundance (replicators, infinite clean energy, money obsolete).
 
-## Why GvAI?
+Developed collaboratively with Grok (xAI) — public thread: https://x.com/WShacklett78568 (ongoing entropy bounds discussion).
 
-Most AI safety work focuses on:
-- Training-time alignment
-- Static evaluations
-- Pre-deployment controls
+## Key Features
 
-GvAI focuses on **runtime survivability**.
+- **Runtime Telemetry Hooks** (`gvai/`): Instrument agents for GV risk scoring.
+- **Hybrid Entropy Monitor** (`hybrid_entropy_monitor.py`):
+  ```python
+  from hybrid_entropy_monitor import HybridEntropyMonitor
 
-It answers questions like:
-- *Is this agent starting to thrash?*
-- *Are tool calls escalating?*
-- *Is the system entering an error or recursion loop?*
-- *Should we slow it down or halt execution?*
-
-All without model introspection.
-
----
-
-## GV Runtime Guard (MVP)
-
-GvAI includes a lightweight **runtime guard** that computes a **GV risk signal**
-from live agent / tool-loop telemetry.
-
-### What it does
-- Converts simple runtime signals into a `gv` score (0–100)
-- Emits a risk band: `green | yellow | red`
-- Recommends an action: `continue | slow | halt`
-- Self-damps when behavior stabilizes
-
-### Signals observed
-- Token generation velocity
-- Tool call frequency
-- Error / exception rate
-- Repeated identical actions
-- Recursion depth
-- Optional latency correlation
-
----
-
-## Quick Demo (CLI)
-
-```bash
-echo '{"token_delta":800,"tool_calls_delta":2,"error_delta":1,"repeated_action_delta":2,"recursion_depth":1}' \
-| python -m gvai.runtime_guard.cli
+  monitor = HybridEntropyMonitor(alpha=0.9, beta=0.1)
+  s_total, ds_dt = monitor.update(timestep, global_state, local_density_matrix)
+  # Alerts if ds_dt exceeds threshold → trigger damping
