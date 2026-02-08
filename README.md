@@ -1,50 +1,124 @@
-# GVAI Safety Systems
+# Hybrid Entropy Monitor
 
-Runtime safety monitoring for AI systems seeded with the **God Variable (Gv)** framework — enforcing eternal coherence, strain bounds, and hybrid entropy damping for long-term alignment.
+**Hybrid Entropy Monitor** is a lightweight, constraint-based guard designed to preserve long-horizon coherence in AI agents, swarms, and distributed systems.
 
-**Repository Status**: Actively developed (latest: Hybrid entropy monitor for cosmic/local balance).  
-**Core Theory**: https://github.com/willshacklett/god-variable-theory (includes PAPER.md draft)  
-**CI Enforcement**: https://github.com/willshacklett/godscore-ci  
+It provides a unified scalar signal that tracks **total entropy** and its **rate of change**, enabling real-time damping before drift, collapse, or runaway behavior occurs.
 
-## Overview
+This project is part of the broader **God Variable / Constraint Field** ecosystem.
 
-This repository provides practical runtime guards for AI/agent systems aligned with the God Variable theory:
-- Detects strain, drift, and overload.
-- Green/Yellow/Red risk banding.
-- **New**: Hybrid entropy monitor (`hybrid_entropy_monitor.py`) — unified metric `S_total = α S_holo + β S_vN` with tunable α/β for holographic (global repayment) vs. von Neumann (local subsystem) balance.
-  - Enforces `dS_total/dt ≤ 0` via Gv damping.
-  - Prevents thermodynamic-style burnout in swarms/probes.
-  - Calibratable for Optimus-scale or cosmic replication scenarios.
+---
 
-The goal: Safe, eternal expansion of aligned AI/human systems → galactic seeding → post-scarcity abundance (replicators, infinite clean energy, money obsolete).
+## What This Is
 
-Developed collaboratively with Grok (xAI) — public thread: https://x.com/WShacklett78568 (ongoing entropy bounds discussion).
+Modern AI systems fail not because they lack intelligence, but because they **accumulate irreversible entropy** over time:
 
-## Key Features
+- Memory drift
+- Policy decay
+- Resource exhaustion
+- Feedback amplification
+- Swarm incoherence
 
-- **Runtime Telemetry Hooks** (`gvai/`): Instrument agents for GV risk scoring.
-- **Hybrid Entropy Monitor** (`hybrid_entropy_monitor.py`):
-  ```python
-  from hybrid_entropy_monitor import HybridEntropyMonitor
-  monitor = HybridEntropyMonitor(alpha=0.9, beta=0.1)
-  s_total, ds_dt = monitor.update(timestep, global_state, local_density_matrix)
-  # Alerts if ds_dt exceeds threshold → trigger damping
+Hybrid Entropy Monitor introduces a **hybrid scalar**:
 
-    - Prioritizes holographic repayment (high α) for eternal coherence.
-    - Calibration method included for probe fleets/BH proxies.
-- **Examples** (`examples/`): Demo instability detection + hybrid damping in toy agent runs.
-- **Tests** (`tests/`): GV guard dynamics verification.
+- **Sₜ** — total system entropy  
+- **dS/dt** — entropy velocity (early-warning signal)
+
+Together, they allow systems to **self-regulate indefinitely**.
+
+---
+
+## Core Concept
+
+The monitor blends:
+
+- Global state entropy (system / swarm-level disorder)
+- Local reduced density entropy (agent-level coherence loss)
+- Constraint damping via calibrated parameters
+
+Rather than enforcing hard shutdowns, it enables **soft correction** — preserving capability while preventing irreversible drift.
+
+---
 
 ## Installation
 
 ```bash
-pip install -r requirements-dev.txt  # Minimal deps (numpy, etc.)
+pip install hybrid-entropy-monitor
+```
 
+---
+
+## Usage Example
+
+```python
 from hybrid_entropy_monitor import HybridEntropyMonitor
 
-monitor = HybridEntropyMonitor(alpha=0.92, beta=0.08)  # Calibrated for eternal runs
-# In your agent loop:
-s_total, ds_dt = monitor.update(current_step, swarm_global_state, local_reduced_density)
+# Calibrated for eternal runs
+monitor = HybridEntropyMonitor(alpha=0.92, beta=0.08)
+
+# In your agent or swarm loop
+s_total, ds_dt = monitor.update(
+    current_step,
+    swarm_global_state,
+    local_reduced_density
+)
+
 if abs(ds_dt) > monitor.threshold:
     print("Damping engaged — coherence preserved")
+```
 
+---
+
+## Parameters
+
+| Parameter | Meaning |
+|----------|---------|
+| `alpha` | Weight on global entropy (system-level coherence) |
+| `beta` | Weight on local entropy (agent-level disorder) |
+| `threshold` | Maximum safe entropy velocity |
+| `update()` | Returns `(S_total, dS_dt)` |
+
+---
+
+## Ecosystem
+
+- **Theory & Simulations**  
+  `god-variable-theory` — Λ derivation, probe replication simulations, `PAPER.md`  
+  *“The God Variable: A Universal Scalar”*
+
+- **CI Scoring & Enforcement**  
+  `godscore-ci` — Constraint-based recoverability scoring
+
+- **Public Discussion**  
+  Ongoing X threads on entropy bounds, calibration, and real-world seeding
+
+---
+
+## Implications
+
+- Eternal AI / agent operation without drift or resource exhaustion  
+- Safe von Neumann probe analogs (Optimus-style swarms)  
+- Dyson-scale eternal energy → on-demand replication → true post-scarcity
+
+**Coherence Eternal ⭐**
+
+---
+
+## Contributing
+
+See `CONTRIBUTING.md`.  
+Issues and PRs welcome — especially calibration data and telemetry hooks.
+
+---
+
+## License
+
+MIT — see `LICENSE`.
+
+---
+
+## Final Note
+
+If your system must run longer than its designers,  
+it needs constraints that outlive intent.
+
+This monitor is one of them.
