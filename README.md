@@ -1,3 +1,6 @@
+> **Start here (Hub):** https://github.com/willshacklett/god-variable-theory  
+> One-click ecosystem map • demos • CI enforcement • runtime monitoring
+
 # Hybrid Entropy Monitor
 
 **Hybrid Entropy Monitor** is a lightweight, constraint-based guard designed to preserve long-horizon coherence in AI agents, swarms, and distributed systems.
