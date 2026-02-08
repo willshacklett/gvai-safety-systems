@@ -26,7 +26,25 @@ Developed collaboratively with Grok (xAI) — public thread: https://x.com/WShac
 - **Hybrid Entropy Monitor** (`hybrid_entropy_monitor.py`):
   ```python
   from hybrid_entropy_monitor import HybridEntropyMonitor
-
   monitor = HybridEntropyMonitor(alpha=0.9, beta=0.1)
   s_total, ds_dt = monitor.update(timestep, global_state, local_density_matrix)
   # Alerts if ds_dt exceeds threshold → trigger damping
+
+    - Prioritizes holographic repayment (high α) for eternal coherence.
+    - Calibration method included for probe fleets/BH proxies.
+- **Examples** (`examples/`): Demo instability detection + hybrid damping in toy agent runs.
+- **Tests** (`tests/`): GV guard dynamics verification.
+
+## Installation
+
+```bash
+pip install -r requirements-dev.txt  # Minimal deps (numpy, etc.)
+
+from hybrid_entropy_monitor import HybridEntropyMonitor
+
+monitor = HybridEntropyMonitor(alpha=0.92, beta=0.08)  # Calibrated for eternal runs
+# In your agent loop:
+s_total, ds_dt = monitor.update(current_step, swarm_global_state, local_reduced_density)
+if abs(ds_dt) > monitor.threshold:
+    print("Damping engaged — coherence preserved")
+
