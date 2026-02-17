@@ -4,131 +4,199 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GvBot Console</title>
-  <meta name="description" content="GvBot Console — constraint-aware trust with memory." />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="./style.css" />
+  <style>
+    /* Agent UI (Commit 1) – minimal + self-contained */
+    .agentWrap { margin-top: 14px; }
+    .agentBar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0 8px; }
+    .agentStatus { font-size: 12px; color: #a8b3c6; }
+    .agentStatus.ok { color: #a8ffcf; }
+    .agentStatus.thinking { color: #ffd27a; }
+    .agentStatus.speaking { color: #7ad3ff; }
+    .agentStatus.warn { color: #ffb3b3; }
+    .agentStatus.err { color: #ff6b6b; }
+
+    .chatCard { border:1px solid rgba(255,255,255,.06); border-radius:16px; background: rgba(0,0,0,.18); padding:12px; }
+    .chatLog { height: 220px; overflow:auto; padding: 6px; border-radius: 12px; background: rgba(255,255,255,.03); }
+    .chatRow { display:flex; gap:10px; padding:8px; border-radius:12px; margin:6px 0; }
+    .chatRow.user { background: rgba(58,160,255,.08); }
+    .chatRow.bot { background: rgba(255,255,255,.05); }
+    .chatBadge { width:44px; flex:0 0 44px; font-size:12px; opacity:.9; }
+    .chatMsg { flex:1; font-size: 13px; line-height: 1.35; white-space: pre-wrap; }
+
+    .chatControls { display:flex; gap:10px; margin-top:10px; }
+    .chatControls input {
+      flex:1;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.25);
+      color: #e7eaf0;
+      padding: 0 12px;
+      outline: none;
+    }
+    .chatControls button {
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.06);
+      color: #e7eaf0;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    .chatControls button:hover { background: rgba(255,255,255,.09); }
+
+    .modal { position: fixed; inset: 0; display:none; align-items:center; justify-content:center; background: rgba(0,0,0,.55); z-index: 50; }
+    .modal.open { display:flex; }
+    .modalCard {
+      width: min(640px, 92vw);
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(10,14,20,.95);
+      padding: 14px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.55);
+    }
+    .modalHead { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .modalHead h3 { margin:0; font-size: 14px; }
+    .modalHead button { height: 34px; border-radius: 10px; }
+    .modalBody { margin-top: 10px; color:#a8b3c6; font-size: 12px; }
+    .modalBody label { display:block; margin: 10px 0 6px; }
+    .modalBody input {
+      width: 100%;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.25);
+      color: #e7eaf0;
+      padding: 0 12px;
+      outline: none;
+    }
+    .modalFoot { display:flex; justify-content:flex-end; gap:10px; margin-top: 12px; }
+  </style>
 </head>
 
 <body>
   <header>
     <div class="wrap">
-      <div class="brand">
-        <div class="dot"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <div>
           <h1>GvBot Console</h1>
           <div class="sub">Constraint-aware trust with memory</div>
         </div>
+        <button id="agentSettingsBtn" style="height:36px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.06);color:#e7eaf0;padding:0 12px;cursor:pointer;">
+          Agent Settings
+        </button>
       </div>
 
-      <div class="statusline">
-        <span class="pill" id="statePill">LOADING</span>
-        <span class="muted" id="stateDesc">Booting Gv…</span>
+      <div class="pillRow" style="margin-top:10px;">
+        <span class="pill" id="pillState">STABLE</span>
+        <span class="pillText" id="pillText">Demo signals loaded. External signals optional.</span>
       </div>
     </div>
   </header>
 
   <main class="wrap">
     <section class="grid">
-
-      <!-- FACE CARD -->
+      <!-- Left: Face -->
       <div class="card faceCard">
         <div class="faceFrame" id="faceFrame">
-          <img
-            class="face"
-            id="faceImg"
-            src="/gvai-safety-systems/dashboard/assets/gv_face.jpg?v=3"
-            alt="Gv"
-            onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22750%22><rect width=%22100%25%22 height=%22100%25%22 fill=%22%230b0e14%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%233aa0ff%22 font-size=%2242%22 font-family=%22Arial%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22>GV</text><text x=%2250%25%22 y=%2258%25%22 fill=%22%23a8b3c6%22 font-size=%2218%22 font-family=%22Arial%22 text-anchor=%22middle%22>face asset not loading</text></svg>';"
-          />
+          <img class="face" id="faceImg" src="assets/gv_face.jpg?v=999" alt="Gv" />
           <div class="glow" id="glow"></div>
           <div class="scanlines"></div>
         </div>
 
         <div class="faceMeta">
           <div class="titleRow">
-            <div class="title">Gv</div>
-            <div class="small muted" id="runStamp">—</div>
+            <div class="name">Gv</div>
+            <div class="time" id="timeNow">—</div>
           </div>
 
-          <div class="quote" id="quote">“I remember what happened.”</div>
+          <div class="quote" id="quoteText">“I remember what happened.”</div>
+          <div class="source" id="sourceText">Source: data/demo_signals.csv</div>
 
-          <div class="small muted" id="dataSource">Source: —</div>
+          <div class="mini" style="margin-top:8px;">
+            <span id="faceLoadNote">Open face asset - face: loaded</span>
+          </div>
 
-          <div class="small mt">
-            <a id="faceLink" href="assets/gv_face.jpg" target="_blank" rel="noopener" style="color:#cfe6ff;text-decoration:none;">
-              Open face asset
-            </a>
-            <span class="muted">·</span>
-            <span class="muted" id="faceStatus">face: loading…</span>
+          <!-- Agent UI (Commit 1) -->
+          <div class="agentWrap">
+            <div class="agentBar">
+              <div class="agentStatus ok" id="agentStatus">Ready (agent shell).</div>
+            </div>
+
+            <div class="chatCard">
+              <div class="chatLog" id="chatLog"></div>
+
+              <div class="chatControls">
+                <input id="chatInput" placeholder="Talk to Gv… (Commit 1 = stub reply)" />
+                <button id="sendBtn">Send</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- METRICS CARD -->
-      <div class="card">
+      <!-- Right: Metrics -->
+      <div class="card metricsCard">
         <h2>Latest Metrics</h2>
 
         <div class="tiles">
           <div class="tile">
             <div class="k">GodScore</div>
-            <div class="v" id="godscore">—</div>
+            <div class="v" id="godscore">86</div>
           </div>
-
           <div class="tile">
             <div class="k">Risk</div>
-            <div class="v" id="risk">—</div>
+            <div class="v" id="risk">0.190</div>
           </div>
-
           <div class="tile">
             <div class="k">Drift</div>
-            <div class="v" id="drift">—</div>
+            <div class="v" id="drift">0.120</div>
           </div>
-
           <div class="tile">
             <div class="k">Recoverability</div>
-            <div class="v" id="recovery">—</div>
+            <div class="v" id="recover">0.880</div>
           </div>
         </div>
 
-        <h3 class="mt">Signal</h3>
-        <div class="signalBox">
-          <div class="signalBg"></div>
-          <div class="signalLine" id="signalLine"></div>
+        <h3>Signal</h3>
+        <div class="signalBar">
+          <div class="signalText" id="signalText"></div>
         </div>
 
-        <div class="small muted mt" id="hint">
+        <div class="hint">
           If GodScore CI signals are unreachable, demo signals will load instead.
         </div>
       </div>
-
-      <!-- RECENT RUNS -->
-      <div class="card">
-        <h2>Recent Runs</h2>
-
-        <div class="tableWrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>GodScore</th>
-                <th>Risk</th>
-                <th>Drift</th>
-                <th>State</th>
-              </tr>
-            </thead>
-            <tbody id="recentTable">
-              <tr><td colspan="5" class="muted">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
     </section>
-
-    <footer class="wrap small muted">
-      GvBot reads signals and expresses system state as presence.
-    </footer>
   </main>
 
-  <script src="gvbot.js"></script>
+  <!-- Settings Modal -->
+  <div class="modal" id="settingsModal">
+    <div class="modalCard">
+      <div class="modalHead">
+        <h3>Agent Settings</h3>
+        <button id="settingsClose" style="border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.06);color:#e7eaf0;padding:0 12px;cursor:pointer;">Close</button>
+      </div>
+
+      <div class="modalBody">
+        This is where we’ll plug in the secure backend relay (Commit 2).<br/>
+        Don’t put private API keys into GitHub Pages files — we’ll keep secrets server-side.
+        <label for="endpointInput">Backend relay endpoint (next commit)</label>
+        <input id="endpointInput" placeholder="https://your-worker.yourname.workers.dev/chat" />
+      </div>
+
+      <div class="modalFoot">
+        <button id="settingsSave" style="height:36px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.10);color:#e7eaf0;padding:0 14px;cursor:pointer;">
+          Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Existing dashboard logic -->
+  <script src="./gvbot.js"></script>
+  <!-- Agent shell (Commit 1) -->
+  <script src="./agent.js"></script>
 </body>
 </html>
