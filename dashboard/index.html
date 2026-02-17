@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GvBot Console</title>
+  <meta name="description" content="GvBot Console — constraint-aware trust with memory." />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -18,8 +19,8 @@
       </div>
 
       <div class="statusline">
-        <span class="pill" id="statePill">STATE</span>
-        <span class="muted" id="stateDesc">Loading…</span>
+        <span class="pill" id="statePill">LOADING</span>
+        <span class="muted" id="stateDesc">Reading longitudinal signals…</span>
       </div>
     </div>
   </header>
@@ -28,6 +29,7 @@
     <section class="grid">
       <div class="card faceCard">
         <div class="faceFrame" id="faceFrame">
+          <!-- Put your image at: dashboard/assets/gv_face.jpg -->
           <img class="face" id="faceImg" src="./assets/gv_face.jpg" alt="Gv" />
           <div class="glow" id="glow"></div>
           <div class="scanlines"></div>
@@ -39,6 +41,7 @@
             <div class="small muted" id="runStamp">—</div>
           </div>
           <div class="quote" id="quote">“I remember what happened.”</div>
+          <div class="small muted" id="dataSource">Source: —</div>
         </div>
       </div>
 
@@ -69,7 +72,9 @@
           <div class="signalLine" id="signalLine"></div>
         </div>
 
-        <div class="small muted mt" id="dataSource">Source: —</div>
+        <div class="small muted mt" id="hint">
+          Tip: drop <code>gv_face.jpg</code> into <code>/dashboard/assets/</code>.
+        </div>
       </div>
 
       <div class="card">
@@ -94,7 +99,7 @@
     </section>
 
     <footer class="wrap small muted">
-      GvBot is a visualization layer. It reads CI outputs and expresses system state as presence.
+      GvBot reads public longitudinal signals and expresses system state as presence.
     </footer>
   </main>
 
