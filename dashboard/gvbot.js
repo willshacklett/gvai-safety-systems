@@ -1,11 +1,12 @@
-// GvBot Console — reads longitudinal CSV and expresses state as presence.
-// Expected CSV columns (best-effort):
-// timestamp / run_time / time, godscore, risk, drift, recoverability
-// Works with summary_history_binned.csv (preferred) and summary_history.csv (fallback).
+// GvBot Console — gvai-safety-systems
+// Reads public longitudinal signals from your GodScore CI GitHub Pages data.
+//
+// Preferred: summary_history_binned.csv
+// Fallback:  summary_history.csv
 
 const SOURCES = [
-  "../data/longitudinal/summary_history_binned.csv",
-  "../data/longitudinal/summary_history.csv"
+  "https://willshacklett.github.io/godscore-ci/data/longitudinal/summary_history_binned.csv",
+  "https://willshacklett.github.io/godscore-ci/data/longitudinal/summary_history.csv",
 ];
 
 const els = {
@@ -19,6 +20,20 @@ const els = {
   recentTable: document.getElementById("recentTable"),
   dataSource: document.getElementById("dataSource"),
 };
+
+function splitCSVLine(line) {
+  const out = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQ = !inQ; continue; }
+    if (c === "," && !inQ) { out.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
 
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
@@ -35,28 +50,6 @@ function parseCSV(text) {
   return rows;
 }
 
-// Handles commas inside quotes.
-function splitCSVLine(line) {
-  const out = [];
-  let cur = "";
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"' ) {
-      inQ = !inQ;
-      continue;
-    }
-    if (c === "," && !inQ) {
-      out.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
 function pickField(row, candidates) {
   for (const c of candidates) {
     if (row[c] !== undefined && row[c] !== "") return row[c];
@@ -65,13 +58,19 @@ function pickField(row, candidates) {
 }
 
 function toNum(v) {
-  const n = Number(String(v).replace(/[%]/g,""));
+  const n = Number(String(v).replace(/[%]/g, ""));
   return Number.isFinite(n) ? n : NaN;
 }
 
 function fmt(n, digits = 2) {
   if (!Number.isFinite(n)) return "—";
   return n % 1 === 0 ? String(n) : n.toFixed(digits);
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
 }
 
 function setState(state, desc) {
@@ -85,15 +84,13 @@ function setState(state, desc) {
 }
 
 function deriveState(latest) {
-  // Thresholds (tune later to match your scoring):
-  // - Drift: drift >= 0.20 OR risk >= 0.45 OR godscore <= 75
-  // - Recovery: drift >= 0.35 OR risk >= 0.65 OR godscore <= 60
+  // Baseline thresholds (tune later once we confirm your exact column meanings):
+  // DRIFT:    drift >= 0.20 OR risk >= 0.45 OR godscore <= 75
+  // RECOVERY: drift >= 0.35 OR risk >= 0.65 OR godscore <= 60
   const gs = toNum(pickField(latest, ["godscore", "score", "god_score"]));
   const risk = toNum(pickField(latest, ["risk", "dgv", "cumulative_dgv", "cum_dgv"]));
   const drift = toNum(pickField(latest, ["drift", "delta", "drift_score"]));
-  const rec = toNum(pickField(latest, ["recoverability", "recovery", "rhl"]));
 
-  // Prefer drift/risk if present; fall back to godscore.
   const recoveryMode =
     (Number.isFinite(drift) && drift >= 0.35) ||
     (Number.isFinite(risk) && risk >= 0.65) ||
@@ -142,15 +139,9 @@ function renderRecent(rows) {
       <td>${escapeHtml(fmt(gs,1))}</td>
       <td>${escapeHtml(fmt(risk,3))}</td>
       <td>${escapeHtml(fmt(drift,3))}</td>
-      <td><span class="pill">${s}</span></td>
+      <td><span class="pill">${escapeHtml(s)}</span></td>
     </tr>`;
   }).join("");
-}
-
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-  }[c]));
 }
 
 async function loadFirstAvailable() {
@@ -163,7 +154,7 @@ async function loadFirstAvailable() {
       if (rows.length) return { url, rows };
     } catch (e) { /* try next */ }
   }
-  throw new Error("No CSV source available.");
+  throw new Error("No CSV source available (check godscore-ci Pages data path).");
 }
 
 (async function init(){
@@ -178,7 +169,7 @@ async function loadFirstAvailable() {
     const st = deriveState(latest);
     setState(st.state, st.desc);
   } catch (err) {
-    setState("STATE", "Could not load CSV. Check /data/longitudinal paths.");
+    setState("ERROR", "Could not load signals. See Source + Pages path.");
     els.dataSource.textContent = "Source: (missing)";
     els.recentTable.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(err.message)}</td></tr>`;
   }
