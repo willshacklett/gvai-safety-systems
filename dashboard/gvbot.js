@@ -1,18 +1,9 @@
 /* =========================
    GvBot Console (dashboard)
-   - Works with:
-     #chat, #input
-     onclick="sendMessage()", onclick="testVoice()"
 ========================= */
 
-/* =========================
-   CONFIG
-========================= */
 const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev/";
 
-/* =========================
-   ELEMENTS
-========================= */
 const chatEl = document.getElementById("chat");
 const inputEl = document.getElementById("input");
 
@@ -21,8 +12,9 @@ const voiceRateEl = document.getElementById("voiceRate");
 const voicePitchEl = document.getElementById("voicePitch");
 
 /* =========================
-   CHAT UI
+   CHAT
 ========================= */
+
 function escapeHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -33,8 +25,6 @@ function escapeHtml(s) {
 }
 
 function addMessage(role, text) {
-  if (!chatEl) return;
-
   const div = document.createElement("div");
   div.className = "message " + role;
 
@@ -45,36 +35,82 @@ function addMessage(role, text) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
+async function callRelay(userText) {
+  const res = await fetch(RELAY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messages: [{ role: "user", content: userText }]
+    })
+  });
+
+  const raw = await res.text();
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = { reply: raw };
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.error || "Relay error");
+  }
+
+  return data;
+}
+
+/* =========================
+   GLOBAL FUNCTIONS (for onclick)
+========================= */
+
+window.sendMessage = async function () {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  addMessage("you", text);
+  inputEl.value = "";
+
+  try {
+    const data = await callRelay(text);
+    const reply = data.reply || "(No text returned)";
+    addMessage("gv", reply);
+    speak(reply);
+  } catch (err) {
+    addMessage("gv", "Relay error: " + err.message);
+  }
+};
+
+window.testVoice = function () {
+  speak("Hi Will. I’m Gv. Calm. Present. Ready.");
+};
+
 /* =========================
    VOICE
 ========================= */
+
 const voice = {
   enabled: true,
   rate: 0.95,
   pitch: 1.05,
-  volume: 1,
+  volume: 1
 };
 
 function pickPreferredVoice() {
   if (!("speechSynthesis" in window)) return null;
 
-  const voices = speechSynthesis.getVoices() || [];
+  const voices = speechSynthesis.getVoices();
   if (!voices.length) return null;
 
-  // Prefer more natural voices if present
-  const wanted = [
-    "aria",
-    "jenny",
-    "samantha",
-    "serena",
-    "victoria",
-    "ava",
-    "google",
-    "zira",
-  ];
+  const preferred = voices.find(v =>
+    v.name.toLowerCase().includes("aria") ||
+    v.name.toLowerCase().includes("jenny") ||
+    v.name.toLowerCase().includes("samantha") ||
+    v.name.toLowerCase().includes("zira") ||
+    v.name.toLowerCase().includes("google")
+  );
 
-  const found = voices.find(v => wanted.some(w => v.name.toLowerCase().includes(w)));
-  return found || voices[0] || null;
+  return preferred || voices[0];
 }
 
 function speak(text) {
@@ -93,109 +129,36 @@ function speak(text) {
   speechSynthesis.speak(u);
 }
 
-/* Make sure voices are loaded in some browsers */
 if ("speechSynthesis" in window) {
   speechSynthesis.onvoiceschanged = () => {};
 }
 
 /* =========================
-   RELAY CALL
+   VOICE UI EVENTS
 ========================= */
-async function callRelay(userText) {
-  const payload = {
-    messages: [{ role: "user", content: userText }],
-  };
 
-  const res = await fetch(RELAY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+voice.enabled = voiceEnabledEl.checked;
 
-  // If the relay returns non-JSON sometimes, protect parsing
-  const raw = await res.text();
-  let data = {};
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = { reply: raw };
+voiceEnabledEl.addEventListener("change", e => {
+  voice.enabled = e.target.checked;
+  if (!voice.enabled) speechSynthesis.cancel();
+});
+
+voiceRateEl.addEventListener("input", e => {
+  voice.rate = parseFloat(e.target.value);
+});
+
+voicePitchEl.addEventListener("input", e => {
+  voice.pitch = parseFloat(e.target.value);
+});
+
+/* Enter key send */
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    window.sendMessage();
   }
+});
 
-  if (!res.ok) {
-    const msg =
-      data?.error ||
-      data?.message ||
-      `Relay error (${res.status})`;
-    throw new Error(msg);
-  }
-
-  return data;
-}
-
-/* =========================
-   GLOBAL FUNCTIONS
-   (needed for onclick="...")
-========================= */
-window.sendMessage = async function sendMessage() {
-  const text = (inputEl?.value || "").trim();
-  if (!text) return;
-
-  addMessage("you", text);
-  inputEl.value = "";
-
-  try {
-    const data = await callRelay(text);
-
-    const reply =
-      data?.reply ||
-      data?.message ||
-      "(No text returned)";
-
-    addMessage("gv", reply);
-    speak(reply);
-  } catch (err) {
-    addMessage("gv", `Relay error: ${err.message || "unknown"}`);
-  }
-};
-
-window.testVoice = function testVoice() {
-  speak("Hi Will. I’m Gv. Calm. Present. Ready.");
-};
-
-/* =========================
-   UI EVENTS
-========================= */
-if (voiceEnabledEl) {
-  voice.enabled = voiceEnabledEl.checked;
-  voiceEnabledEl.addEventListener("change", (e) => {
-    voice.enabled = e.target.checked;
-    if (!voice.enabled && "speechSynthesis" in window) speechSynthesis.cancel();
-  });
-}
-
-if (voiceRateEl) {
-  voice.rate = parseFloat(voiceRateEl.value || "0.95");
-  voiceRateEl.addEventListener("input", (e) => {
-    voice.rate = parseFloat(e.target.value);
-  });
-}
-
-if (voicePitchEl) {
-  voice.pitch = parseFloat(voicePitchEl.value || "1.05");
-  voicePitchEl.addEventListener("input", (e) => {
-    voice.pitch = parseFloat(e.target.value);
-  });
-}
-
-/* Enter key to send */
-if (inputEl) {
-  inputEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      window.sendMessage();
-    }
-  });
-}
-
-/* Boot line so you know JS is loaded */
+/* Boot message */
 addMessage("gv", "Ready.");
