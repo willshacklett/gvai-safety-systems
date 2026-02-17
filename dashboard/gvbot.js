@@ -1,10 +1,11 @@
 // GvBot Console — gvai-safety-systems
-// Reads public longitudinal signals from your GodScore CI GitHub Pages data.
-//
-// Preferred: summary_history_binned.csv
-// Fallback:  summary_history.csv
+// Always works: loads local demo signals first, then tries external GodScore CI CSVs.
 
 const SOURCES = [
+  // Local demo (always available)
+  "data/demo_signals.csv",
+
+  // External (optional)
   "https://willshacklett.github.io/godscore-ci/data/longitudinal/summary_history_binned.csv",
   "https://willshacklett.github.io/godscore-ci/data/longitudinal/summary_history.csv",
 ];
@@ -19,6 +20,8 @@ const els = {
   recovery: document.getElementById("recovery"),
   recentTable: document.getElementById("recentTable"),
   dataSource: document.getElementById("dataSource"),
+  faceImg: document.getElementById("faceImg"),
+  faceStatus: document.getElementById("faceStatus"),
 };
 
 function splitCSVLine(line) {
@@ -84,9 +87,6 @@ function setState(state, desc) {
 }
 
 function deriveState(latest) {
-  // Baseline thresholds (tune later once we confirm your exact column meanings):
-  // DRIFT:    drift >= 0.20 OR risk >= 0.45 OR godscore <= 75
-  // RECOVERY: drift >= 0.35 OR risk >= 0.65 OR godscore <= 60
   const gs = toNum(pickField(latest, ["godscore", "score", "god_score"]));
   const risk = toNum(pickField(latest, ["risk", "dgv", "cumulative_dgv", "cum_dgv"]));
   const drift = toNum(pickField(latest, ["drift", "delta", "drift_score"]));
@@ -154,22 +154,41 @@ async function loadFirstAvailable() {
       if (rows.length) return { url, rows };
     } catch (e) { /* try next */ }
   }
-  throw new Error("No CSV source available (check godscore-ci Pages data path).");
+  throw new Error("No CSV source available.");
+}
+
+function wireFaceStatus(){
+  if (!els.faceImg || !els.faceStatus) return;
+
+  els.faceImg.addEventListener("load", () => {
+    els.faceStatus.textContent = "face: loaded";
+  });
+
+  els.faceImg.addEventListener("error", () => {
+    els.faceStatus.textContent = "face: fallback";
+  });
 }
 
 (async function init(){
+  wireFaceStatus();
+
   try {
     const { url, rows } = await loadFirstAvailable();
     els.dataSource.textContent = `Source: ${url}`;
-    const latest = rows[rows.length - 1];
 
+    const latest = rows[rows.length - 1];
     renderLatest(latest);
     renderRecent(rows);
 
     const st = deriveState(latest);
     setState(st.state, st.desc);
+
+    // If using local demo, say so.
+    if (url.includes("data/demo_signals.csv")) {
+      els.stateDesc.textContent = "Demo signals loaded. External signals optional.";
+    }
   } catch (err) {
-    setState("ERROR", "Could not load signals. See Source + Pages path.");
+    setState("ERROR", "Signals could not be loaded.");
     els.dataSource.textContent = "Source: (missing)";
     els.recentTable.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(err.message)}</td></tr>`;
   }
