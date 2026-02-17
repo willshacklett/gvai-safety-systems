@@ -5,7 +5,6 @@
   --text:#e7eaf0;
   --muted:#a8b3c6;
   --blue:#3aa0ff;
-  --blue2:#1b5cff;
   --warn:#f5c542;
   --bad:#ff4d4d;
   --good:#36d399;
@@ -45,10 +44,11 @@ h1{font-size:18px;margin:0 0 4px 0}
 .muted{color:var(--muted)}
 .small{font-size:12px}
 .mt{margin-top:14px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
 
 .grid{
   display:grid;
-  grid-template-columns: 1.1fr .9fr;
+  grid-template-columns: 1.05fr .95fr;
   gap:14px;
   padding:16px 0 18px;
 }
@@ -150,17 +150,14 @@ tbody tr:hover td{background:rgba(58,160,255,.04)}
   100%{transform:translateX(460%)}
 }
 
-/* State theming hooks */
-.state-stable .pill{border-color:rgba(54,211,153,.35)}
-.state-stable #statePill{background:rgba(54,211,153,.10)}
+/* State theming */
+.state-stable #statePill{border-color:rgba(54,211,153,.40); background:rgba(54,211,153,.10)}
 .state-stable .glow{opacity:.50}
 
-.state-drift .pill{border-color:rgba(245,197,66,.40)}
-.state-drift #statePill{background:rgba(245,197,66,.12)}
+.state-drift #statePill{border-color:rgba(245,197,66,.45); background:rgba(245,197,66,.12)}
 .state-drift .glow{opacity:.72}
 .state-drift .signalLine{opacity:.72; animation-duration: 1.5s;}
 
-.state-recovery .pill{border-color:rgba(255,77,77,.45)}
-.state-recovery #statePill{background:rgba(255,77,77,.12)}
+.state-recovery #statePill{border-color:rgba(255,77,77,.55); background:rgba(255,77,77,.12)}
 .state-recovery .glow{opacity:.88}
 .state-recovery .signalLine{opacity:.92; animation-duration: 1.0s;}
