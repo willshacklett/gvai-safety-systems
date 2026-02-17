@@ -21,7 +21,7 @@ const FACE_SRC = "./assets/gv_face.jpg";
 
 // 3) Relay (Cloudflare Worker) — PASTE YOUR URL HERE
 // Example: https://gvbot-relay.yourname.workers.dev
-const RELAY_URL = ""; // <-- SET THIS
+const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev";
 
 // ===============================
 // 1) DOM HOOKS
