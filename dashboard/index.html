@@ -21,7 +21,7 @@
 
       <div class="statusline">
         <span class="pill" id="statePill">LOADING</span>
-        <span class="muted" id="stateDesc">Reading longitudinal signals…</span>
+        <span class="muted" id="stateDesc">Booting Gv…</span>
       </div>
     </div>
   </header>
@@ -32,13 +32,12 @@
       <!-- FACE CARD -->
       <div class="card faceCard">
         <div class="faceFrame" id="faceFrame">
-          <!-- Absolute path for GitHub Pages project site -->
           <img
             class="face"
             id="faceImg"
-            src="/gvai-safety-systems/dashboard/assets/gv_face.jpg?v=1"
+            src="assets/gv_face.jpg?v=2"
             alt="Gv"
-            onerror="this.onerror=null;this.src='https://via.placeholder.com/600x750/0b0e14/3aa0ff?text=Gv';"
+            onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22750%22><rect width=%22100%25%22 height=%22100%25%22 fill=%22%230b0e14%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%233aa0ff%22 font-size=%2242%22 font-family=%22Arial%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22>GV</text><text x=%2250%25%22 y=%2258%25%22 fill=%22%23a8b3c6%22 font-size=%2218%22 font-family=%22Arial%22 text-anchor=%22middle%22>face asset not loading</text></svg>';"
           />
           <div class="glow" id="glow"></div>
           <div class="scanlines"></div>
@@ -53,6 +52,14 @@
           <div class="quote" id="quote">“I remember what happened.”</div>
 
           <div class="small muted" id="dataSource">Source: —</div>
+
+          <div class="small mt">
+            <a id="faceLink" href="assets/gv_face.jpg" target="_blank" rel="noopener" style="color:#cfe6ff;text-decoration:none;">
+              Open face asset
+            </a>
+            <span class="muted">·</span>
+            <span class="muted" id="faceStatus">face: loading…</span>
+          </div>
         </div>
       </div>
 
@@ -87,6 +94,10 @@
           <div class="signalBg"></div>
           <div class="signalLine" id="signalLine"></div>
         </div>
+
+        <div class="small muted mt" id="hint">
+          If GodScore CI signals are unreachable, demo signals will load instead.
+        </div>
       </div>
 
       <!-- RECENT RUNS -->
@@ -114,7 +125,7 @@
     </section>
 
     <footer class="wrap small muted">
-      GvBot reads public longitudinal signals and expresses system state as presence.
+      GvBot reads signals and expresses system state as presence.
     </footer>
   </main>
 
