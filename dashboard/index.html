@@ -1,202 +1,281 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>GvBot Console</title>
-  <link rel="stylesheet" href="./style.css" />
-  <style>
-    /* Agent UI (Commit 1) – minimal + self-contained */
-    .agentWrap { margin-top: 14px; }
-    .agentBar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0 8px; }
-    .agentStatus { font-size: 12px; color: #a8b3c6; }
-    .agentStatus.ok { color: #a8ffcf; }
-    .agentStatus.thinking { color: #ffd27a; }
-    .agentStatus.speaking { color: #7ad3ff; }
-    .agentStatus.warn { color: #ffb3b3; }
-    .agentStatus.err { color: #ff6b6b; }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GvBot Console</title>
 
-    .chatCard { border:1px solid rgba(255,255,255,.06); border-radius:16px; background: rgba(0,0,0,.18); padding:12px; }
-    .chatLog { height: 220px; overflow:auto; padding: 6px; border-radius: 12px; background: rgba(255,255,255,.03); }
-    .chatRow { display:flex; gap:10px; padding:8px; border-radius:12px; margin:6px 0; }
-    .chatRow.user { background: rgba(58,160,255,.08); }
-    .chatRow.bot { background: rgba(255,255,255,.05); }
-    .chatBadge { width:44px; flex:0 0 44px; font-size:12px; opacity:.9; }
-    .chatMsg { flex:1; font-size: 13px; line-height: 1.35; white-space: pre-wrap; }
+<style>
+:root {
+  --bg: #0c111b;
+  --card: #111827;
+  --soft: #1f2937;
+  --text: #e5e7eb;
+  --accent: #60a5fa;
+}
 
-    .chatControls { display:flex; gap:10px; margin-top:10px; }
-    .chatControls input {
-      flex:1;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.08);
-      background: rgba(0,0,0,.25);
-      color: #e7eaf0;
-      padding: 0 12px;
-      outline: none;
-    }
-    .chatControls button {
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.10);
-      background: rgba(255,255,255,.06);
-      color: #e7eaf0;
-      padding: 0 12px;
-      cursor: pointer;
-    }
-    .chatControls button:hover { background: rgba(255,255,255,.09); }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: radial-gradient(circle at top, #0f172a, #0b1220);
+  color: var(--text);
+}
 
-    .modal { position: fixed; inset: 0; display:none; align-items:center; justify-content:center; background: rgba(0,0,0,.55); z-index: 50; }
-    .modal.open { display:flex; }
-    .modalCard {
-      width: min(640px, 92vw);
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,.10);
-      background: rgba(10,14,20,.95);
-      padding: 14px;
-      box-shadow: 0 20px 60px rgba(0,0,0,.55);
-    }
-    .modalHead { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-    .modalHead h3 { margin:0; font-size: 14px; }
-    .modalHead button { height: 34px; border-radius: 10px; }
-    .modalBody { margin-top: 10px; color:#a8b3c6; font-size: 12px; }
-    .modalBody label { display:block; margin: 10px 0 6px; }
-    .modalBody input {
-      width: 100%;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.08);
-      background: rgba(0,0,0,.25);
-      color: #e7eaf0;
-      padding: 0 12px;
-      outline: none;
-    }
-    .modalFoot { display:flex; justify-content:flex-end; gap:10px; margin-top: 12px; }
-  </style>
+header {
+  padding: 18px 24px;
+  font-size: 18px;
+  font-weight: 600;
+  background: rgba(0,0,0,0.4);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid #1f2937;
+}
+
+.container {
+  max-width: 900px;
+  margin: 30px auto;
+  padding: 20px;
+}
+
+.card {
+  background: var(--card);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
+}
+
+.portrait {
+  width: 100%;
+  border-radius: 16px;
+  overflow: hidden;
+  margin-bottom: 18px;
+  animation: drift 20s ease-in-out infinite alternate;
+}
+
+.portrait img {
+  width: 100%;
+  display: block;
+  animation: breathe 8s ease-in-out infinite;
+}
+
+@keyframes drift {
+  0% { transform: translateX(-3px); }
+  100% { transform: translateX(3px); }
+}
+
+@keyframes breathe {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+
+.status {
+  font-size: 13px;
+  color: #9ca3af;
+  margin-bottom: 12px;
+}
+
+.chat {
+  background: var(--soft);
+  border-radius: 14px;
+  padding: 16px;
+  min-height: 160px;
+  margin-bottom: 12px;
+}
+
+.message {
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.message.you {
+  color: #93c5fd;
+}
+
+.message.gv {
+  color: #d1fae5;
+}
+
+.controls {
+  display: flex;
+  gap: 10px;
+}
+
+.controls input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: none;
+  background: #0f172a;
+  color: white;
+}
+
+.controls button {
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  background: var(--accent);
+  color: black;
+  font-weight: 600;
+}
+
+.voiceControls {
+  margin-top: 14px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+</style>
 </head>
 
 <body>
-  <header>
-    <div class="wrap">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-        <div>
-          <h1>GvBot Console</h1>
-          <div class="sub">Constraint-aware trust with memory</div>
-        </div>
-        <button id="agentSettingsBtn" style="height:36px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.06);color:#e7eaf0;padding:0 12px;cursor:pointer;">
-          Agent Settings
-        </button>
-      </div>
 
-      <div class="pillRow" style="margin-top:10px;">
-        <span class="pill" id="pillState">STABLE</span>
-        <span class="pillText" id="pillText">Demo signals loaded. External signals optional.</span>
-      </div>
-    </div>
-  </header>
+<header>
+GvBot Console — Constraint-aware trust with memory
+</header>
 
-  <main class="wrap">
-    <section class="grid">
-      <!-- Left: Face -->
-      <div class="card faceCard">
-        <div class="faceFrame" id="faceFrame">
-          <img class="face" id="faceImg" src="assets/gv_face.jpg?v=999" alt="Gv" />
-          <div class="glow" id="glow"></div>
-          <div class="scanlines"></div>
-        </div>
+<div class="container">
+<div class="card">
 
-        <div class="faceMeta">
-          <div class="titleRow">
-            <div class="name">Gv</div>
-            <div class="time" id="timeNow">—</div>
-          </div>
+<div class="portrait">
+<img src="assets/gv-face.jpg" alt="Gv Avatar">
+</div>
 
-          <div class="quote" id="quoteText">“I remember what happened.”</div>
-          <div class="source" id="sourceText">Source: data/demo_signals.csv</div>
+<div class="status">STABLE — Demo signals loaded.</div>
 
-          <div class="mini" style="margin-top:8px;">
-            <span id="faceLoadNote">Open face asset - face: loaded</span>
-          </div>
+<div class="chat" id="chat"></div>
 
-          <!-- Agent UI (Commit 1) -->
-          <div class="agentWrap">
-            <div class="agentBar">
-              <div class="agentStatus ok" id="agentStatus">Ready (agent shell).</div>
-            </div>
+<div class="controls">
+<input id="input" placeholder="Talk to Gv..." />
+<button onclick="sendMessage()">Send</button>
+</div>
 
-            <div class="chatCard">
-              <div class="chatLog" id="chatLog"></div>
+<div class="voiceControls">
+<label>
+<input type="checkbox" id="voiceEnabled" checked>
+Voice
+</label>
 
-              <div class="chatControls">
-                <input id="chatInput" placeholder="Talk to Gv… (Commit 1 = stub reply)" />
-                <button id="sendBtn">Send</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+<label>
+Rate
+<input type="range" id="voiceRate" min="0.8" max="1.1" step="0.05" value="0.95">
+</label>
 
-      <!-- Right: Metrics -->
-      <div class="card metricsCard">
-        <h2>Latest Metrics</h2>
+<label>
+Pitch
+<input type="range" id="voicePitch" min="0.9" max="1.2" step="0.05" value="1.05">
+</label>
 
-        <div class="tiles">
-          <div class="tile">
-            <div class="k">GodScore</div>
-            <div class="v" id="godscore">86</div>
-          </div>
-          <div class="tile">
-            <div class="k">Risk</div>
-            <div class="v" id="risk">0.190</div>
-          </div>
-          <div class="tile">
-            <div class="k">Drift</div>
-            <div class="v" id="drift">0.120</div>
-          </div>
-          <div class="tile">
-            <div class="k">Recoverability</div>
-            <div class="v" id="recover">0.880</div>
-          </div>
-        </div>
+<button onclick="testVoice()">Test</button>
+</div>
 
-        <h3>Signal</h3>
-        <div class="signalBar">
-          <div class="signalText" id="signalText"></div>
-        </div>
+</div>
+</div>
 
-        <div class="hint">
-          If GodScore CI signals are unreachable, demo signals will load instead.
-        </div>
-      </div>
-    </section>
-  </main>
+<script>
+/* =========================
+   CONFIG
+========================= */
 
-  <!-- Settings Modal -->
-  <div class="modal" id="settingsModal">
-    <div class="modalCard">
-      <div class="modalHead">
-        <h3>Agent Settings</h3>
-        <button id="settingsClose" style="border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.06);color:#e7eaf0;padding:0 12px;cursor:pointer;">Close</button>
-      </div>
+const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev/";
 
-      <div class="modalBody">
-        This is where we’ll plug in the secure backend relay (Commit 2).<br/>
-        Don’t put private API keys into GitHub Pages files — we’ll keep secrets server-side.
-        <label for="endpointInput">Backend relay endpoint (next commit)</label>
-        <input id="endpointInput" placeholder="https://your-worker.yourname.workers.dev/chat" />
-      </div>
+/* =========================
+   CHAT LOGIC
+========================= */
 
-      <div class="modalFoot">
-        <button id="settingsSave" style="height:36px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.10);color:#e7eaf0;padding:0 14px;cursor:pointer;">
-          Save
-        </button>
-      </div>
-    </div>
-  </div>
+const chatEl = document.getElementById("chat");
+const inputEl = document.getElementById("input");
 
-  <!-- Existing dashboard logic -->
-  <script src="./gvbot.js"></script>
-  <!-- Agent shell (Commit 1) -->
-  <script src="./agent.js"></script>
+function addMessage(role, text) {
+  const div = document.createElement("div");
+  div.className = "message " + role;
+  div.innerHTML = "<strong>" + (role === "you" ? "You" : "Gv") + ":</strong> " + text;
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  addMessage("you", text);
+  inputEl.value = "";
+
+  try {
+    const res = await fetch(RELAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: text }]
+      })
+    });
+
+    const data = await res.json();
+    const reply = data.reply || "(No text returned)";
+    addMessage("gv", reply);
+    speak(reply);
+
+  } catch (err) {
+    addMessage("gv", "Relay error.");
+  }
+}
+
+/* =========================
+   VOICE SYSTEM
+========================= */
+
+const voice = {
+  enabled: true,
+  rate: 0.95,
+  pitch: 1.05,
+  volume: 1
+};
+
+function speak(text) {
+  if (!voice.enabled) return;
+  if (!("speechSynthesis" in window)) return;
+
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = voice.rate;
+  u.pitch = voice.pitch;
+  u.volume = voice.volume;
+
+  const voices = speechSynthesis.getVoices();
+  const preferred = voices.find(v =>
+    v.name.toLowerCase().includes("aria") ||
+    v.name.toLowerCase().includes("jenny") ||
+    v.name.toLowerCase().includes("samantha") ||
+    v.name.toLowerCase().includes("google")
+  );
+
+  if (preferred) u.voice = preferred;
+
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+function testVoice() {
+  speak("Hi Will. I’m Gv. Calm. Present. Ready.");
+}
+
+/* =========================
+   VOICE UI EVENTS
+========================= */
+
+document.getElementById("voiceEnabled").addEventListener("change", e => {
+  voice.enabled = e.target.checked;
+  if (!voice.enabled) speechSynthesis.cancel();
+});
+
+document.getElementById("voiceRate").addEventListener("input", e => {
+  voice.rate = parseFloat(e.target.value);
+});
+
+document.getElementById("voicePitch").addEventListener("input", e => {
+  voice.pitch = parseFloat(e.target.value);
+});
+</script>
+
 </body>
 </html>
