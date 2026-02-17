@@ -1,69 +1,201 @@
-// GvBot Console — Relay Edition
-// Connects to Cloudflare Worker relay
+/* =========================
+   GvBot Console (dashboard)
+   - Works with:
+     #chat, #input
+     onclick="sendMessage()", onclick="testVoice()"
+========================= */
 
+/* =========================
+   CONFIG
+========================= */
 const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev/";
 
-const chatBox = document.getElementById("chatBox");
-const input = document.getElementById("userInput");
-const sendBtn = document.getElementById("sendBtn");
+/* =========================
+   ELEMENTS
+========================= */
+const chatEl = document.getElementById("chat");
+const inputEl = document.getElementById("input");
 
-function appendMessage(role, text) {
-  const wrapper = document.createElement("div");
-  wrapper.className = role === "user" ? "msg user" : "msg gv";
-  wrapper.innerHTML = `
-    <div class="bubble">
-      <strong>${role === "user" ? "You" : "Gv"}</strong>
-      <div>${text}</div>
-    </div>
-  `;
-  chatBox.appendChild(wrapper);
-  chatBox.scrollTop = chatBox.scrollHeight;
+const voiceEnabledEl = document.getElementById("voiceEnabled");
+const voiceRateEl = document.getElementById("voiceRate");
+const voicePitchEl = document.getElementById("voicePitch");
+
+/* =========================
+   CHAT UI
+========================= */
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-async function sendMessage() {
-  const message = input.value.trim();
-  if (!message) return;
+function addMessage(role, text) {
+  if (!chatEl) return;
 
-  appendMessage("user", message);
-  input.value = "";
+  const div = document.createElement("div");
+  div.className = "message " + role;
 
-  appendMessage("gv", "Thinking...");
+  const label = role === "you" ? "You" : "Gv";
+  div.innerHTML = `<strong>${label}:</strong> ${escapeHtml(text)}`;
+
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+/* =========================
+   VOICE
+========================= */
+const voice = {
+  enabled: true,
+  rate: 0.95,
+  pitch: 1.05,
+  volume: 1,
+};
+
+function pickPreferredVoice() {
+  if (!("speechSynthesis" in window)) return null;
+
+  const voices = speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+
+  // Prefer more natural voices if present
+  const wanted = [
+    "aria",
+    "jenny",
+    "samantha",
+    "serena",
+    "victoria",
+    "ava",
+    "google",
+    "zira",
+  ];
+
+  const found = voices.find(v => wanted.some(w => v.name.toLowerCase().includes(w)));
+  return found || voices[0] || null;
+}
+
+function speak(text) {
+  if (!voice.enabled) return;
+  if (!("speechSynthesis" in window)) return;
+
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = voice.rate;
+  u.pitch = voice.pitch;
+  u.volume = voice.volume;
+
+  const chosen = pickPreferredVoice();
+  if (chosen) u.voice = chosen;
+
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+/* Make sure voices are loaded in some browsers */
+if ("speechSynthesis" in window) {
+  speechSynthesis.onvoiceschanged = () => {};
+}
+
+/* =========================
+   RELAY CALL
+========================= */
+async function callRelay(userText) {
+  const payload = {
+    messages: [{ role: "user", content: userText }],
+  };
+
+  const res = await fetch(RELAY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  // If the relay returns non-JSON sometimes, protect parsing
+  const raw = await res.text();
+  let data = {};
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = { reply: raw };
+  }
+
+  if (!res.ok) {
+    const msg =
+      data?.error ||
+      data?.message ||
+      `Relay error (${res.status})`;
+    throw new Error(msg);
+  }
+
+  return data;
+}
+
+/* =========================
+   GLOBAL FUNCTIONS
+   (needed for onclick="...")
+========================= */
+window.sendMessage = async function sendMessage() {
+  const text = (inputEl?.value || "").trim();
+  if (!text) return;
+
+  addMessage("you", text);
+  inputEl.value = "";
 
   try {
-    const response = await fetch(RELAY_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: "user", content: message }
-        ]
-      })
-    });
+    const data = await callRelay(text);
 
-    const data = await response.json();
+    const reply =
+      data?.reply ||
+      data?.message ||
+      "(No text returned)";
 
-    // Remove "Thinking..."
-    chatBox.removeChild(chatBox.lastChild);
-
-    if (data.reply) {
-      appendMessage("gv", data.reply);
-    } else {
-      appendMessage("gv", "(No text returned)");
-    }
-
+    addMessage("gv", reply);
+    speak(reply);
   } catch (err) {
-    chatBox.removeChild(chatBox.lastChild);
-    appendMessage("gv", "Relay error. Check backend.");
-    console.error(err);
+    addMessage("gv", `Relay error: ${err.message || "unknown"}`);
   }
+};
+
+window.testVoice = function testVoice() {
+  speak("Hi Will. I’m Gv. Calm. Present. Ready.");
+};
+
+/* =========================
+   UI EVENTS
+========================= */
+if (voiceEnabledEl) {
+  voice.enabled = voiceEnabledEl.checked;
+  voiceEnabledEl.addEventListener("change", (e) => {
+    voice.enabled = e.target.checked;
+    if (!voice.enabled && "speechSynthesis" in window) speechSynthesis.cancel();
+  });
 }
 
-sendBtn.addEventListener("click", sendMessage);
+if (voiceRateEl) {
+  voice.rate = parseFloat(voiceRateEl.value || "0.95");
+  voiceRateEl.addEventListener("input", (e) => {
+    voice.rate = parseFloat(e.target.value);
+  });
+}
 
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    sendMessage();
-  }
-});
+if (voicePitchEl) {
+  voice.pitch = parseFloat(voicePitchEl.value || "1.05");
+  voicePitchEl.addEventListener("input", (e) => {
+    voice.pitch = parseFloat(e.target.value);
+  });
+}
+
+/* Enter key to send */
+if (inputEl) {
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      window.sendMessage();
+    }
+  });
+}
+
+/* Boot line so you know JS is loaded */
+addMessage("gv", "Ready.");
