@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GvBot Console</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <div class="brand">
+        <div class="dot"></div>
+        <div>
+          <h1>GvBot Console</h1>
+          <div class="sub">Constraint-aware trust with memory</div>
+        </div>
+      </div>
+
+      <div class="statusline">
+        <span class="pill" id="statePill">STATE</span>
+        <span class="muted" id="stateDesc">Loading…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="grid">
+      <div class="card faceCard">
+        <div class="faceFrame" id="faceFrame">
+          <img class="face" id="faceImg" src="./assets/gv_face.jpg" alt="Gv" />
+          <div class="glow" id="glow"></div>
+          <div class="scanlines"></div>
+        </div>
+
+        <div class="faceMeta">
+          <div class="titleRow">
+            <div class="title">Gv</div>
+            <div class="small muted" id="runStamp">—</div>
+          </div>
+          <div class="quote" id="quote">“I remember what happened.”</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Latest Metrics</h2>
+        <div class="tiles">
+          <div class="tile">
+            <div class="k">GodScore</div>
+            <div class="v" id="godscore">—</div>
+          </div>
+          <div class="tile">
+            <div class="k">Risk</div>
+            <div class="v" id="risk">—</div>
+          </div>
+          <div class="tile">
+            <div class="k">Drift</div>
+            <div class="v" id="drift">—</div>
+          </div>
+          <div class="tile">
+            <div class="k">Recoverability</div>
+            <div class="v" id="recovery">—</div>
+          </div>
+        </div>
+
+        <h3 class="mt">Signal</h3>
+        <div class="signalBox">
+          <div class="signalBg"></div>
+          <div class="signalLine" id="signalLine"></div>
+        </div>
+
+        <div class="small muted mt" id="dataSource">Source: —</div>
+      </div>
+
+      <div class="card">
+        <h2>Recent Runs</h2>
+        <div class="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>GodScore</th>
+                <th>Risk</th>
+                <th>Drift</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody id="recentTable">
+              <tr><td colspan="5" class="muted">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <footer class="wrap small muted">
+      GvBot is a visualization layer. It reads CI outputs and expresses system state as presence.
+    </footer>
+  </main>
+
+  <script src="./gvbot.js"></script>
+</body>
+</html>
