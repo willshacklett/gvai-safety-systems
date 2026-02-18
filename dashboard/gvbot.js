@@ -1,19 +1,74 @@
-/* =========================
-   GvBot Console (dashboard)
-========================= */
+// GvBot Console — dashboard/gvbot.js
+// Frontend chat + soothing voice + typing indicator + relay calls
 
+// =========================
+// CONFIG
+// =========================
 const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev/";
 
-const chatEl = document.getElementById("chat");
-const inputEl = document.getElementById("input");
+// If your worker expects a different path (rare), change here:
+// const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev/yourpath";
 
-const voiceEnabledEl = document.getElementById("voiceEnabled");
-const voiceRateEl = document.getElementById("voiceRate");
-const voicePitchEl = document.getElementById("voicePitch");
+// =========================
+// DOM
+// =========================
+const els = {
+  statePill: document.getElementById("statePill"),
+  stateDesc: document.getElementById("stateDesc"),
+  statusDot: document.getElementById("statusDot"),
+  runStamp: document.getElementById("runStamp"),
+  dataSource: document.getElementById("dataSource"),
+  voiceLabel: document.getElementById("voiceLabel"),
 
-/* =========================
-   CHAT
-========================= */
+  chat: document.getElementById("chat"),
+  input: document.getElementById("input"),
+  sendBtn: document.getElementById("sendBtn"),
+  testBtn: document.getElementById("testBtn"),
+
+  voiceEnabled: document.getElementById("voiceEnabled"),
+  voiceRate: document.getElementById("voiceRate"),
+  voicePitch: document.getElementById("voicePitch"),
+  voiceVol: document.getElementById("voiceVol"),
+};
+
+// =========================
+// STATE
+// =========================
+const voice = {
+  enabled: true,
+  rate: 0.88,  // soothing default
+  pitch: 1.02, // gentle default
+  volume: 1.0,
+  chosen: null,
+};
+
+let convo = []; // messages for relay (memory on the server side)
+let typingNode = null;
+
+// =========================
+// UTIL
+// =========================
+function nowStamp() {
+  const d = new Date();
+  return d.toLocaleString();
+}
+
+function setStatus(mode, text) {
+  els.statePill.textContent = mode;
+  els.stateDesc.textContent = text || "";
+
+  // dot colors
+  if (mode === "STABLE") {
+    els.statusDot.style.background = "#22c55e";
+    els.statusDot.style.boxShadow = "0 0 14px rgba(34,197,94,.4)";
+  } else if (mode === "WORKING") {
+    els.statusDot.style.background = "#60a5fa";
+    els.statusDot.style.boxShadow = "0 0 14px rgba(96,165,250,.35)";
+  } else {
+    els.statusDot.style.background = "#f97316";
+    els.statusDot.style.boxShadow = "0 0 14px rgba(249,115,22,.35)";
+  }
+}
 
 function escapeHtml(s) {
   return String(s)
@@ -24,141 +79,243 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-function addMessage(role, text) {
-  const div = document.createElement("div");
-  div.className = "message " + role;
+// =========================
+// CHAT UI
+// =========================
+function addMsg(role, text, muted = false) {
+  const wrap = document.createElement("div");
+  wrap.className = `msg msg--${role}`;
 
-  const label = role === "you" ? "You" : "Gv";
-  div.innerHTML = `<strong>${label}:</strong> ${escapeHtml(text)}`;
+  const roleEl = document.createElement("span");
+  roleEl.className = "msg__role";
+  roleEl.textContent = role === "you" ? "You" : "Gv";
 
-  chatEl.appendChild(div);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  const textEl = document.createElement("span");
+  textEl.className = muted ? "msg__muted" : "msg__text";
+  textEl.innerHTML = escapeHtml(text);
+
+  wrap.appendChild(roleEl);
+  wrap.appendChild(textEl);
+  els.chat.appendChild(wrap);
+  els.chat.scrollTop = els.chat.scrollHeight;
+
+  return wrap;
 }
 
-async function callRelay(userText) {
-  const res = await fetch(RELAY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messages: [{ role: "user", content: userText }]
-    })
-  });
+function showTyping() {
+  hideTyping();
 
-  const raw = await res.text();
+  const wrap = document.createElement("div");
+  wrap.className = "msg msg--gv";
 
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = { reply: raw };
-  }
+  const roleEl = document.createElement("span");
+  roleEl.className = "msg__role";
+  roleEl.textContent = "Gv";
 
-  if (!res.ok) {
-    throw new Error(data?.error || "Relay error");
-  }
+  const typing = document.createElement("span");
+  typing.className = "msg__text typing";
+  typing.innerHTML = `
+    <span class="dotty"></span>
+    <span class="dotty"></span>
+    <span class="dotty"></span>
+  `;
 
-  return data;
+  wrap.appendChild(roleEl);
+  wrap.appendChild(typing);
+  els.chat.appendChild(wrap);
+  els.chat.scrollTop = els.chat.scrollHeight;
+
+  typingNode = wrap;
 }
 
-/* =========================
-   GLOBAL FUNCTIONS (for onclick)
-========================= */
-
-window.sendMessage = async function () {
-  const text = inputEl.value.trim();
-  if (!text) return;
-
-  addMessage("you", text);
-  inputEl.value = "";
-
-  try {
-    const data = await callRelay(text);
-    const reply = data.reply || "(No text returned)";
-    addMessage("gv", reply);
-    speak(reply);
-  } catch (err) {
-    addMessage("gv", "Relay error: " + err.message);
+function hideTyping() {
+  if (typingNode) {
+    typingNode.remove();
+    typingNode = null;
   }
-};
+}
 
-window.testVoice = function () {
-  speak("Hi Will. I’m Gv. Calm. Present. Ready.");
-};
-
-/* =========================
-   VOICE
-========================= */
-
-const voice = {
-  enabled: true,
-  rate: 0.95,
-  pitch: 1.05,
-  volume: 1
-};
-
-function pickPreferredVoice() {
+// =========================
+// VOICE (soothing)
+// =========================
+function chooseVoice() {
   if (!("speechSynthesis" in window)) return null;
 
-  const voices = speechSynthesis.getVoices();
+  const voices = speechSynthesis.getVoices() || [];
   if (!voices.length) return null;
 
-  const preferred = voices.find(v =>
-    v.name.toLowerCase().includes("aria") ||
-    v.name.toLowerCase().includes("jenny") ||
-    v.name.toLowerCase().includes("samantha") ||
-    v.name.toLowerCase().includes("zira") ||
-    v.name.toLowerCase().includes("google")
-  );
+  // Prefer calmer female-ish voices by common names
+  const preferredOrder = [
+    "aria", "jenny", "samantha", "serena", "victoria", "ava", "zoe", "google",
+  ];
 
-  return preferred || voices[0];
+  let best = null;
+
+  // 1) exact-ish match by name keyword
+  for (const key of preferredOrder) {
+    best = voices.find(v => (v.name || "").toLowerCase().includes(key));
+    if (best) break;
+  }
+
+  // 2) fallback: any en-US voice
+  if (!best) {
+    best = voices.find(v => (v.lang || "").toLowerCase().startsWith("en"));
+  }
+
+  voice.chosen = best || null;
+  els.voiceLabel.textContent = voice.chosen ? voice.chosen.name : "browser";
+  return voice.chosen;
 }
 
 function speak(text) {
   if (!voice.enabled) return;
   if (!("speechSynthesis" in window)) return;
+  if (!text) return;
 
-  const u = new SpeechSynthesisUtterance(text);
+  // prevent reading huge blocks forever
+  const trimmed = String(text).slice(0, 900);
+
+  const u = new SpeechSynthesisUtterance(trimmed);
   u.rate = voice.rate;
   u.pitch = voice.pitch;
   u.volume = voice.volume;
 
-  const chosen = pickPreferredVoice();
-  if (chosen) u.voice = chosen;
+  if (!voice.chosen) chooseVoice();
+  if (voice.chosen) u.voice = voice.chosen;
 
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
 }
 
-if ("speechSynthesis" in window) {
-  speechSynthesis.onvoiceschanged = () => {};
+// =========================
+// RELAY CALL
+// =========================
+async function callRelay(messages) {
+  const res = await fetch(RELAY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+  });
+
+  // If worker returns non-JSON sometimes, guard it:
+  const ct = res.headers.get("content-type") || "";
+  let data = null;
+
+  if (ct.includes("application/json")) {
+    data = await res.json();
+  } else {
+    const txt = await res.text();
+    data = { reply: txt };
+  }
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || `Relay error (${res.status})`;
+    throw new Error(msg);
+  }
+
+  return data;
 }
 
-/* =========================
-   VOICE UI EVENTS
-========================= */
+// =========================
+// SEND
+// =========================
+async function send() {
+  const text = (els.input.value || "").trim();
+  if (!text) return;
 
-voice.enabled = voiceEnabledEl.checked;
+  els.input.value = "";
+  addMsg("you", text);
 
-voiceEnabledEl.addEventListener("change", e => {
-  voice.enabled = e.target.checked;
-  if (!voice.enabled) speechSynthesis.cancel();
+  // update visible status
+  setStatus("WORKING", "Thinking…");
+  els.runStamp.textContent = `Last message: ${nowStamp()}`;
+
+  // build conversation (keep it short-ish)
+  convo.push({ role: "user", content: text });
+  // optional: prevent runaway size
+  if (convo.length > 16) convo = convo.slice(-16);
+
+  showTyping();
+
+  try {
+    const data = await callRelay(convo);
+
+    hideTyping();
+
+    const reply = data?.reply ?? data?.text ?? data?.message ?? "";
+    if (!reply) {
+      addMsg("gv", "(No text returned)", true);
+      setStatus("STABLE", "Reply was empty (but relay responded).");
+      return;
+    }
+
+    // push assistant reply into convo for memory (server can also handle memory)
+    convo.push({ role: "assistant", content: reply });
+    if (convo.length > 16) convo = convo.slice(-16);
+
+    addMsg("gv", reply);
+    setStatus("STABLE", "Connected. Relay ok.");
+    speak(reply);
+
+  } catch (err) {
+    hideTyping();
+    setStatus("WARN", "Relay failed. Check Cloudflare logs / OpenAI usage.");
+    addMsg("gv", `Relay error: ${err.message || err}`, true);
+  }
+}
+
+// =========================
+// BOOT
+// =========================
+function boot() {
+  setStatus("STABLE", "Demo signals loaded. External relay enabled.");
+  els.dataSource.textContent = "relay + demo";
+  els.runStamp.textContent = `Booted: ${nowStamp()}`;
+
+  // Voice defaults from UI
+  voice.enabled = !!els.voiceEnabled.checked;
+  voice.rate = parseFloat(els.voiceRate.value);
+  voice.pitch = parseFloat(els.voicePitch.value);
+  voice.volume = parseFloat(els.voiceVol.value);
+
+  // Some browsers load voices async
+  if ("speechSynthesis" in window) {
+    chooseVoice();
+    window.speechSynthesis.onvoiceschanged = () => chooseVoice();
+  }
+
+  // Greeting in chat (soft)
+  addMsg("gv", "Hi Will. I’m here. Calm. Present. Ready when you are.");
+}
+
+// =========================
+// EVENTS
+// =========================
+els.sendBtn.addEventListener("click", send);
+els.input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") send();
 });
 
-voiceRateEl.addEventListener("input", e => {
+els.testBtn.addEventListener("click", () => {
+  speak("Hi Will. I’m Gv. Calm. Present. Ready.");
+});
+
+els.voiceEnabled.addEventListener("change", (e) => {
+  voice.enabled = !!e.target.checked;
+  if (!voice.enabled && "speechSynthesis" in window) speechSynthesis.cancel();
+});
+
+els.voiceRate.addEventListener("input", (e) => {
   voice.rate = parseFloat(e.target.value);
 });
 
-voicePitchEl.addEventListener("input", e => {
+els.voicePitch.addEventListener("input", (e) => {
   voice.pitch = parseFloat(e.target.value);
 });
 
-/* Enter key send */
-inputEl.addEventListener("keydown", e => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    window.sendMessage();
-  }
+els.voiceVol.addEventListener("input", (e) => {
+  voice.volume = parseFloat(e.target.value);
 });
 
-/* Boot message */
-addMessage("gv", "Ready.");
+// GO
+boot();
