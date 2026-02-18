@@ -1,222 +1,111 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GvBot Console</title>
-
-  <style>
-    :root {
-      --bg: #0c111b;
-      --card: #111827;
-      --soft: #1f2937;
-      --text: #e5e7eb;
-      --muted: #9ca3af;
-      --accent: #60a5fa;
-      --good: #34d399;
-    }
-
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: radial-gradient(circle at top, #0f172a, #0b1220);
-      color: var(--text);
-      min-height: 100vh;
-    }
-
-    header {
-      padding: 18px 24px;
-      font-size: 18px;
-      font-weight: 600;
-      background: rgba(0,0,0,0.4);
-      backdrop-filter: blur(6px);
-      border-bottom: 1px solid #1f2937;
-    }
-
-    .container {
-      max-width: 980px;
-      margin: 28px auto;
-      padding: 18px;
-    }
-
-    .card {
-      background: rgba(17, 24, 39, 0.82);
-      border-radius: 18px;
-      padding: 18px;
-      box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
-    }
-
-    .portrait {
-      width: 100%;
-      border-radius: 16px;
-      overflow: hidden;
-      margin-bottom: 14px;
-      background: rgba(0,0,0,0.2);
-    }
-
-    .portrait img {
-      width: 100%;
-      display: block;
-      animation: breathe 8s ease-in-out infinite;
-    }
-
-    @keyframes breathe {
-      0%,100% { transform: scale(1); }
-      50% { transform: scale(1.02); }
-    }
-
-    .statusLine {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 12px;
-      font-size: 13px;
-      color: var(--muted);
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(0,0,0,0.25);
-      border: 1px solid rgba(255,255,255,0.07);
-      color: #cbd5e1;
-      font-size: 12px;
-    }
-
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--good);
-      box-shadow: 0 0 12px rgba(52, 211, 153, 0.35);
-    }
-
-    .chat {
-      background: rgba(31, 41, 55, 0.85);
-      border-radius: 14px;
-      padding: 14px;
-      min-height: 180px;
-      max-height: 360px;
-      overflow: auto;
-      margin-bottom: 12px;
-      border: 1px solid rgba(255,255,255,0.06);
-    }
-
-    .message {
-      margin-bottom: 12px;
-      line-height: 1.5;
-      font-size: 14px;
-    }
-
-    .message.you { color: #93c5fd; }
-    .message.gv { color: #d1fae5; }
-
-    .controls {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .controls input {
-      flex: 1;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: #0f172a;
-      color: white;
-      outline: none;
-    }
-
-    .controls button {
-      padding: 10px 16px;
-      border-radius: 12px;
-      border: none;
-      cursor: pointer;
-      background: var(--accent);
-      color: #0b1220;
-      font-weight: 700;
-    }
-
-    .voiceControls {
-      margin-top: 12px;
-      display: flex;
-      gap: 14px;
-      align-items: center;
-      flex-wrap: wrap;
-      font-size: 13px;
-      color: var(--muted);
-    }
-
-    .voiceControls input[type="range"] {
-      transform: translateY(2px);
-    }
-
-    .voiceControls button {
-      padding: 6px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.10);
-      background: rgba(255,255,255,0.06);
-      color: var(--text);
-      cursor: pointer;
-    }
-
-    .small {
-      font-size: 12px;
-      color: rgba(229, 231, 235, 0.55);
-      margin-top: 10px;
-    }
-  </style>
+  <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
-  <header>GvBot Console — Constraint-aware trust with memory</header>
-
-  <div class="container">
-    <div class="card">
-
-      <div class="portrait">
-        <img src="assets/gv-face.jpg" alt="Gv Avatar" />
+  <header class="topbar">
+    <div class="wrap topbar__inner">
+      <div class="brand">
+        <div class="brand__title">GvBot Console</div>
+        <div class="brand__sub">Constraint-aware trust with memory</div>
       </div>
 
-      <div class="statusLine">
-        <span class="pill"><span class="dot"></span> STABLE</span>
-        <span>Demo signals loaded. External signals optional.</span>
-      </div>
-
-      <div class="chat" id="chat"></div>
-
-      <div class="controls">
-        <input id="input" placeholder="Talk to Gv..." />
-        <button onclick="sendMessage()">Send</button>
-      </div>
-
-      <div class="voiceControls">
-        <label><input type="checkbox" id="voiceEnabled" checked> Voice</label>
-
-        <label>
-          Rate
-          <input type="range" id="voiceRate" min="0.8" max="1.1" step="0.05" value="0.95">
-        </label>
-
-        <label>
-          Pitch
-          <input type="range" id="voicePitch" min="0.9" max="1.2" step="0.05" value="1.05">
-        </label>
-
-        <button onclick="testVoice()">Test</button>
-      </div>
-
-      <div class="small">
-        If chat is blank, your browser is not loading <code>gvbot.js</code>. Hard refresh: Ctrl+Shift+R.
-      </div>
-
+      <div class="pill" id="statePill">STABLE</div>
     </div>
+  </header>
+
+  <!-- ambient background layer -->
+  <div class="bg">
+    <div class="bg__vignette"></div>
+    <div class="bg__particles"></div>
+    <div class="bg__bloom"></div>
   </div>
 
-  <!-- IMPORTANT: load JS after the DOM exists -->
-  <script src="./gvbot.js"></script>
+  <main class="wrap">
+    <section class="card">
+      <div class="card__grid">
+        <!-- LEFT: Avatar + status -->
+        <div class="panel panel--left">
+          <div class="avatar">
+            <div class="avatar__frame">
+              <img id="faceImg" src="assets/gv-face.jpg" alt="Gv Avatar" />
+              <div class="avatar__glow"></div>
+              <div class="avatar__shimmer"></div>
+              <div class="avatar__blink"></div>
+            </div>
+
+            <div class="avatar__meta">
+              <div class="avatar__name">Gv</div>
+              <div class="avatar__line">“I remember what happened.”</div>
+              <div class="avatar__small" id="runStamp">Ready.</div>
+            </div>
+          </div>
+
+          <div class="tiles">
+            <div class="tile">
+              <div class="tile__k">Source</div>
+              <div class="tile__v" id="dataSource">demo</div>
+            </div>
+            <div class="tile">
+              <div class="tile__k">Voice</div>
+              <div class="tile__v" id="voiceLabel">browser</div>
+            </div>
+          </div>
+
+          <div class="hint">
+            Tip: If you just updated files and things look “stuck”, do a hard refresh:
+            <b>Ctrl + Shift + R</b>
+          </div>
+        </div>
+
+        <!-- RIGHT: Chat -->
+        <div class="panel panel--right">
+          <div class="chatHeader">
+            <div class="chatHeader__left">
+              <div class="dot" id="statusDot"></div>
+              <div class="chatHeader__text" id="stateDesc">Demo signals loaded. External relay enabled.</div>
+            </div>
+            <button class="ghost" id="testBtn" title="Test voice">Test voice</button>
+          </div>
+
+          <div class="chat" id="chat"></div>
+
+          <div class="composer">
+            <input id="input" class="composer__input" placeholder="Talk to Gv…" autocomplete="off" />
+            <button id="sendBtn" class="composer__send">Send</button>
+          </div>
+
+          <div class="voiceRow">
+            <label class="chk">
+              <input type="checkbox" id="voiceEnabled" checked />
+              <span>Voice</span>
+            </label>
+
+            <label class="slider">
+              <span>Rate</span>
+              <input type="range" id="voiceRate" min="0.78" max="1.05" step="0.01" value="0.88" />
+            </label>
+
+            <label class="slider">
+              <span>Pitch</span>
+              <input type="range" id="voicePitch" min="0.90" max="1.15" step="0.01" value="1.02" />
+            </label>
+
+            <label class="slider">
+              <span>Vol</span>
+              <input type="range" id="voiceVol" min="0.40" max="1.00" step="0.01" value="1.00" />
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="gvbot.js"></script>
 </body>
 </html>
