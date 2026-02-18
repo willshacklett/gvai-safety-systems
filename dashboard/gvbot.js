@@ -1,304 +1,359 @@
-// GvBot Console — dashboard/gvbot.js
+/* =========================================================
+   GvBot Console — gvbot.js
+   - Relay chat
+   - TTS voice
+   - Avatar "alive" motions (via CSS classes)
+========================================================= */
+
+/* -------------------------
+   CONFIG
+------------------------- */
 
 const RELAY_URL = "https://gvbot-relay.will-shacklett.workers.dev/";
 
-// =========================
-// DOM
-// =========================
+// Avatar image path (GitHub Pages is case-sensitive)
+const AVATAR_SRC = "assets/gv-face.jpg";
+
+/* -------------------------
+   DOM
+------------------------- */
+
+const $ = (sel) => document.querySelector(sel);
+
 const els = {
-  statePill: document.getElementById("statePill"),
-  stateDesc: document.getElementById("stateDesc"),
-  statusDot: document.getElementById("statusDot"),
-  runStamp: document.getElementById("runStamp"),
-  dataSource: document.getElementById("dataSource"),
-  voiceLabel: document.getElementById("voiceLabel"),
+  avatarImg: $("#gvAvatarImg"),
+  avatarWrap: $("#gvAvatarWrap"),
+  avatarStatus: $("#gvAvatarStatus"),
+  chat: $("#chat"),
+  input: $("#input"),
+  sendBtn: $("#sendBtn"),
 
-  chat: document.getElementById("chat"),
-  input: document.getElementById("input"),
-  sendBtn: document.getElementById("sendBtn"),
-  testBtn: document.getElementById("testBtn"),
+  voiceEnabled: $("#voiceEnabled"),
+  rate: $("#voiceRate"),
+  pitch: $("#voicePitch"),
+  vol: $("#voiceVol"),
+  testVoiceBtn: $("#testVoiceBtn"),
 
-  voiceEnabled: document.getElementById("voiceEnabled"),
-  voiceRate: document.getElementById("voiceRate"),
-  voicePitch: document.getElementById("voicePitch"),
-  voiceVol: document.getElementById("voiceVol"),
+  relayStatusDot: $("#relayDot"),
+  relayStatusText: $("#relayText"),
+  voiceName: $("#voiceName"),
+  sourceLabel: $("#sourceLabel"),
+  lastMsg: $("#lastMsg"),
 };
 
-// =========================
-// STATE
-// =========================
-const voice = {
-  enabled: true,
-  // "calm island" defaults
-  rate: 0.86,
-  pitch: 0.98,
-  volume: 1.0,
-  chosen: null,
+/* -------------------------
+   STATE
+------------------------- */
+
+const state = {
+  voice: {
+    enabled: true,
+    rate: 0.92,  // softer / less robotic
+    pitch: 1.02,
+    volume: 1.0,
+  },
+  preferredVoice: null,
+  speaking: false,
+  blinkTimer: null,
+  lastAssistantText: "",
 };
 
-let convo = [];
-let typingNode = null;
+/* -------------------------
+   INIT
+------------------------- */
 
-// =========================
-// UTIL
-// =========================
-function nowStamp() {
-  return new Date().toLocaleString();
-}
+boot();
 
-function setStatus(mode, text) {
-  els.statePill.textContent = mode;
-  els.stateDesc.textContent = text || "";
+function boot() {
+  // Avatar image
+  if (els.avatarImg) {
+    els.avatarImg.src = AVATAR_SRC;
 
-  if (mode === "STABLE") {
-    els.statusDot.style.background = "#22c55e";
-    els.statusDot.style.boxShadow = "0 0 14px rgba(34,197,94,.4)";
-  } else if (mode === "WORKING") {
-    els.statusDot.style.background = "#60a5fa";
-    els.statusDot.style.boxShadow = "0 0 14px rgba(96,165,250,.35)";
-  } else {
-    els.statusDot.style.background = "#f97316";
-    els.statusDot.style.boxShadow = "0 0 14px rgba(249,115,22,.35)";
+    els.avatarImg.addEventListener("error", () => {
+      if (els.avatarStatus) {
+        els.avatarStatus.textContent =
+          "Gv face not found. Expected: dashboard/" + AVATAR_SRC + " (case-sensitive).";
+      }
+      if (els.avatarWrap) els.avatarWrap.classList.add("avatar-missing");
+    });
+
+    els.avatarImg.addEventListener("load", () => {
+      if (els.avatarStatus) els.avatarStatus.textContent = "Gv face loaded.";
+      if (els.avatarWrap) els.avatarWrap.classList.remove("avatar-missing");
+      startBlinking();
+    });
   }
+
+  // Wire UI defaults
+  if (els.voiceEnabled) els.voiceEnabled.checked = true;
+  if (els.rate) els.rate.value = String(state.voice.rate);
+  if (els.pitch) els.pitch.value = String(state.voice.pitch);
+  if (els.vol) els.vol.value = String(state.voice.volume);
+
+  // Events
+  if (els.sendBtn) els.sendBtn.addEventListener("click", sendMessage);
+  if (els.input) {
+    els.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendMessage();
+    });
+  }
+
+  if (els.voiceEnabled) {
+    els.voiceEnabled.addEventListener("change", (e) => {
+      state.voice.enabled = !!e.target.checked;
+      if (!state.voice.enabled) window.speechSynthesis?.cancel();
+    });
+  }
+  if (els.rate) els.rate.addEventListener("input", (e) => (state.voice.rate = parseFloat(e.target.value)));
+  if (els.pitch) els.pitch.addEventListener("input", (e) => (state.voice.pitch = parseFloat(e.target.value)));
+  if (els.vol) els.vol.addEventListener("input", (e) => (state.voice.volume = parseFloat(e.target.value)));
+
+  if (els.testVoiceBtn) {
+    els.testVoiceBtn.addEventListener("click", () => {
+      speak("Hi Will. I’m Gv. Calm. Present. Right here with you.");
+    });
+  }
+
+  // Voice selection (async on some browsers)
+  initVoices();
+
+  // Initial UI
+  setRelayStatus(true, "Connected. Relay ok.");
+  setSource("relay + demo");
+  addSystemLine("Gv: Ready.");
 }
+
+function setRelayStatus(ok, text) {
+  if (els.relayStatusDot) els.relayStatusDot.classList.toggle("ok", !!ok);
+  if (els.relayStatusText) els.relayStatusText.textContent = text || (ok ? "Connected." : "Disconnected.");
+}
+
+function setSource(label) {
+  if (els.sourceLabel) els.sourceLabel.textContent = label || "relay";
+}
+
+function setLastMessage(tsText) {
+  if (els.lastMsg) els.lastMsg.textContent = tsText || "";
+}
+
+/* -------------------------
+   CHAT UI
+------------------------- */
 
 function escapeHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replaceAll(">", "&gt;");
 }
 
-// =========================
-// CHAT UI
-// =========================
-function addMsg(role, text, muted = false) {
-  const wrap = document.createElement("div");
-  wrap.className = `msg msg--${role}`;
-
-  const roleEl = document.createElement("span");
-  roleEl.className = "msg__role";
-  roleEl.textContent = role === "you" ? "You" : "Gv";
-
-  const textEl = document.createElement("span");
-  textEl.className = muted ? "msg__muted" : "msg__text";
-  textEl.innerHTML = escapeHtml(text);
-
-  wrap.appendChild(roleEl);
-  wrap.appendChild(textEl);
-  els.chat.appendChild(wrap);
+function addLine(role, text) {
+  const div = document.createElement("div");
+  div.className = "line " + role;
+  div.innerHTML = `<span class="who">${role === "you" ? "You" : "Gv"}</span> <span class="msg">${escapeHtml(
+    text
+  )}</span>`;
+  els.chat.appendChild(div);
   els.chat.scrollTop = els.chat.scrollHeight;
-
-  return wrap;
 }
 
-function showTyping() {
-  hideTyping();
-  const wrap = document.createElement("div");
-  wrap.className = "msg msg--gv";
-
-  const roleEl = document.createElement("span");
-  roleEl.className = "msg__role";
-  roleEl.textContent = "Gv";
-
-  const typing = document.createElement("span");
-  typing.className = "msg__text typing";
-  typing.innerHTML = `
-    <span class="dotty"></span>
-    <span class="dotty"></span>
-    <span class="dotty"></span>
-  `;
-
-  wrap.appendChild(roleEl);
-  wrap.appendChild(typing);
-  els.chat.appendChild(wrap);
+function addSystemLine(text) {
+  const div = document.createElement("div");
+  div.className = "line system";
+  div.innerHTML = `<span class="msg">${escapeHtml(text)}</span>`;
+  els.chat.appendChild(div);
   els.chat.scrollTop = els.chat.scrollHeight;
-
-  typingNode = wrap;
 }
 
-function hideTyping() {
-  if (typingNode) {
-    typingNode.remove();
-    typingNode = null;
-  }
-}
+/* -------------------------
+   SEND -> RELAY
+------------------------- */
 
-// =========================
-// VOICE: force US English, avoid Deutsch
-// =========================
-function pickBestUSVoice(voices) {
-  const bad = ["deutsch", "german", "de-de", "de_"];
-
-  const goodLangUS = voices.filter(v => (v.lang || "").toLowerCase() === "en-us");
-  const goodLangEN = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
-
-  const notBad = (v) => {
-    const n = (v.name || "").toLowerCase();
-    const l = (v.lang || "").toLowerCase();
-    return !bad.some(b => n.includes(b) || l.includes(b));
-  };
-
-  // Prefer US voices, and within those prefer natural-sounding names
-  const preferNames = ["aria", "jenny", "samantha", "zira", "google us", "english united states"];
-
-  const chooseFrom = (list) => {
-    const cleaned = list.filter(notBad);
-    for (const key of preferNames) {
-      const found = cleaned.find(v => (v.name || "").toLowerCase().includes(key));
-      if (found) return found;
-    }
-    return cleaned[0] || null;
-  };
-
-  return (
-    chooseFrom(goodLangUS) ||
-    chooseFrom(goodLangEN) ||
-    chooseFrom(voices) ||
-    null
-  );
-}
-
-function chooseVoice() {
-  if (!("speechSynthesis" in window)) return null;
-
-  const voices = speechSynthesis.getVoices() || [];
-  if (!voices.length) return null;
-
-  voice.chosen = pickBestUSVoice(voices);
-  els.voiceLabel.textContent = voice.chosen ? `${voice.chosen.name} (${voice.chosen.lang})` : "browser";
-
-  return voice.chosen;
-}
-
-function speak(text) {
-  if (!voice.enabled) return;
-  if (!("speechSynthesis" in window)) return;
+async function sendMessage() {
+  const text = (els.input?.value || "").trim();
   if (!text) return;
 
-  const trimmed = String(text).slice(0, 900);
-
-  const u = new SpeechSynthesisUtterance(trimmed);
-  u.rate = voice.rate;
-  u.pitch = voice.pitch;
-  u.volume = voice.volume;
-
-  if (!voice.chosen) chooseVoice();
-  if (voice.chosen) u.voice = voice.chosen;
-
-  speechSynthesis.cancel();
-  speechSynthesis.speak(u);
-}
-
-// =========================
-// RELAY CALL
-// =========================
-async function callRelay(messages) {
-  const res = await fetch(RELAY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
-  });
-
-  const ct = res.headers.get("content-type") || "";
-  let data = null;
-
-  if (ct.includes("application/json")) data = await res.json();
-  else data = { reply: await res.text() };
-
-  if (!res.ok) {
-    const msg = data?.error || data?.message || `Relay error (${res.status})`;
-    throw new Error(msg);
-  }
-
-  return data;
-}
-
-// =========================
-// SEND
-// =========================
-async function send() {
-  const text = (els.input.value || "").trim();
-  if (!text) return;
-
+  addLine("you", text);
   els.input.value = "";
-  addMsg("you", text);
-
-  setStatus("WORKING", "Thinking…");
-  els.runStamp.textContent = `Last message: ${nowStamp()}`;
-
-  convo.push({ role: "user", content: text });
-  if (convo.length > 16) convo = convo.slice(-16);
-
-  showTyping();
 
   try {
-    const data = await callRelay(convo);
-    hideTyping();
+    // optimistic status
+    setRelayStatus(true, "Connected. Relay ok.");
 
-    const reply = data?.reply ?? data?.text ?? data?.message ?? "";
+    const res = await fetch(RELAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: text }],
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    const reply = (data && (data.reply || data.text || data.message)) || "";
+
     if (!reply) {
-      addMsg("gv", "(No text returned)", true);
-      setStatus("STABLE", "Reply was empty (but relay responded).");
+      addLine("gv", "(No text returned)");
       return;
     }
 
-    convo.push({ role: "assistant", content: reply });
-    if (convo.length > 16) convo = convo.slice(-16);
+    state.lastAssistantText = reply;
+    addLine("gv", reply);
 
-    addMsg("gv", reply);
-    setStatus("STABLE", "Connected. Relay ok.");
+    setLastMessage(new Date().toLocaleString());
     speak(reply);
   } catch (err) {
-    hideTyping();
-    setStatus("WARN", "Relay failed. Check Cloudflare logs / OpenAI usage.");
-    addMsg("gv", `Relay error: ${err.message || err}`, true);
+    console.error(err);
+    setRelayStatus(false, "Relay error.");
+    addLine("gv", "Relay error. Check Cloudflare logs.");
   }
 }
 
-// =========================
-// BOOT
-// =========================
-function boot() {
-  setStatus("STABLE", "Demo signals loaded. External relay enabled.");
-  els.dataSource.textContent = "relay + demo";
-  els.runStamp.textContent = `Booted: ${nowStamp()}`;
+/* -------------------------
+   VOICE (TTS)
+------------------------- */
 
-  // Pull UI values (these are your “Hawaiian calm” knobs)
-  voice.enabled = !!els.voiceEnabled.checked;
-  voice.rate = parseFloat(els.voiceRate.value);
-  voice.pitch = parseFloat(els.voicePitch.value);
-  voice.volume = parseFloat(els.voiceVol.value);
-
-  if ("speechSynthesis" in window) {
-    chooseVoice();
-    window.speechSynthesis.onvoiceschanged = () => chooseVoice();
+function initVoices() {
+  if (!("speechSynthesis" in window)) {
+    if (els.voiceName) els.voiceName.textContent = "Voice: (not supported)";
+    return;
   }
 
-  addMsg("gv", "Hi Will. I’m here. Calm. Present. Ready when you are.");
+  const pick = () => {
+    const voices = window.speechSynthesis.getVoices() || [];
+
+    // Prefer US English female-ish voices (best effort)
+    const preferredOrder = [
+      // Microsoft (Edge/Windows)
+      (v) => /zira/i.test(v.name) && /en-us/i.test(v.lang),
+      (v) => /jenny/i.test(v.name) && /en-us/i.test(v.lang),
+      (v) => /aria/i.test(v.name) && /en-us/i.test(v.lang),
+      // Google voices
+      (v) => /google/i.test(v.name) && /en-us/i.test(v.lang),
+      // Any en-US
+      (v) => /en-us/i.test(v.lang),
+      // Any English
+      (v) => /^en/i.test(v.lang),
+    ];
+
+    let chosen = null;
+    for (const rule of preferredOrder) {
+      chosen = voices.find(rule);
+      if (chosen) break;
+    }
+
+    state.preferredVoice = chosen || voices[0] || null;
+
+    if (els.voiceName) {
+      els.voiceName.textContent = state.preferredVoice
+        ? `${state.preferredVoice.name} (${state.preferredVoice.lang})`
+        : "Voice: (none found)";
+    }
+  };
+
+  pick();
+  window.speechSynthesis.onvoiceschanged = pick;
 }
 
-// =========================
-// EVENTS
-// =========================
-els.sendBtn.addEventListener("click", send);
-els.input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") send();
-});
+// Make TTS sound less robotic:
+// - Chunk into sentences so the browser "breathes"
+// - Add tiny random pitch drift per chunk
+function speak(text) {
+  if (!state.voice.enabled) return;
+  if (!("speechSynthesis" in window)) return;
 
-els.testBtn.addEventListener("click", () => {
-  speak("Aloha Will. I’m Gv. Calm and steady. Ready when you are.");
-});
+  const synth = window.speechSynthesis;
+  synth.cancel();
 
-els.voiceEnabled.addEventListener("change", (e) => {
-  voice.enabled = !!e.target.checked;
-  if (!voice.enabled && "speechSynthesis" in window) speechSynthesis.cancel();
-});
+  const chunks = splitForTTS(text);
 
-els.voiceRate.addEventListener("input", (e) => (voice.rate = parseFloat(e.target.value)));
-els.voicePitch.addEventListener("input", (e) => (voice.pitch = parseFloat(e.target.value)));
-els.voiceVol.addEventListener("input", (e) => (voice.volume = parseFloat(e.target.value)));
+  if (!chunks.length) return;
 
-boot();
+  setSpeaking(true);
+
+  let i = 0;
+  const speakNext = () => {
+    if (i >= chunks.length) {
+      setSpeaking(false);
+      return;
+    }
+
+    const chunk = chunks[i++];
+
+    const u = new SpeechSynthesisUtterance(chunk);
+
+    // Base values
+    u.rate = clamp(state.voice.rate, 0.7, 1.2);
+    u.pitch = clamp(state.voice.pitch, 0.8, 1.2);
+    u.volume = clamp(state.voice.volume, 0, 1);
+
+    // Tiny human-ish variation
+    u.pitch = clamp(u.pitch + (Math.random() * 0.04 - 0.02), 0.8, 1.2);
+
+    if (state.preferredVoice) u.voice = state.preferredVoice;
+
+    u.onend = () => {
+      // small pause between chunks
+      setTimeout(speakNext, 120);
+    };
+    u.onerror = () => {
+      setSpeaking(false);
+    };
+
+    synth.speak(u);
+  };
+
+  speakNext();
+}
+
+function splitForTTS(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return [];
+
+  // Split on sentence-ish punctuation while keeping it readable.
+  // Also limit chunk size to avoid long monotone blocks.
+  const rough = clean
+    .replace(/\s+/g, " ")
+    .split(/(?<=[\.\!\?\:\;])\s+/g);
+
+  const out = [];
+  let buf = "";
+
+  for (const part of rough) {
+    if ((buf + " " + part).trim().length > 160) {
+      if (buf.trim()) out.push(buf.trim());
+      buf = part;
+    } else {
+      buf = (buf + " " + part).trim();
+    }
+  }
+  if (buf.trim()) out.push(buf.trim());
+
+  return out;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+/* -------------------------
+   AVATAR "ALIVE" STATES
+   (CSS does the motion; JS just toggles classes)
+------------------------- */
+
+function setSpeaking(on) {
+  state.speaking = !!on;
+  if (!els.avatarWrap) return;
+  els.avatarWrap.classList.toggle("speaking", state.speaking);
+}
+
+function startBlinking() {
+  if (!els.avatarWrap) return;
+  if (state.blinkTimer) clearInterval(state.blinkTimer);
+
+  // Random-ish blink cadence
+  state.blinkTimer = setInterval(() => {
+    if (state.speaking) return; // optional: don’t blink while speaking
+    els.avatarWrap.classList.add("blink");
+    setTimeout(() => els.avatarWrap.classList.remove("blink"), 160);
+  }, 2600);
+}
