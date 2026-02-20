@@ -1,286 +1,119 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GvBot Console</title>
-
-  <style>
-    :root{
-      --bg:#0b0e14;
-      --card:#0f1624;
-      --soft:#111b2c;
-      --line:#1b2230;
-      --text:#e7eaf0;
-      --muted:#a8b3c7;
-      --accent:#5aa7ff;
-      --good:#22c55e;
-      --warn:#f97316;
-    }
-    html,body{height:100%}
-    body{
-      margin:0;
-      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
-      background: radial-gradient(1200px 700px at 50% 0%, #101a33 0%, #0b0e14 55%, #070a10 100%);
-      color:var(--text);
-    }
-    header{
-      position:sticky;top:0;z-index:10;
-      background:rgba(0,0,0,.35);
-      backdrop-filter: blur(10px);
-      border-bottom:1px solid var(--line);
-      padding:18px 22px;
-      display:flex;align-items:center;justify-content:space-between;
-    }
-    header .title{font-weight:700}
-    header .sub{font-size:12px;color:var(--muted);margin-top:2px}
-    .wrap{max-width:1100px;margin:28px auto;padding:0 18px}
-    .shell{
-      border:1px solid rgba(255,255,255,.06);
-      background:rgba(10,14,22,.55);
-      box-shadow: 0 18px 60px rgba(0,0,0,.45);
-      border-radius:22px;
-      padding:18px;
-    }
-    .topRow{
-      display:flex;gap:14px;align-items:center;justify-content:space-between;
-      margin-bottom:12px;
-    }
-    .pill{
-      font-size:12px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,.08);
-      color:var(--muted);
-      background:rgba(255,255,255,.03);
-    }
-    .grid{
-      display:grid;
-      grid-template-columns: 360px 1fr;
-      gap:14px;
-    }
-    @media (max-width: 980px){
-      .grid{grid-template-columns:1fr}
-    }
-    .panel{
-      border-radius:18px;
-      background: rgba(15,22,36,.62);
-      border:1px solid rgba(255,255,255,.06);
-      overflow:hidden;
-    }
-    .panelHeader{
-      padding:14px 14px 10px 14px;
-      border-bottom:1px solid rgba(255,255,255,.06);
-      display:flex;gap:10px;align-items:center;
-    }
-    .panelHeader .h{font-weight:700}
-    .panelBody{padding:14px}
-    .avatarFrame{
-      border-radius:16px;
-      background: radial-gradient(900px 380px at 20% 10%, rgba(90,167,255,.16), rgba(0,0,0,0));
-      border:1px solid rgba(255,255,255,.06);
-      overflow:hidden;
-      height:260px;
-      display:grid;
-      place-items:center;
-      position:relative;
-    }
-    .avatarFrame img{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-      display:block;
-      transform: scale(1.02);
-      animation: breathe 7.5s ease-in-out infinite;
-    }
-    @keyframes breathe{
-      0%,100%{transform:scale(1.02)}
-      50%{transform:scale(1.05)}
-    }
-    .avatarFallback{
-      position:absolute; inset:0;
-      display:none;
-      place-items:center;
-      padding:18px;
-      text-align:center;
-      color:var(--muted);
-      background: rgba(7,10,16,.55);
-    }
-    .avatarFallback .big{font-weight:800;color:var(--text);margin-bottom:6px}
-    .kv{
-      display:grid;grid-template-columns:1fr 1fr;
-      gap:10px;margin-top:12px
-    }
-    .box{
-      border-radius:14px;
-      border:1px solid rgba(255,255,255,.06);
-      background: rgba(255,255,255,.03);
-      padding:10px;
-    }
-    .box .k{font-size:12px;color:var(--muted);margin-bottom:4px}
-    .box .v{font-size:13px}
-    .hint{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.35}
-    .statusRow{
-      display:flex;align-items:center;gap:10px;
-      color:var(--muted);font-size:13px;margin-bottom:10px
-    }
-    .dot{
-      width:10px;height:10px;border-radius:50%;
-      background:var(--good);
-      box-shadow: 0 0 14px rgba(34,197,94,.35);
-    }
-    .chat{
-      border-radius:16px;
-      border:1px solid rgba(255,255,255,.06);
-      background: rgba(255,255,255,.02);
-      padding:14px;
-      min-height:220px;
-      max-height:320px;
-      overflow:auto;
-      line-height:1.45;
-      font-size:14px;
-      white-space:pre-wrap;
-    }
-    .msg{margin-bottom:10px}
-    .msg__role{font-weight:800;margin-right:6px}
-    .msg--you .msg__role{color:#93c5fd}
-    .msg--gv .msg__role{color:#d1fae5}
-    .msg__muted{color:var(--muted)}
-    .typing{display:inline-flex;gap:6px;align-items:center}
-    .dotty{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.35);animation:blink 1.2s infinite}
-    .dotty:nth-child(2){animation-delay:.15s}
-    .dotty:nth-child(3){animation-delay:.3s}
-    @keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
-    .inputRow{
-      display:flex;gap:10px;margin-top:12px;align-items:center
-    }
-    input[type="text"]{
-      flex:1;
-      border-radius:14px;
-      border:1px solid rgba(255,255,255,.08);
-      background: rgba(9,13,22,.75);
-      color:var(--text);
-      padding:12px 12px;
-      outline:none;
-    }
-    button{
-      border:none;
-      border-radius:14px;
-      padding:12px 16px;
-      background: var(--accent);
-      color:#06101f;
-      font-weight:800;
-      cursor:pointer;
-    }
-    button.secondary{
-      background: rgba(255,255,255,.06);
-      color:var(--text);
-      border:1px solid rgba(255,255,255,.08);
-    }
-    .voiceBar{
-      display:flex;gap:14px;align-items:center;flex-wrap:wrap;
-      margin-top:12px;font-size:12px;color:var(--muted)
-    }
-    .voiceBar label{display:flex;gap:8px;align-items:center}
-    .voiceBar input[type="range"]{width:150px}
-    .tiny{font-size:12px;color:var(--muted)}
-  </style>
+  <link rel="stylesheet" href="./style.css?v=3" />
 </head>
 
 <body>
-<header>
-  <div>
-    <div class="title">GvBot Console</div>
-    <div class="sub">Constraint-aware trust with memory</div>
-  </div>
-  <div class="pill" id="statePill">STABLE</div>
-</header>
-
-<div class="wrap">
-  <div class="shell">
-    <div class="topRow">
-      <div class="tiny" id="stateDesc">Demo signals loaded. External relay enabled.</div>
-      <button class="secondary" id="testBtn" type="button">Test voice</button>
+  <header class="topbar">
+    <div class="wrap topbar__wrap">
+      <div class="brand">
+        <div class="brand__title">GvBot Console</div>
+        <div class="brand__sub">Constraint-aware trust with memory</div>
+      </div>
+      <div class="pill" id="statusPill">STABLE</div>
     </div>
+  </header>
 
+  <main class="wrap">
     <div class="grid">
-      <!-- LEFT: Avatar + meta -->
-      <div class="panel">
-        <div class="panelHeader">
-          <div class="h">Gv Avatar</div>
+      <!-- LEFT: AVATAR / INFO -->
+      <section class="card left">
+        <div class="card__head">
+          <div class="card__title">Gv Avatar</div>
         </div>
-        <div class="panelBody">
+
+        <div class="avatarCard" id="gvAvatarWrap">
           <div class="avatarFrame">
-            <img id="faceImg" src="assets/gv-face.jpg" alt="Gv"
-              onerror="this.style.display='none'; document.getElementById('faceFallback').style.display='grid';" />
-            <div class="avatarFallback" id="faceFallback">
-              <div>
-                <div class="big">Gv face not found</div>
-                <div>Expected: <code>dashboard/assets/gv-face.jpg</code></div>
-                <div style="margin-top:8px;font-size:12px;">
-                  GitHub Pages is case-sensitive (gv-face.jpg ≠ GV-FACE.JPG)
-                </div>
-              </div>
-            </div>
+            <!-- IMPORTANT: file must exist exactly at dashboard/assets/gv-face.jpg -->
+            <img id="gvAvatarImg" alt="Gv" />
+            <div class="avatarGlow"></div>
           </div>
-
-          <div style="margin-top:12px;font-weight:800">Gv</div>
-          <div style="color:var(--muted);margin-top:4px">“I remember what happened.”</div>
-
-          <div class="kv">
-            <div class="box">
-              <div class="k">Source</div>
-              <div class="v" id="dataSource">relay + demo</div>
-            </div>
-            <div class="box">
-              <div class="k">Voice</div>
-              <div class="v" id="voiceLabel">browser</div>
-            </div>
-          </div>
-
-          <div class="hint">
-            Tip: If you just updated files and things look “stuck”, do a hard refresh: <b>Ctrl + Shift + R</b><br/>
-            Quick test for the image: open <code>/dashboard/assets/gv-face.jpg</code> in your browser.
-          </div>
-
-          <div class="hint" id="runStamp"></div>
+          <div class="avatarNote" id="gvAvatarStatus">Loading avatar…</div>
         </div>
-      </div>
 
-      <!-- RIGHT: Chat -->
-      <div class="panel">
-        <div class="panelHeader" style="justify-content:space-between">
-          <div class="statusRow" style="margin:0">
-            <span class="dot" id="statusDot"></span>
-            <span id="stateDesc2">Connected. Relay ok.</span>
+        <div class="kv">
+          <div class="kv__row">
+            <div class="kv__k">Gv</div>
+            <div class="kv__v">“I remember what happened.”</div>
+          </div>
+          <div class="kv__row">
+            <div class="kv__k">Source</div>
+            <div class="kv__v" id="sourceBadge">relay + demo</div>
+          </div>
+          <div class="kv__row">
+            <div class="kv__k">Voice</div>
+            <div class="kv__v" id="voiceBadge">Auto</div>
+          </div>
+          <div class="kv__row">
+            <div class="kv__k">Last</div>
+            <div class="kv__v" id="lastMsg">—</div>
           </div>
         </div>
 
-        <div class="panelBody">
-          <div class="chat" id="chat"></div>
+        <div class="tip">
+          Tip: If things look “stuck,” hard refresh: <b>Ctrl + Shift + R</b><br/>
+          Quick image test: open <code>/gvai-safety-systems/dashboard/assets/gv-face.jpg</code> in your browser.
+        </div>
 
-          <div class="inputRow">
-            <input id="input" type="text" placeholder="Talk to Gv..." />
-            <button id="sendBtn" type="button">Send</button>
+        <div class="boot" id="bootLine"></div>
+      </section>
+
+      <!-- RIGHT: CHAT -->
+      <section class="card right">
+        <div class="card__head rightHead">
+          <div class="dot"></div>
+          <div class="rightHead__text">
+            <div class="rightHead__title">Connected</div>
+            <div class="rightHead__sub" id="connLine">Relay check pending…</div>
+          </div>
+          <button class="btn ghost" id="testVoiceBtn">Test voice</button>
+        </div>
+
+        <div class="chatBox" id="chatBox" aria-live="polite"></div>
+
+        <div class="composer">
+          <input id="input" class="composer__input" placeholder="Talk to Gv…" autocomplete="off" />
+          <button class="btn send" id="sendBtn">Send</button>
+        </div>
+
+        <div class="voiceRow">
+          <label class="chk">
+            <input type="checkbox" id="voiceEnabled" checked />
+            <span>Voice</span>
+          </label>
+
+          <div class="slider">
+            <span>Rate</span>
+            <input type="range" id="voiceRate" min="0.80" max="1.08" step="0.02" value="0.94" />
           </div>
 
-          <div class="voiceBar">
-            <label><input type="checkbox" id="voiceEnabled" checked> Voice</label>
-            <label>Rate <input type="range" id="voiceRate" min="0.75" max="1.10" step="0.01" value="0.86"></label>
-            <label>Pitch <input type="range" id="voicePitch" min="0.85" max="1.15" step="0.01" value="0.98"></label>
-            <label>Vol <input type="range" id="voiceVol" min="0" max="1" step="0.05" value="1"></label>
+          <div class="slider">
+            <span>Pitch</span>
+            <input type="range" id="voicePitch" min="0.85" max="1.20" step="0.02" value="1.02" />
           </div>
 
-          <div class="tiny" style="margin-top:10px;">
-            If chat is blank, your browser is not loading <code>gvbot.js</code>. Hard refresh: Ctrl+Shift+R.
+          <div class="slider">
+            <span>Vol</span>
+            <input type="range" id="voiceVol" min="0.10" max="1.00" step="0.05" value="1.00" />
+          </div>
+
+          <div class="voicePick">
+            <span>Voice</span>
+            <select id="voiceSelect"></select>
           </div>
         </div>
-      </div>
+
+        <div class="fineprint">
+          If chat is blank, your browser may not be loading <code>gvbot.js</code>. Hard refresh: <b>Ctrl + Shift + R</b>.
+        </div>
+      </section>
     </div>
+  </main>
 
-  </div>
-</div>
-
-<script src="./gvbot.js"></script>
+  <script src="./gvbot.js?v=3"></script>
 </body>
 </html>
