@@ -1,0 +1,184 @@
+/**
+ * tools/build_index.js
+ * Option 1: Build a static knowledge index JSON for GitHub Pages.
+ *
+ * Usage:
+ *   node tools/build_index.js
+ */
+
+const fs = require("fs");
+const path = require("path");
+
+const REPO_ROOT = path.resolve(__dirname, "..");
+const OUT_PATH = path.join(REPO_ROOT, "dashboard", "data", "kv_index.json");
+
+// What we will index
+const INCLUDE_EXT = new Set([".md", ".txt"]);
+const INCLUDE_FILENAMES = new Set([
+  "README.md",
+  "readme.md",
+]);
+
+// Directories to prefer (add more if you want)
+const PREFERRED_DIR_HINTS = [
+  "god",
+  "gv",
+  "constraint",
+  "docs",
+  "godscore",
+];
+
+// Directories to skip
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".github",
+  "dist",
+  "build",
+  ".next",
+  ".wrangler",
+  "coverage",
+  "dashboard/data", // avoid indexing the index
+]);
+
+function walk(dir, out = []) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    const rel = path.relative(REPO_ROOT, p);
+
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.has(e.name) || SKIP_DIRS.has(rel.replace(/\\/g, "/"))) continue;
+      walk(p, out);
+    } else if (e.isFile()) {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+function shouldInclude(filePath) {
+  const ext = path.extname(filePath);
+  const base = path.basename(filePath);
+
+  if (INCLUDE_FILENAMES.has(base)) return true;
+  if (INCLUDE_EXT.has(ext)) return true;
+
+  return false;
+}
+
+function priorityScore(rel) {
+  const r = rel.toLowerCase();
+  let s = 0;
+  for (const hint of PREFERRED_DIR_HINTS) {
+    if (r.includes(hint)) s += 3;
+  }
+  if (r.includes("readme")) s += 6;
+  return s;
+}
+
+function cleanText(s) {
+  return s
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function chunkText(text, maxLen = 900) {
+  const paras = text.split("\n\n").map(p => p.trim()).filter(Boolean);
+  const chunks = [];
+  let cur = "";
+
+  for (const p of paras) {
+    const next = cur ? (cur + "\n\n" + p) : p;
+    if (next.length > maxLen) {
+      if (cur) chunks.push(cur);
+      // If paragraph itself is huge, split hard
+      if (p.length > maxLen) {
+        for (let i = 0; i < p.length; i += maxLen) {
+          chunks.push(p.slice(i, i + maxLen));
+        }
+        cur = "";
+      } else {
+        cur = p;
+      }
+    } else {
+      cur = next;
+    }
+  }
+  if (cur) chunks.push(cur);
+
+  return chunks;
+}
+
+function tagsFor(rel, text) {
+  const tags = new Set();
+  const r = rel.toLowerCase();
+
+  // tags from path
+  r.split(/[\\/._-]+/).forEach(t => { if (t.length >= 3) tags.add(t); });
+
+  // tags from keywords in content
+  const keyPhrases = [
+    "god variable", "gv", "constraint field theory", "cft",
+    "godscore", "godscore ci", "recoverability", "drift",
+    "safety", "trust", "survivability", "constraint"
+  ];
+  const low = text.toLowerCase();
+  for (const k of keyPhrases) {
+    if (low.includes(k)) tags.add(k.replace(/\s+/g, "_"));
+  }
+
+  return Array.from(tags).slice(0, 18);
+}
+
+function main() {
+  const files = walk(REPO_ROOT)
+    .filter(shouldInclude)
+    .map(p => ({ p, rel: path.relative(REPO_ROOT, p).replace(/\\/g, "/") }))
+    .sort((a, b) => priorityScore(b.rel) - priorityScore(a.rel));
+
+  const chunks = [];
+  for (const f of files) {
+    let raw = "";
+    try {
+      raw = fs.readFileSync(f.p, "utf8");
+    } catch {
+      continue;
+    }
+
+    const text = cleanText(raw);
+    if (!text || text.length < 60) continue;
+
+    const pieces = chunkText(text, 900);
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i];
+      if (piece.length < 60) continue;
+
+      chunks.push({
+        id: `${f.rel}#${i + 1}`,
+        source: f.rel,
+        url: `https://github.com/willshacklett/gvai-safety-systems/blob/main/${f.rel}`,
+        tags: tagsFor(f.rel, piece),
+        text: piece
+      });
+    }
+  }
+
+  const outDir = path.dirname(OUT_PATH);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const index = {
+    generated_at: new Date().toISOString(),
+    chunk_count: chunks.length,
+    chunks
+  };
+
+  fs.writeFileSync(OUT_PATH, JSON.stringify(index, null, 2), "utf8");
+
+  console.log(`✅ Wrote ${chunks.length} chunks to ${OUT_PATH}`);
+  console.log(`Next: commit dashboard/data/kv_index.json`);
+}
+
+main();
