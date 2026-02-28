@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
 import re
 
 class HybridEntropyMonitor:
@@ -36,9 +35,13 @@ class GvCoreAgent(nn.Module):
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.out = nn.Linear(hidden_dim, vocab_size)
         self.monitor = HybridEntropyMonitor(threshold=0.4)
-        self.safe_reply_idx = 1  # 'present.'
+        self.safe_reply_idx = 1  # index for 'present.'
 
     def forward(self, input_seq, hidden=None):
+        # input_seq: [seq_len] or [1, seq_len] — make sure 2D
+        if input_seq.dim() == 1:
+            input_seq = input_seq.unsqueeze(0)
+
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
         local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
@@ -46,14 +49,13 @@ class GvCoreAgent(nn.Module):
 
         if abs(ds_dt) > self.monitor.threshold:
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            # Return [batch] shape
-            return torch.full((input_seq.size(0),), self.safe_reply_idx, dtype=torch.long, device=input_seq.device), new_hidden
+            return torch.tensor([self.safe_reply_idx], dtype=torch.long, device=input_seq.device), new_hidden
 
-        # Last step prediction: [batch, vocab] -> [batch]
-        last_gru = gru_out[:, -1, :]
-        logits = self.out(last_gru)
-        preds = logits.argmax(dim=-1)
-        return preds, new_hidden
+        # Predict from last step
+        last_gru = gru_out[:, -1, :]  # [batch, hidden] — batch=1
+        logits = self.out(last_gru)   # [1, vocab]
+        pred = logits.argmax(dim=-1)  # [1]
+        return pred, new_hidden
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -84,12 +86,6 @@ class GvDataset(Dataset):
     def __getitem__(self, idx):
         return self.inputs[idx], self.targets[idx]
 
-def pad_collate(batch):
-    inputs, targets = zip(*batch)
-    inputs_padded = torch.nn.utils.rnn.pad_sequence(inputs, batch_first=True, padding_value=0)
-    targets_padded = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
-    return inputs_padded, targets_padded
-
 def train_agent(agent, dataloader, epochs=10, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
@@ -103,8 +99,11 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
             targets = targets.to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
-            # outputs [batch], targets[:, -1] [batch]
-            loss = criterion(outputs, targets[:, -1])
+            # outputs shape [1] or [1,1] -> squeeze to scalar or [1]
+            if outputs.dim() > 1:
+                outputs = outputs.squeeze(0)
+            target_last = targets[-1]
+            loss = criterion(outputs, target_last.unsqueeze(0))
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -120,7 +119,7 @@ def chat_with_gv(agent, tokenizer):
         user_input = input("You: ")
         if user_input.lower().strip() == 'quit':
             break
-        input_seq = tokenizer.encode(user_input).unsqueeze(0).to(device)  # [1, seq_len]
+        input_seq = tokenizer.encode(user_input).to(device)  # [seq_len]
         output_token, hidden = agent(input_seq, hidden)
         response = tokenizer.decode(output_token.cpu())
         print("Gv: " + response)
@@ -143,7 +142,7 @@ if __name__ == "__main__":
     ]
 
     dataset = GvDataset(pairs, tokenizer)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=pad_collate)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # No collate_fn needed
 
     agent = GvCoreAgent(vocab_size=len(vocab))
 
