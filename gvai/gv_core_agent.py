@@ -39,7 +39,6 @@ class GvCoreAgent(nn.Module):
         self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        device = input_seq.device
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
         local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
@@ -47,14 +46,13 @@ class GvCoreAgent(nn.Module):
 
         if abs(ds_dt) > self.monitor.threshold:
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            # Return safe token (shape [batch])
-            return torch.full((input_seq.size(0),), self.safe_reply_idx, dtype=torch.long, device=device), new_hidden
+            return torch.tensor([self.safe_reply_idx] * input_seq.size(0), dtype=torch.long, device=input_seq.device), new_hidden
 
-        # Predict from last GRU output step
+        # Predict from last GRU output
         last_gru = gru_out[:, -1, :]  # [batch, hidden]
         logits = self.out(last_gru)   # [batch, vocab]
         preds = logits.argmax(dim=-1) # [batch]
-        return preds, new_hidden  # return [batch] for simplicity
+        return preds, new_hidden
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -104,7 +102,7 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
             targets = targets.to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
-            # outputs [batch] , targets last token [batch]
+            # outputs [batch], targets last token [batch]
             loss = criterion(outputs, targets[:, -1])
             loss.backward()
             optimizer.step()
