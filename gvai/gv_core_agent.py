@@ -42,17 +42,21 @@ class GvCoreAgent(nn.Module):
         # input_seq: [batch, seq_len]
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
-        local_state = new_hidden.detach().numpy()[0] if new_hidden is not None else np.array([])
+        local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
         _, ds_dt = self.monitor.update(local_state)
+
+        batch_size = input_seq.size(0)
 
         if abs(ds_dt) > self.monitor.threshold:
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            return torch.full((input_seq.size(0), 1), self.safe_reply_idx, dtype=torch.long), new_hidden
+            # Safe reply: shape [batch, 1]
+            return torch.full((batch_size, 1), self.safe_reply_idx, dtype=torch.long, device=input_seq.device), new_hidden
 
-        # Last time step prediction
-        last_idx = input_seq.size(1) - 1
-        logits = self.out(gru_out[torch.arange(gru_out.size(0)), last_idx, :])
-        return logits.argmax(dim=-1).unsqueeze(1), new_hidden
+        # Predict from last time step: [batch, vocab] -> argmax [batch, 1]
+        last_step = gru_out[torch.arange(batch_size), input_seq.size(1) - 1, :]
+        logits = self.out(last_step)
+        preds = logits.argmax(dim=-1).unsqueeze(1)  # [batch, 1]
+        return preds, new_hidden
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -63,12 +67,14 @@ class SimpleTokenizer:
     def encode(self, text):
         words = re.findall(r'\b\w+\b', text.lower())
         if not words:
-            return torch.tensor([0], dtype=torch.long)  # 1D
+            return torch.tensor([0], dtype=torch.long)
         indices = [self.word_to_idx.get(w, 0) for w in words]
-        return torch.tensor(indices, dtype=torch.long)  # 1D
+        return torch.tensor(indices, dtype=torch.long)
 
     def decode(self, tokens):
-        return ' '.join(self.idx_to_word.get(t.item(), '?') for t in tokens)
+        # tokens: [batch, seq] or [batch, 1]
+        flat = tokens.flatten()
+        return ' '.join(self.idx_to_word.get(t.item(), '?') for t in flat if t.item() != 0)
 
 class GvDataset(Dataset):
     def __init__(self, pairs, tokenizer):
@@ -83,7 +89,6 @@ class GvDataset(Dataset):
 
 def pad_collate(batch):
     inputs, targets = zip(*batch)
-    # inputs and targets are now 1D tensors
     inputs_padded = torch.nn.utils.rnn.pad_sequence(inputs, batch_first=True, padding_value=0)
     targets_padded = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
     return inputs_padded, targets_padded
@@ -91,16 +96,18 @@ def pad_collate(batch):
 def train_agent(agent, dataloader, epochs=10, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
+    device = next(agent.parameters()).device
     for epoch in range(epochs):
         total_loss = 0.0
         num_batches = 0
         for inputs, targets in dataloader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
-            # outputs: [batch, 1] -> [batch]
+            # outputs [batch, 1] -> [batch]
             # targets last token
-            last_targets = targets[:, -1]
-            loss = criterion(outputs.squeeze(1), last_targets)
+            loss = criterion(outputs.squeeze(1), targets[:, -1])
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -115,7 +122,7 @@ def chat_with_gv(agent, tokenizer):
         user_input = input("You: ")
         if user_input.lower().strip() == 'quit':
             break
-        input_seq = tokenizer.encode(user_input).unsqueeze(0)  # add batch dim [1, len]
+        input_seq = tokenizer.encode(user_input).unsqueeze(0)  # [1, seq_len]
         output_token, hidden = agent(input_seq, hidden)
         response = tokenizer.decode(output_token)
         print("Gv: " + response)
