@@ -46,9 +46,9 @@ class GvCoreAgent(nn.Module):
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
 
-        # Fix: clone + detach only for entropy copy - preserve original graph
+        # Fix: clone + data for numpy copy - no detach on main graph
         local_hidden = new_hidden if new_hidden is not None else None
-        local_state = local_hidden[0].clone().detach().cpu().numpy() if local_hidden is not None else np.array([])
+        local_state = local_hidden[0].clone().data.cpu().numpy() if local_hidden is not None else np.array([])
         _, ds_dt = self.monitor.update(local_state)
 
         if abs(ds_dt) > self.monitor.threshold:
@@ -58,7 +58,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # keep [1] - graph intact
+        return pred, new_hidden  # [1] - graph preserved
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -89,7 +89,7 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
-            # logits [1], unsqueeze to [1, 1] for vocab dim
+            # Logits [1], unsqueeze to [1, 1] for vocab dim
             loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
