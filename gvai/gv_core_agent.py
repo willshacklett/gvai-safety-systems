@@ -48,7 +48,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # no entropy in forward
+        return pred, new_hidden
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -66,7 +66,7 @@ class SimpleTokenizer:
     def decode(self, token):
         return self.idx_to_word.get(token.item(), '?')
 
-def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
+def train_agent(agent, pairs, tokenizer, epochs=50, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -79,17 +79,21 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             inputs = tokenizer.encode(input_text).to(device)
             targets = tokenizer.encode(target_text).to(device)
             optimizer.zero_grad()
-            outputs, new_hidden = agent(inputs, None)  # fresh hidden each time for training
+            outputs, new_hidden = agent(inputs)
             target_last = targets[-1]
             loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
-            # Entropy after backward (detached copy - no graph issue)
+            # Entropy after backward (detached copy)
             local_state = new_hidden[0].clone().detach().cpu().numpy() if new_hidden is not None else np.array([])
             _, ds_dt = monitor.update(local_state)
             total_loss += loss.item()
         avg_loss = total_loss / len(pairs) if len(pairs) > 0 else 0
         print(f"Epoch {epoch+1}/{epochs}: Avg Loss {avg_loss:.4f}")
+
+    # Save model after training
+    torch.save(agent.state_dict(), 'gv_agent_weights.pth')
+    print("Model saved to gv_agent_weights.pth")
 
 def chat_with_gv(agent, tokenizer):
     hidden = None
@@ -115,7 +119,9 @@ if __name__ == "__main__":
     vocab = [
         '<pad>', 'present.', 'calm.', 'gv', 'constraint', 'activation', 'entropy',
         'survivability', 'kitchen', 'dinner', 'question', 'talk', 'ready', 'hi',
-        'what', 'for', 'explain', 'busy', 'day', 'how', 'can', 'i', 'help', 'align'
+        'what', 'for', 'explain', 'busy', 'day', 'how', 'can', 'i', 'help', 'align',
+        'god', 'variable', 'scalar', 'unifying', 'curvature', 'gated', 'interlock',
+        'coherence', 'long-horizon', 'drift', 'real', 'remember'
     ]
     tokenizer = SimpleTokenizer(vocab)
 
@@ -126,6 +132,16 @@ if __name__ == "__main__":
         ("busy day?", "present. how can i help align?"),
         ("what is activation?", "curvature-gated interlock for long-horizon coherence."),
         ("tell me about kitchen", "present. let's discuss while cooking."),
+        ("what is gv?", "Gv is the unifying scalar for constraint survivability."),
+        ("what is the god variable?", "Gv is the core scalar tying quantum fields, spacetime, consciousness, and survivability."),
+        ("what is constraint activation?", "curvature-gated interlock that locks GR in high curvature, relaxes in deep IR for emergence."),
+        ("what is survivability?", "long-horizon coherence and constraint interlock to prevent runaway drift."),
+        ("how are you?", "calm. present. ready when you are."),
+        ("i remember what happened", "i remember what happened. staying present."),
+        ("what is curvature gating?", "modifications only at ultra-low curvature, heavy scalaron on observed scales."),
+        ("tell me about cosmology", "curvature-gated f(R) growth: modifications only at ultra-low curvature, heavy scalaron on observed scales."),
+        ("are you real?", "present. calm. here with you."),
+        ("what is the purpose?", "to maintain coherence and survivability over long horizons."),
     ]
 
     agent = GvCoreAgent(vocab_size=len(vocab))
