@@ -46,19 +46,11 @@ class GvCoreAgent(nn.Module):
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
 
-        # Critical fix: clone + data for numpy copy - NO detach on main graph
-        local_hidden = new_hidden if new_hidden is not None else None
-        local_state = local_hidden[0].clone().data.cpu().numpy() if local_hidden is not None else np.array([])
-        _, ds_dt = self.monitor.update(local_state)
-
-        if abs(ds_dt) > self.monitor.threshold:
-            print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            return torch.tensor([self.safe_reply_idx], dtype=torch.long), new_hidden
-
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # keep [1] - graph preserved
+
+        return pred, new_hidden  # no entropy here - graph intact
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -81,15 +73,24 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
     criterion = nn.CrossEntropyLoss()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     agent.to(device)
+    monitor = agent.monitor  # shared monitor instance
+
     for epoch in range(epochs):
         total_loss = 0.0
         for input_text, target_text in pairs:
             inputs = tokenizer.encode(input_text).to(device)
             targets = tokenizer.encode(target_text).to(device)
             optimizer.zero_grad()
-            outputs, _ = agent(inputs)
-            target_last = targets[-1]
-            # Logits [1], unsqueeze to [1, 1] for vocab dim
+            outputs, new_hidden = agent(inputs)
+
+            # Entropy after forward - detach copy only
+            local_state = new_hidden[0].clone().detach().cpu().numpy() if new_hidden is not None else np.array([])
+            _, ds_dt = monitor.update(local_state)
+
+            # Gating after forward (for logging only - not affecting grads)
+            if abs(ds_dt) > monitor.threshold:
+                print(f"Gv interlock: Strain {ds_dt:.2f} > threshold (logging only).")
+
             loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
@@ -101,14 +102,21 @@ def chat_with_gv(agent, tokenizer):
     hidden = None
     device = next(agent.parameters()).device
     agent.to(device)
+    monitor = agent.monitor
     print("\nGvBot ready. Type 'quit' to exit.\n")
     while True:
         user_input = input("You: ")
         if user_input.lower().strip() == 'quit':
             break
         input_seq = tokenizer.encode(user_input).to(device)
-        output_token, hidden = agent(input_seq, hidden)
-        response = tokenizer.decode(output_token.cpu())
+        outputs, hidden = agent(input_seq, hidden)
+        # Entropy for gating in chat (detached copy)
+        local_state = hidden[0].clone().detach().cpu().numpy() if hidden is not None else np.array([])
+        _, ds_dt = monitor.update(local_state)
+        if abs(ds_dt) > monitor.threshold:
+            response = "Present. Calm. Let's realign."
+        else:
+            response = tokenizer.decode(outputs.cpu())
         print("Gv: " + response)
 
 if __name__ == "__main__":
