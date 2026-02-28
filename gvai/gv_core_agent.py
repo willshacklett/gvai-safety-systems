@@ -35,12 +35,12 @@ class GvCoreAgent(nn.Module):
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.out = nn.Linear(hidden_dim, vocab_size)
         self.monitor = HybridEntropyMonitor(threshold=0.4)
-        self.safe_reply_idx = 1  # index for 'present.'
+        self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        # input_seq: [seq_len] or [1, seq_len] — make sure 2D
+        # input_seq: [seq_len] (single example)
         if input_seq.dim() == 1:
-            input_seq = input_seq.unsqueeze(0)
+            input_seq = input_seq.unsqueeze(0)  # make [1, seq_len]
 
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
@@ -51,8 +51,8 @@ class GvCoreAgent(nn.Module):
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
             return torch.tensor([self.safe_reply_idx], dtype=torch.long, device=input_seq.device), new_hidden
 
-        # Predict from last step
-        last_gru = gru_out[:, -1, :]  # [batch, hidden] — batch=1
+        # Last time step prediction
+        last_gru = gru_out[:, -1, :]  # [1, hidden]
         logits = self.out(last_gru)   # [1, vocab]
         pred = logits.argmax(dim=-1)  # [1]
         return pred, new_hidden
@@ -99,9 +99,7 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
             targets = targets.to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
-            # outputs shape [1] or [1,1] -> squeeze to scalar or [1]
-            if outputs.dim() > 1:
-                outputs = outputs.squeeze(0)
+            # outputs [1] (scalar tensor), targets last token (scalar)
             target_last = targets[-1]
             loss = criterion(outputs, target_last.unsqueeze(0))
             loss.backward()
@@ -142,7 +140,7 @@ if __name__ == "__main__":
     ]
 
     dataset = GvDataset(pairs, tokenizer)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # No collate_fn needed
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # No collate_fn
 
     agent = GvCoreAgent(vocab_size=len(vocab))
 
