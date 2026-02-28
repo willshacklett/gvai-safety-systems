@@ -13,18 +13,13 @@ class HybridEntropyMonitor:
         self.history = []
 
     def approx_entropy(self, state):
-        # Convert to NumPy array safely
         state = np.asarray(state) if not isinstance(state, np.ndarray) else state
-        
-        # Check emptiness using .size (safe for arrays)
         if state.size == 0:
             return 0.0
-        
         probs = np.abs(state.flatten())
         probs_sum = np.sum(probs)
         if probs_sum == 0:
             return 0.0
-        
         probs /= probs_sum + 1e-10
         return -np.sum(probs * np.log(probs + 1e-10))
 
@@ -44,12 +39,10 @@ class GvCoreAgent(nn.Module):
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.out = nn.Linear(hidden_dim, vocab_size)
         self.monitor = HybridEntropyMonitor(threshold=0.4)
-        self.safe_reply_idx = 1  # index for 'present.'
+        self.safe_reply_idx = 1
 
     def forward(self, input_seq, hidden=None):
-        # input_seq: [seq_len] (single example)
-        input_seq = input_seq.unsqueeze(0)  # make [1, seq_len]
-
+        input_seq = input_seq.unsqueeze(0)
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
         local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
@@ -59,10 +52,10 @@ class GvCoreAgent(nn.Module):
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
             return torch.tensor([self.safe_reply_idx], dtype=torch.long), new_hidden
 
-        last_gru = gru_out[0, -1, :]  # [hidden]
-        logits = self.out(last_gru.unsqueeze(0))  # [1, vocab]
-        pred = logits.argmax(dim=-1)  # [1]
-        return pred.squeeze(0), new_hidden  # scalar tensor
+        last_gru = gru_out[0, -1, :]
+        logits = self.out(last_gru.unsqueeze(0))
+        pred = logits.argmax(dim=-1)
+        return pred.squeeze(0), new_hidden
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -93,7 +86,7 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
-            loss = criterion(outputs.unsqueeze(0), target_last.unsqueeze(0))
+            loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
