@@ -46,7 +46,7 @@ class GvCoreAgent(nn.Module):
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
 
-        # Fix: clone + data for numpy copy - no detach on main graph
+        # Critical fix: clone + data for numpy copy - NO detach on main graph
         local_hidden = new_hidden if new_hidden is not None else None
         local_state = local_hidden[0].clone().data.cpu().numpy() if local_hidden is not None else np.array([])
         _, ds_dt = self.monitor.update(local_state)
@@ -58,7 +58,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # [1] - graph preserved
+        return pred, new_hidden  # keep [1] - graph preserved
 
 class SimpleTokenizer:
     def __init__(self, vocab):
