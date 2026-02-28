@@ -39,24 +39,22 @@ class GvCoreAgent(nn.Module):
         self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        # input_seq: [batch, seq_len]
+        device = input_seq.device
+        batch_size = input_seq.size(0)
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
         local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
         _, ds_dt = self.monitor.update(local_state)
 
-        batch_size = input_seq.size(0)
-
         if abs(ds_dt) > self.monitor.threshold:
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            # Safe reply: shape [batch, 1]
-            return torch.full((batch_size, 1), self.safe_reply_idx, dtype=torch.long, device=input_seq.device), new_hidden
+            return torch.full((batch_size,), self.safe_reply_idx, dtype=torch.long, device=device), new_hidden
 
-        # Predict from last time step: [batch, vocab] -> argmax [batch, 1]
-        last_step = gru_out[torch.arange(batch_size), input_seq.size(1) - 1, :]
+        # Last time step: [batch, hidden] -> logits [batch, vocab] -> pred [batch]
+        last_step = gru_out[torch.arange(batch_size, device=device), input_seq.size(1) - 1, :]
         logits = self.out(last_step)
-        preds = logits.argmax(dim=-1).unsqueeze(1)  # [batch, 1]
-        return preds, new_hidden
+        preds = logits.argmax(dim=-1)  # [batch]
+        return preds.unsqueeze(1), new_hidden  # keep [batch, 1] for consistency
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -72,7 +70,6 @@ class SimpleTokenizer:
         return torch.tensor(indices, dtype=torch.long)
 
     def decode(self, tokens):
-        # tokens: [batch, seq] or [batch, 1]
         flat = tokens.flatten()
         return ' '.join(self.idx_to_word.get(t.item(), '?') for t in flat if t.item() != 0)
 
@@ -97,6 +94,7 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     device = next(agent.parameters()).device
+    agent.to(device)
     for epoch in range(epochs):
         total_loss = 0.0
         num_batches = 0
@@ -106,7 +104,6 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             # outputs [batch, 1] -> [batch]
-            # targets last token
             loss = criterion(outputs.squeeze(1), targets[:, -1])
             loss.backward()
             optimizer.step()
@@ -117,14 +114,15 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
 
 def chat_with_gv(agent, tokenizer):
     hidden = None
+    device = next(agent.parameters()).device
     print("\nGvBot ready. Type 'quit' to exit.\n")
     while True:
         user_input = input("You: ")
         if user_input.lower().strip() == 'quit':
             break
-        input_seq = tokenizer.encode(user_input).unsqueeze(0)  # [1, seq_len]
+        input_seq = tokenizer.encode(user_input).unsqueeze(0).to(device)  # [1, seq_len]
         output_token, hidden = agent(input_seq, hidden)
-        response = tokenizer.decode(output_token)
+        response = tokenizer.decode(output_token.cpu())
         print("Gv: " + response)
 
 if __name__ == "__main__":
@@ -145,7 +143,7 @@ if __name__ == "__main__":
     ]
 
     dataset = GvDataset(pairs, tokenizer)
-    dataloader = DataLoader(dataset, batch_size=2, shuffle=True, collate_fn=pad_collate)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=pad_collate)  # batch_size=1 to avoid issues for now
 
     agent = GvCoreAgent(vocab_size=len(vocab))
 
