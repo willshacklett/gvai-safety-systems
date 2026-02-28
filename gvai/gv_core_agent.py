@@ -45,6 +45,15 @@ class GvCoreAgent(nn.Module):
         input_seq = input_seq.unsqueeze(0)  # [1, seq_len]
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
+
+        # Compute entropy AFTER forward, using detached copy - graph stays intact for logits
+        local_state = new_hidden[0].clone().detach().cpu().numpy() if new_hidden is not None else np.array([])
+        _, ds_dt = self.monitor.update(local_state)
+
+        if abs(ds_dt) > self.monitor.threshold:
+            print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
+            return torch.tensor([self.safe_reply_idx], dtype=torch.long), new_hidden
+
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
@@ -79,19 +88,15 @@ def train_agent(agent, pairs, tokenizer, epochs=50, lr=0.001):
             inputs = tokenizer.encode(input_text).to(device)
             targets = tokenizer.encode(target_text).to(device)
             optimizer.zero_grad()
-            outputs, new_hidden = agent(inputs)
+            outputs, new_hidden = agent(inputs, None)  # fresh hidden
             target_last = targets[-1]
             loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
-            # Entropy after backward (detached copy)
-            local_state = new_hidden[0].clone().detach().cpu().numpy() if new_hidden is not None else np.array([])
-            _, ds_dt = monitor.update(local_state)
             total_loss += loss.item()
         avg_loss = total_loss / len(pairs) if len(pairs) > 0 else 0
         print(f"Epoch {epoch+1}/{epochs}: Avg Loss {avg_loss:.4f}")
 
-    # Save model after training
     torch.save(agent.state_dict(), 'gv_agent_weights.pth')
     print("Model saved to gv_agent_weights.pth")
 
