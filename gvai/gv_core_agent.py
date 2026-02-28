@@ -39,10 +39,10 @@ class GvCoreAgent(nn.Module):
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.out = nn.Linear(hidden_dim, vocab_size)
         self.monitor = HybridEntropyMonitor(threshold=0.4)
-        self.safe_reply_idx = 1
+        self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        input_seq = input_seq.unsqueeze(0)
+        input_seq = input_seq.unsqueeze(0)  # [1, seq_len]
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
         local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
@@ -52,10 +52,10 @@ class GvCoreAgent(nn.Module):
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
             return torch.tensor([self.safe_reply_idx], dtype=torch.long), new_hidden
 
-        last_gru = gru_out[0, -1, :]
-        logits = self.out(last_gru.unsqueeze(0))
-        pred = logits.argmax(dim=-1)
-        return pred.squeeze(0), new_hidden
+        last_gru = gru_out[0, -1, :]  # [hidden]
+        logits = self.out(last_gru.unsqueeze(0))  # [1, vocab]
+        pred = logits.argmax(dim=-1)  # [1]
+        return pred.squeeze(0), new_hidden  # scalar tensor
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -86,6 +86,7 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
+            # Fix: logits must be float, target must be long
             loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
