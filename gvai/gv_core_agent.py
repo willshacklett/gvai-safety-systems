@@ -13,14 +13,23 @@ class HybridEntropyMonitor:
         self.history = []
 
     def approx_entropy(self, state):
-        if not state or len(state) == 0:
+        # Convert to NumPy array safely
+        state = np.asarray(state) if not isinstance(state, np.ndarray) else state
+        
+        # Check emptiness using .size (safe for arrays)
+        if state.size == 0:
             return 0.0
-        probs = np.abs(np.array(state).flatten())
-        probs /= np.sum(probs) + 1e-10
+        
+        probs = np.abs(state.flatten())
+        probs_sum = np.sum(probs)
+        if probs_sum == 0:
+            return 0.0
+        
+        probs /= probs_sum + 1e-10
         return -np.sum(probs * np.log(probs + 1e-10))
 
     def update(self, local_state):
-        s_holo = self.approx_entropy(self.history) if self.history else 0.0
+        s_holo = self.approx_entropy(self.history) if len(self.history) > 0 else 0.0
         s_local = self.approx_entropy(local_state)
         s_total = self.alpha * s_holo + self.beta * s_local
         ds_dt = s_total - self.prev_s
@@ -35,11 +44,11 @@ class GvCoreAgent(nn.Module):
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.out = nn.Linear(hidden_dim, vocab_size)
         self.monitor = HybridEntropyMonitor(threshold=0.4)
-        self.safe_reply_idx = 1  # 'present.'
+        self.safe_reply_idx = 1  # index for 'present.'
 
     def forward(self, input_seq, hidden=None):
-        # input_seq: [seq_len]
-        input_seq = input_seq.unsqueeze(0)  # [1, seq_len]
+        # input_seq: [seq_len] (single example)
+        input_seq = input_seq.unsqueeze(0)  # make [1, seq_len]
 
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
@@ -53,7 +62,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]  # [hidden]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred.squeeze(0), new_hidden  # scalar
+        return pred.squeeze(0), new_hidden  # scalar tensor
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -71,28 +80,16 @@ class SimpleTokenizer:
     def decode(self, token):
         return self.idx_to_word.get(token.item(), '?')
 
-class GvDataset:
-    def __init__(self, pairs, tokenizer):
-        self.pairs = pairs
-        self.tokenizer = tokenizer
-
-    def __len__(self):
-        return len(self.pairs)
-
-    def __getitem__(self, idx):
-        input_text, target_text = self.pairs[idx]
-        return self.tokenizer.encode(input_text), self.tokenizer.encode(target_text)
-
-def train_agent(agent, dataset, epochs=10, lr=0.001):
+def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     agent.to(device)
     for epoch in range(epochs):
         total_loss = 0.0
-        for inputs, targets in dataset:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
+        for input_text, target_text in pairs:
+            inputs = tokenizer.encode(input_text).to(device)
+            targets = tokenizer.encode(target_text).to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
@@ -100,7 +97,7 @@ def train_agent(agent, dataset, epochs=10, lr=0.001):
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        avg_loss = total_loss / len(dataset) if len(dataset) > 0 else 0
+        avg_loss = total_loss / len(pairs) if len(pairs) > 0 else 0
         print(f"Epoch {epoch+1}/{epochs}: Avg Loss {avg_loss:.4f}")
 
 def chat_with_gv(agent, tokenizer):
@@ -134,11 +131,9 @@ if __name__ == "__main__":
         ("tell me about kitchen", "present. let's discuss while cooking."),
     ]
 
-    dataset = GvDataset(pairs, tokenizer)
-
     agent = GvCoreAgent(vocab_size=len(vocab))
 
     print("Training GvCoreAgent...")
-    train_agent(agent, dataset)
+    train_agent(agent, pairs, tokenizer)
 
     chat_with_gv(agent, tokenizer)
