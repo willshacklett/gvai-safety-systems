@@ -45,8 +45,8 @@ class GvCoreAgent(nn.Module):
         input_seq = input_seq.unsqueeze(0)
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
-        # Fix: no .detach() — keep graph intact for backprop
-        local_state = new_hidden[0].cpu().numpy() if new_hidden is not None else np.array([])
+        # Fix: detach only for entropy monitoring
+        local_state = new_hidden[0].detach().cpu().numpy() if new_hidden is not None else np.array([])
         _, ds_dt = self.monitor.update(local_state)
 
         if abs(ds_dt) > self.monitor.threshold:
@@ -56,7 +56,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # [1]
+        return pred, new_hidden
 
 class SimpleTokenizer:
     def __init__(self, vocab):
