@@ -38,8 +38,8 @@ class GvCoreAgent(nn.Module):
         self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        # input_seq: [seq_len] (single)
-        input_seq = input_seq.unsqueeze(0)  # make [1, seq_len]
+        # input_seq: [seq_len]
+        input_seq = input_seq.unsqueeze(0)  # [1, seq_len]
 
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
@@ -53,7 +53,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]  # [hidden]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred.squeeze(0), new_hidden  # scalar tensor
+        return pred.squeeze(0), new_hidden  # scalar
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -71,20 +71,21 @@ class SimpleTokenizer:
     def decode(self, token):
         return self.idx_to_word.get(token.item(), '?')
 
-class GvDataset(Dataset):
+class GvDataset:
     def __init__(self, pairs, tokenizer):
-        self.inputs = [tokenizer.encode(p[0]) for p in pairs]
-        self.targets = [tokenizer.encode(p[1]) for p in pairs]
+        self.pairs = pairs
+        self.tokenizer = tokenizer
 
     def __len__(self):
-        return len(self.inputs)
+        return len(self.pairs)
 
     def __getitem__(self, idx):
-        return self.inputs[idx], self.targets[idx]
+        input_text, target_text = self.pairs[idx]
+        return self.tokenizer.encode(input_text), self.tokenizer.encode(target_text)
 
 def train_agent(agent, dataset, epochs=10, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
+    criterion = nn.CrossEntropyLoss()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     agent.to(device)
     for epoch in range(epochs):
@@ -95,7 +96,7 @@ def train_agent(agent, dataset, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
-            loss = criterion(outputs, target_last.unsqueeze(0))
+            loss = criterion(outputs.unsqueeze(0), target_last.unsqueeze(0))
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
