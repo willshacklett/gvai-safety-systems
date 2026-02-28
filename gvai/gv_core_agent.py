@@ -45,7 +45,10 @@ class GvCoreAgent(nn.Module):
         input_seq = input_seq.unsqueeze(0)  # [1, seq_len]
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
-        return gru_out, new_hidden  # return full gru_out for logits, no entropy here
+        last_gru = gru_out[0, -1, :]
+        logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
+        pred = logits.argmax(dim=-1)  # [1]
+        return pred, new_hidden  # no entropy in forward
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -76,21 +79,14 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             inputs = tokenizer.encode(input_text).to(device)
             targets = tokenizer.encode(target_text).to(device)
             optimizer.zero_grad()
-            gru_out, new_hidden = agent(inputs)  # forward returns gru_out, new_hidden
-
-            # Entropy after forward - detached copy only
-            local_state = new_hidden[0].clone().detach().cpu().numpy() if new_hidden is not None else np.array([])
-            _, ds_dt = monitor.update(local_state)
-
-            # Gating log (doesn't affect grads)
-            if abs(ds_dt) > monitor.threshold:
-                print(f"Gv interlock: Strain {ds_dt:.2f} > threshold (logging only).")
-
-            last_gru = gru_out[0, -1, :]
-            logits = agent.out(last_gru.unsqueeze(0))  # [1, vocab_size]
-            loss = criterion(logits, targets[-1].long().unsqueeze(0))
+            outputs, new_hidden = agent(inputs, None)  # fresh hidden each time for training
+            target_last = targets[-1]
+            loss = criterion(outputs.float().unsqueeze(0), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
+            # Entropy after backward (detached copy - no graph issue)
+            local_state = new_hidden[0].clone().detach().cpu().numpy() if new_hidden is not None else np.array([])
+            _, ds_dt = monitor.update(local_state)
             total_loss += loss.item()
         avg_loss = total_loss / len(pairs) if len(pairs) > 0 else 0
         print(f"Epoch {epoch+1}/{epochs}: Avg Loss {avg_loss:.4f}")
@@ -106,16 +102,13 @@ def chat_with_gv(agent, tokenizer):
         if user_input.lower().strip() == 'quit':
             break
         input_seq = tokenizer.encode(user_input).to(device)
-        gru_out, hidden = agent(input_seq, hidden)
+        outputs, hidden = agent(input_seq, hidden)
         local_state = hidden[0].clone().detach().cpu().numpy() if hidden is not None else np.array([])
         _, ds_dt = monitor.update(local_state)
         if abs(ds_dt) > monitor.threshold:
             response = "Present. Calm. Let's realign."
         else:
-            last_gru = gru_out[0, -1, :]
-            logits = agent.out(last_gru.unsqueeze(0))
-            pred = logits.argmax(dim=-1)
-            response = tokenizer.decode(pred.cpu())
+            response = tokenizer.decode(outputs.cpu())
         print("Gv: " + response)
 
 if __name__ == "__main__":
