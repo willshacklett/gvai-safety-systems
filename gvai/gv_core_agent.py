@@ -46,12 +46,13 @@ class GvCoreAgent(nn.Module):
 
         if abs(ds_dt) > self.monitor.threshold:
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            return torch.tensor([self.safe_reply_idx] * input_seq.size(0), dtype=torch.long, device=input_seq.device), new_hidden
+            # Return [batch] shape
+            return torch.full((input_seq.size(0),), self.safe_reply_idx, dtype=torch.long, device=input_seq.device), new_hidden
 
-        # Predict from last GRU output
-        last_gru = gru_out[:, -1, :]  # [batch, hidden]
-        logits = self.out(last_gru)   # [batch, vocab]
-        preds = logits.argmax(dim=-1) # [batch]
+        # Last step prediction: [batch, vocab] -> [batch]
+        last_gru = gru_out[:, -1, :]
+        logits = self.out(last_gru)
+        preds = logits.argmax(dim=-1)
         return preds, new_hidden
 
 class SimpleTokenizer:
@@ -102,7 +103,7 @@ def train_agent(agent, dataloader, epochs=10, lr=0.001):
             targets = targets.to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
-            # outputs [batch], targets last token [batch]
+            # outputs [batch], targets[:, -1] [batch]
             loss = criterion(outputs, targets[:, -1])
             loss.backward()
             optimizer.step()
@@ -119,7 +120,7 @@ def chat_with_gv(agent, tokenizer):
         user_input = input("You: ")
         if user_input.lower().strip() == 'quit':
             break
-        input_seq = tokenizer.encode(user_input).unsqueeze(0).to(device)  # [1, len]
+        input_seq = tokenizer.encode(user_input).unsqueeze(0).to(device)  # [1, seq_len]
         output_token, hidden = agent(input_seq, hidden)
         response = tokenizer.decode(output_token.cpu())
         print("Gv: " + response)
