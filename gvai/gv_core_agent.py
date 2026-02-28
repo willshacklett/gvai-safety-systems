@@ -38,9 +38,8 @@ class GvCoreAgent(nn.Module):
         self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        # input_seq: [seq_len] (single example)
-        if input_seq.dim() == 1:
-            input_seq = input_seq.unsqueeze(0)  # make [1, seq_len]
+        # input_seq: [seq_len] (single)
+        input_seq = input_seq.unsqueeze(0)  # make [1, seq_len]
 
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
@@ -49,13 +48,12 @@ class GvCoreAgent(nn.Module):
 
         if abs(ds_dt) > self.monitor.threshold:
             print(f"Gv interlock: Strain {ds_dt:.2f} > threshold. Damping.")
-            return torch.tensor([self.safe_reply_idx], dtype=torch.long, device=input_seq.device), new_hidden
+            return torch.tensor([self.safe_reply_idx], dtype=torch.long), new_hidden
 
-        # Last time step prediction
-        last_gru = gru_out[:, -1, :]  # [1, hidden]
-        logits = self.out(last_gru)   # [1, vocab]
+        last_gru = gru_out[0, -1, :]  # [hidden]
+        logits = self.out(last_gru.unsqueeze(0))  # [1, vocab]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden
+        return pred.squeeze(0), new_hidden  # scalar tensor
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -70,10 +68,8 @@ class SimpleTokenizer:
         indices = [self.word_to_idx.get(w, 0) for w in words]
         return torch.tensor(indices, dtype=torch.long)
 
-    def decode(self, tokens):
-        if tokens.dim() == 0:
-            tokens = tokens.unsqueeze(0)
-        return ' '.join(self.idx_to_word.get(t.item(), '?') for t in tokens if t.item() != 0)
+    def decode(self, token):
+        return self.idx_to_word.get(token.item(), '?')
 
 class GvDataset(Dataset):
     def __init__(self, pairs, tokenizer):
@@ -86,38 +82,36 @@ class GvDataset(Dataset):
     def __getitem__(self, idx):
         return self.inputs[idx], self.targets[idx]
 
-def train_agent(agent, dataloader, epochs=10, lr=0.001):
+def train_agent(agent, dataset, epochs=10, lr=0.001):
     optimizer = optim.Adam(agent.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     agent.to(device)
     for epoch in range(epochs):
         total_loss = 0.0
-        num_batches = 0
-        for inputs, targets in dataloader:
+        for inputs, targets in dataset:
             inputs = inputs.to(device)
             targets = targets.to(device)
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
-            # outputs [1] (scalar tensor), targets last token (scalar)
             target_last = targets[-1]
             loss = criterion(outputs, target_last.unsqueeze(0))
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-            num_batches += 1
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0
+        avg_loss = total_loss / len(dataset) if len(dataset) > 0 else 0
         print(f"Epoch {epoch+1}/{epochs}: Avg Loss {avg_loss:.4f}")
 
 def chat_with_gv(agent, tokenizer):
     hidden = None
     device = next(agent.parameters()).device
+    agent.to(device)
     print("\nGvBot ready. Type 'quit' to exit.\n")
     while True:
         user_input = input("You: ")
         if user_input.lower().strip() == 'quit':
             break
-        input_seq = tokenizer.encode(user_input).to(device)  # [seq_len]
+        input_seq = tokenizer.encode(user_input).to(device)
         output_token, hidden = agent(input_seq, hidden)
         response = tokenizer.decode(output_token.cpu())
         print("Gv: " + response)
@@ -140,11 +134,10 @@ if __name__ == "__main__":
     ]
 
     dataset = GvDataset(pairs, tokenizer)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # No collate_fn
 
     agent = GvCoreAgent(vocab_size=len(vocab))
 
     print("Training GvCoreAgent...")
-    train_agent(agent, dataloader)
+    train_agent(agent, dataset)
 
     chat_with_gv(agent, tokenizer)
