@@ -55,7 +55,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # [1] (keep dim for loss)
+        return pred, new_hidden  # keep [1]
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -86,7 +86,7 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
-            # Fix: logits [1, vocab], targets [1]
+            # Fix: logits [1, vocab_size], targets [1]
             loss = criterion(outputs.float(), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
