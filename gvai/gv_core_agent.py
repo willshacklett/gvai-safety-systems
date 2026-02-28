@@ -39,10 +39,10 @@ class GvCoreAgent(nn.Module):
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.out = nn.Linear(hidden_dim, vocab_size)
         self.monitor = HybridEntropyMonitor(threshold=0.4)
-        self.safe_reply_idx = 1
+        self.safe_reply_idx = 1  # 'present.'
 
     def forward(self, input_seq, hidden=None):
-        input_seq = input_seq.unsqueeze(0)
+        input_seq = input_seq.unsqueeze(0)  # [1, seq_len]
         embeds = self.embed(input_seq)
         gru_out, new_hidden = self.gru(embeds, hidden)
         local_state = new_hidden.detach().cpu().numpy()[0] if new_hidden is not None else np.array([])
@@ -55,7 +55,7 @@ class GvCoreAgent(nn.Module):
         last_gru = gru_out[0, -1, :]
         logits = self.out(last_gru.unsqueeze(0))  # [1, vocab_size]
         pred = logits.argmax(dim=-1)  # [1]
-        return pred, new_hidden  # keep [1]
+        return pred.unsqueeze(0), new_hidden  # [1, 1] for loss
 
 class SimpleTokenizer:
     def __init__(self, vocab):
@@ -86,7 +86,6 @@ def train_agent(agent, pairs, tokenizer, epochs=10, lr=0.001):
             optimizer.zero_grad()
             outputs, _ = agent(inputs)
             target_last = targets[-1]
-            # Fix: logits [1, vocab_size], targets [1]
             loss = criterion(outputs.float(), target_last.long().unsqueeze(0))
             loss.backward()
             optimizer.step()
