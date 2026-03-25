@@ -1,127 +1,126 @@
-> **Start here (Hub):** https://github.com/willshacklett/god-variable-theory  
-> One-click ecosystem map • demos • CI enforcement • runtime monitoring
+# GVAI Safety Systems
 
-# Hybrid Entropy Monitor
+**Runtime infrastructure for measuring recoverability — not just performance.**
 
-**Hybrid Entropy Monitor** is a lightweight, constraint-based guard designed to preserve long-horizon coherence in AI agents, swarms, and distributed systems.
-
-It provides a unified scalar signal that tracks **total entropy** and its **rate of change**, enabling real-time damping before drift, collapse, or runaway behavior occurs.
-
-This project is part of the broader **God Variable / Constraint Field** ecosystem.
+GVAI detects when a system has not failed yet, but is already entering a non-recoverable state.
 
 ---
 
-## What This Is
+## Core Idea
 
-Modern AI systems fail not because they lack intelligence, but because they **accumulate irreversible entropy** over time:
+Most systems fail long before they crash.
 
-- Memory drift
-- Policy decay
-- Resource exhaustion
-- Feedback amplification
-- Swarm incoherence
+Traditional monitoring looks for:
+- errors
+- thresholds
+- outages
 
-Hybrid Entropy Monitor introduces a **hybrid scalar**:
-
-- **Sₜ** — total system entropy  
-- **dS/dt** — entropy velocity (early-warning signal)
-
-Together, they allow systems to **self-regulate indefinitely**.
+GVAI looks for:
+- **variance expansion**
+- **drift away from recoverable dynamics**
+- **shrinking recovery window (Δt)**
 
 ---
 
-## Core Concept
+## What GVAI Detects
 
-The monitor blends:
+### 1. Variance Breach
+Instability begins to widen across the system.
 
-- Global state entropy (system / swarm-level disorder)
-- Local reduced density entropy (agent-level coherence loss)
-- Constraint damping via calibrated parameters
+> Early signal that the system is losing coherence.
 
-Rather than enforcing hard shutdowns, it enables **soft correction** — preserving capability while preventing irreversible drift.
+### 2. Drift Confirmation
+The system is no longer oscillating around stability — it is moving away from it.
 
----
+> Confirms the instability is directional, not noise.
 
-## Installation
+### 3. Δt Lead Time
+Time between:
+- **detectable instability**
+- **effective collapse**
 
-```bash
-pip install hybrid-entropy-monitor
-```
+> This is the intervention window.
 
----
+### 4. Recoverability Status
 
-## Usage Example
+GVAI classifies system state as:
 
-```python
-from hybrid_entropy_monitor import HybridEntropyMonitor
-
-# Calibrated for eternal runs
-monitor = HybridEntropyMonitor(alpha=0.92, beta=0.08)
-
-# In your agent or swarm loop
-s_total, ds_dt = monitor.update(
-    current_step,
-    swarm_global_state,
-    local_reduced_density
-)
-
-if abs(ds_dt) > monitor.threshold:
-    print("Damping engaged — coherence preserved")
-```
+- **stable** — healthy dynamics
+- **warning** — instability forming
+- **critical** — limited recovery window
+- **irrecoverable** — collapse unavoidable
 
 ---
 
-## Parameters
+## Intervention Hooks
 
-| Parameter | Meaning |
-|----------|---------|
-| `alpha` | Weight on global entropy (system-level coherence) |
-| `beta` | Weight on local entropy (agent-level disorder) |
-| `threshold` | Maximum safe entropy velocity |
-| `update()` | Returns `(S_total, dS_dt)` |
+GVAI is not just passive monitoring.
 
----
+It supports runtime actions such as:
 
-## Ecosystem
-
-- **Theory & Simulations**  
-  `god-variable-theory` — Λ derivation, probe replication simulations, `PAPER.md`  
-  *“The God Variable: A Universal Scalar”*
-
-- **CI Scoring & Enforcement**  
-  `godscore-ci` — Constraint-based recoverability scoring
-
-- **Public Discussion**  
-  Ongoing X threads on entropy bounds, calibration, and real-world seeding
+- **rebalance** — redistribute load or influence
+- **damp** — reduce oscillation amplitude
+- **isolate** — contain instability propagation
 
 ---
 
-## Implications
+## Core Results
 
-- Eternal AI / agent operation without drift or resource exhaustion  
-- Safe von Neumann probe analogs (Optimus-style swarms)  
-- Dyson-scale eternal energy → on-demand replication → true post-scarcity
+GVAI is built around four reproducible system behaviors:
 
-**Coherence Eternal ⭐**
+### 1. Sharp Phase Boundary
+Systems transition rapidly from recoverable to non-recoverable.
+
+### 2. Variance Precedes Collapse
+Instability appears **before** failure, with measurable lead time (**Δt**).
+
+### 3. Signal Survives Topology Change
+The same early-warning structure appears across:
+- grids
+- irregular graphs
+- distributed systems
+
+### 4. Δt Scales with Propagation Delay
+- fast systems -> compressed Δt
+- delayed systems -> expanded Δt
 
 ---
 
-## Contributing
+## Positioning
 
-See `CONTRIBUTING.md`.  
-Issues and PRs welcome — especially calibration data and telemetry hooks.
+GVAI is the runtime counterpart to:
+
+https://github.com/willshacklett/godscore-ci
+
+- **godscore-ci** -> CI enforcement and trend memory
+- **gvai-safety-systems** -> live system monitoring and intervention
+
+Together they form:
+
+> **Build-time trust + runtime survivability**
 
 ---
 
-## License
+## Near-Term Plan
 
-MIT — see `LICENSE`.
+- [ ] Sentinel runtime for variance, drift, and Δt
+- [ ] Shared topology abstraction for grid and graph systems
+- [ ] Intervention loop: rebalance, damp, isolate
+- [ ] Real-time dashboard with breach / confirm / act events
+- [ ] Runtime demos for shard variance and latency skew
 
 ---
 
-## Final Note
+## Philosophy
 
-If your system must run longer than its designers,  
-it needs constraints that outlive intent.
+> This is not about stopping change.  
+> It is about surviving it.
 
-This monitor is one of them.
+---
+
+## TL;DR
+
+GVAI tells you:
+
+> "Your system is still running,  
+> but it is no longer recoverable."
