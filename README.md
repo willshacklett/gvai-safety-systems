@@ -1,6 +1,6 @@
 # GVAI Safety Systems
 
-**Runtime infrastructure for measuring recoverability — not just performance.**
+Runtime infrastructure for measuring recoverability — not just performance.
 
 GVAI detects when a system has not failed yet, but is already entering a non-recoverable state.
 
@@ -52,10 +52,10 @@ Time between instability detection and collapse.
 
 ## Core Results
 
-1. Sharp phase boundary  
-2. Variance precedes collapse  
-3. Signal survives topology change  
-4. Δt scales with propagation delay  
+1. Sharp phase boundary
+2. Variance precedes collapse
+3. Signal survives topology change
+4. Δt scales with propagation delay
 
 ---
 
@@ -70,5 +70,4 @@ Build-time trust + runtime survivability
 
 ## TL;DR
 
-Your system is still running —  
-but it is no longer recoverable.
+Your system is still running — but it is no longer recoverable.
