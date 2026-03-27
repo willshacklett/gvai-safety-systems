@@ -1,10 +1,15 @@
-"""
-GvAI Safety Systems
+from .sentinel import GVSentinel
+from .metrics import compute_recoverability_signal
+from .topologies import (
+    BaseTopology,
+    GridTopology,
+    GraphTopology,
+)
 
-Runtime AI Safety & Security Infrastructure.
-"""
-
-from .sentinel import Sentinel
-
-__all__ = ["Sentinel"]
-__version__ = "0.1.0"
+__all__ = [
+    "GVSentinel",
+    "compute_recoverability_signal",
+    "BaseTopology",
+    "GridTopology",
+    "GraphTopology",
+]
