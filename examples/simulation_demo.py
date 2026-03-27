@@ -1,32 +1,26 @@
 from __future__ import annotations
 
+# 🔥 FIX: ensure gvai package is importable
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from typing import List, Sequence
 
-from gvai.interventions import apply_action
 from gvai.metrics import variance
 from gvai.sentinel import GVSentinel, SentinelConfig
 
 
 def evolve_unstable(values: Sequence[float], gain: float = 1.18) -> List[float]:
-    """
-    Push values away from the mean to simulate unstable divergence.
-    """
     vals = [float(v) for v in values]
     mu = sum(vals) / len(vals)
     return [mu + (v - mu) * gain for v in vals]
 
 
 def load_from_values(values: Sequence[float]) -> List[float]:
-    """
-    Simple synthetic load proxy derived from node values.
-    """
     return [10.0 + max(0.0, (v - 1.0) * 20.0) for v in values]
 
 
 def latency_from_values(values: Sequence[float]) -> List[float]:
-    """
-    Simple synthetic latency proxy derived from node values.
-    """
     return [100.0 + max(0.0, (v - 1.0) * 60.0) for v in values]
 
 
@@ -50,11 +44,6 @@ def run_with_sentinel(initial: Sequence[float], steps: int = 8) -> None:
 
     sentinel = GVSentinel(
         SentinelConfig(
-            variance_threshold=0.05,
-            drift_slope_threshold=0.001,
-            collapse_threshold=0.20,
-            critical_delta_t=3.0,
-            warning_delta_t=8.0,
             auto_apply=True,
             rebalance_strength=0.50,
             damp_strength=0.35,
@@ -79,7 +68,6 @@ def run_with_sentinel(initial: Sequence[float], steps: int = 8) -> None:
         print("DELTA_T:", None if out.delta_t_estimate is None else round(out.delta_t_estimate, 6))
         print("ACTION:", out.recommended_action)
         print("APPLIED:", out.applied)
-        print("EVENTS:", [e.event_type for e in out.events])
 
         if out.applied and out.post_action_values is not None:
             values = list(out.post_action_values)
