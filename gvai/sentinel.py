@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
+from gvai.interventions import InterventionResult, apply_action
 from gvai.metrics import RecoverabilitySignal, compute_recoverability_signal
 
 
@@ -13,6 +14,11 @@ class SentinelConfig:
     collapse_threshold: float = 0.20
     critical_delta_t: float = 3.0
     warning_delta_t: float = 8.0
+    auto_apply: bool = False
+    rebalance_strength: float = 0.50
+    damp_strength: float = 0.35
+    isolate_indices: Optional[List[int]] = None
+    isolate_replacement: Optional[float] = None
 
 
 @dataclass
@@ -36,6 +42,9 @@ class SentinelOutput:
     status: str
     delta_t_estimate: Optional[float]
     recommended_action: str
+    applied: bool
+    intervention: Optional[InterventionResult]
+    post_action_values: Optional[List[float]]
     events: List[SentinelEvent]
 
 
@@ -43,13 +52,7 @@ class GVSentinel:
     """
     Runtime recoverability sentinel.
 
-    This class turns raw node/system measurements into:
-    - variance breach detection
-    - drift confirmation
-    - delta-t lead time estimate
-    - recoverability state
-    - recommended intervention action
-    - structured events for dashboarding / hooks
+    observe -> detect -> classify -> recommend -> optionally act
     """
 
     def __init__(self, config: Optional[SentinelConfig] = None) -> None:
@@ -69,20 +72,6 @@ class GVSentinel:
         load_values: Optional[Sequence[float]] = None,
         latency_values: Optional[Sequence[float]] = None,
     ) -> SentinelOutput:
-        """
-        Update the sentinel with a fresh system observation.
-
-        Parameters
-        ----------
-        node_values:
-            Per-node / per-shard / per-service scalar values.
-            These are the values whose dispersion is being monitored.
-        load_values:
-            Optional load vector for skew detection.
-        latency_values:
-            Optional latency vector for skew detection.
-        """
-        # first pass: use current known history
         preliminary = compute_recoverability_signal(
             node_values=node_values,
             variance_history=self.variance_history,
@@ -93,10 +82,8 @@ class GVSentinel:
             collapse_threshold=self.config.collapse_threshold,
         )
 
-        # append observed variance for future drift estimation
         self.variance_history.append(preliminary.variance_value)
 
-        # second pass: now include latest variance in history
         signal = compute_recoverability_signal(
             node_values=node_values,
             variance_history=self.variance_history,
@@ -107,8 +94,36 @@ class GVSentinel:
             collapse_threshold=self.config.collapse_threshold,
         )
 
-        events = self._build_events(signal)
         action = self._recommend_action(signal)
+        status = self._status_override(signal, action)
+        events = self._build_events(signal, status, action)
+
+        applied = False
+        intervention: Optional[InterventionResult] = None
+        post_action_values: Optional[List[float]] = None
+
+        if self.config.auto_apply and action != "none":
+            intervention = apply_action(
+                action,
+                node_values,
+                rebalance_strength=self.config.rebalance_strength,
+                damp_strength=self.config.damp_strength,
+                isolate_indices=self.config.isolate_indices or [],
+                isolate_replacement=self.config.isolate_replacement,
+            )
+            post_action_values = intervention.after
+            applied = True
+            events.append(
+                self._emit(
+                    "act",
+                    f"Applied intervention: {action}.",
+                    {
+                        "action": action,
+                        "changed_indices": intervention.changed_indices,
+                        "note": intervention.note,
+                    },
+                )
+            )
 
         output = SentinelOutput(
             step=self.step_count,
@@ -119,16 +134,24 @@ class GVSentinel:
             load_skew=signal.load_skew,
             latency_skew=signal.latency_skew,
             recoverability_score=signal.recoverability_score,
-            status=self._status_override(signal, action),
+            status=status,
             delta_t_estimate=signal.delta_t_estimate,
             recommended_action=action,
+            applied=applied,
+            intervention=intervention,
+            post_action_values=post_action_values,
             events=events,
         )
 
         self.step_count += 1
         return output
 
-    def _build_events(self, signal: RecoverabilitySignal) -> List[SentinelEvent]:
+    def _build_events(
+        self,
+        signal: RecoverabilitySignal,
+        status: str,
+        action: str,
+    ) -> List[SentinelEvent]:
         events: List[SentinelEvent] = []
 
         if signal.variance_breach:
@@ -167,25 +190,30 @@ class GVSentinel:
                 )
             )
 
-        if signal.status in ("critical", "irrecoverable"):
+        if status in ("critical", "irrecoverable", "warning"):
             events.append(
                 self._emit(
                     "status",
-                    f"Recoverability status is {signal.status}.",
+                    f"Recoverability status is {status}.",
                     {
-                        "status": signal.status,
+                        "status": status,
                         "recoverability_score": signal.recoverability_score,
                     },
+                )
+            )
+
+        if action != "none":
+            events.append(
+                self._emit(
+                    "recommend",
+                    f"Recommended action: {action}.",
+                    {"action": action},
                 )
             )
 
         return events
 
     def _recommend_action(self, signal: RecoverabilitySignal) -> str:
-        """
-        Extremely simple action policy for now.
-        This is intentionally interpretable.
-        """
         if signal.status == "irrecoverable":
             return "isolate"
 
@@ -206,10 +234,6 @@ class GVSentinel:
         return "none"
 
     def _status_override(self, signal: RecoverabilitySignal, action: str) -> str:
-        """
-        Optionally tighten status when delta-t is very short even if the
-        raw score has not yet crossed a threshold.
-        """
         if signal.delta_t_estimate is not None:
             if signal.delta_t_estimate <= self.config.critical_delta_t:
                 return "critical"
@@ -245,6 +269,8 @@ def output_to_dict(output: SentinelOutput) -> Dict[str, object]:
         "status": output.status,
         "delta_t_estimate": output.delta_t_estimate,
         "recommended_action": output.recommended_action,
+        "applied": output.applied,
+        "post_action_values": output.post_action_values,
         "events": [
             {
                 "step": e.step,
@@ -258,7 +284,26 @@ def output_to_dict(output: SentinelOutput) -> Dict[str, object]:
 
 
 if __name__ == "__main__":
-    sentinel = GVSentinel()
+    print("=== MANUAL MODE ===")
+    manual = GVSentinel(
+        SentinelConfig(
+            auto_apply=False,
+            critical_delta_t=3.0,
+            warning_delta_t=8.0,
+        )
+    )
+
+    print("=== AUTO-APPLY MODE ===")
+    auto = GVSentinel(
+        SentinelConfig(
+            auto_apply=True,
+            critical_delta_t=3.0,
+            warning_delta_t=8.0,
+            rebalance_strength=0.50,
+            damp_strength=0.35,
+            isolate_indices=[4, 5],
+        )
+    )
 
     frames = [
         {
@@ -283,21 +328,33 @@ if __name__ == "__main__":
         },
     ]
 
+    print("\n--- MANUAL RECOMMENDATIONS ---")
     for i, frame in enumerate(frames):
-        out = sentinel.update(
+        out = manual.update(
             node_values=frame["node_values"],
             load_values=frame["load_values"],
             latency_values=frame["latency_values"],
         )
         print(f"\nSTEP {i}")
-        print("VARIANCE:", out.variance_value)
-        print("BREACH:", out.variance_breach)
-        print("DRIFT:", out.drift_confirmed)
-        print("DRIFT SLOPE:", out.drift_slope)
-        print("LOAD SKEW:", out.load_skew)
-        print("LATENCY SKEW:", out.latency_skew)
-        print("SCORE:", out.recoverability_score)
         print("STATUS:", out.status)
         print("DELTA_T:", out.delta_t_estimate)
         print("ACTION:", out.recommended_action)
+        print("APPLIED:", out.applied)
+        print("EVENTS:", [e.event_type for e in out.events])
+
+    print("\n--- AUTO-APPLY ---")
+    for i, frame in enumerate(frames):
+        out = auto.update(
+            node_values=frame["node_values"],
+            load_values=frame["load_values"],
+            latency_values=frame["latency_values"],
+        )
+        print(f"\nSTEP {i}")
+        print("STATUS:", out.status)
+        print("DELTA_T:", out.delta_t_estimate)
+        print("ACTION:", out.recommended_action)
+        print("APPLIED:", out.applied)
+        if out.intervention is not None:
+            print("INTERVENTION NOTE:", out.intervention.note)
+            print("POST ACTION VALUES:", out.post_action_values)
         print("EVENTS:", [e.event_type for e in out.events])
