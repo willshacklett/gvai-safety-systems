@@ -29,8 +29,8 @@ def run_case(gain, noise=0.05):
 
     cfg = SentinelConfig(
         auto_apply=True,
-        variance_velocity_threshold=0.01,
-        dt_stagnation_threshold=0.02,
+        variance_velocity_threshold=0.04,
+        dt_stagnation_threshold=0.01,
     )
     sentinel = GVSentinel(cfg)
     values = init_vals()
