@@ -19,7 +19,7 @@ def mix_ws(values):
     out = values[:]
     n = len(values)
     for i in range(n):
-        avg = (values[(i+1)%n] + values[(i+2)%n]) / 2
+        avg = (values[(i + 1) % n] + values[(i + 2) % n]) / 2
         out[i] = 0.7 * values[i] + 0.3 * avg
     return out
 
@@ -54,23 +54,27 @@ def run_case(gain, vv_thresh, dt_thresh, noise=0.05):
         if out.status == "critical":
             ever_critical = True
 
-        if out.delta_t_estimate and out.delta_t_estimate > 0:
+        if out.delta_t_estimate is not None and out.delta_t_estimate > 0:
             ever_dt_positive = True
 
-    if ever_critical and not ever_dt_positive and not ever_soft:
+    # ordered phase classification
+    if ever_critical:
         return "IRRECOVERABLE"
 
-    if ever_soft:
+    if ever_soft and not ever_dt_positive:
         return "SOFT"
 
-    if ever_dt_positive:
+    if ever_dt_positive and not ever_soft:
         return "RECOVERABLE"
+
+    if ever_soft and ever_dt_positive:
+        return "SOFT"
 
     return "STABLE"
 
 
 def main():
-    print("=== THRESHOLD SWEEP GRID ===")
+    print("=== THRESHOLD SWEEP GRID V2 ORDERED ===")
 
     gains = [1.00, 1.02, 1.04, 1.06, 1.07, 1.08]
     vv_values = [0.01, 0.02, 0.03, 0.04]
