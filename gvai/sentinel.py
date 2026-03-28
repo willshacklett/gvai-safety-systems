@@ -16,12 +16,11 @@ class SentinelConfig:
     critical_delta_t: float = 3.0
     warning_delta_t: float = 8.0
 
-    # v2 low-signal detection
     velocity_window: int = 8
     variance_velocity_threshold: float = 0.02
+    variance_acceleration_threshold: float = 0.02
     dt_stagnation_threshold: float = 0.02
 
-    # intervention
     auto_apply: bool = False
     rebalance_strength: float = 0.50
     damp_strength: float = 0.35
@@ -54,6 +53,7 @@ class SentinelOutput:
     intervention: Optional[InterventionResult]
     post_action_values: Optional[List[float]]
     variance_velocity: float
+    variance_acceleration: float
     dt_stagnation: float
     soft_regime_flag: bool
     events: List[SentinelEvent]
@@ -103,17 +103,20 @@ class GVSentinel:
 
         self.tracker.update(signal.variance_value, signal.delta_t_estimate)
         var_vel = self.tracker.variance_velocity()
+        var_acc = self.tracker.variance_acceleration()
         dt_stag = self.tracker.dt_stagnation()
 
+        irrecoverable_by_accel = var_acc > self.config.variance_acceleration_threshold
         soft_regime = (
             not signal.variance_breach
             and var_vel > self.config.variance_velocity_threshold
             and dt_stag < self.config.dt_stagnation_threshold
+            and not irrecoverable_by_accel
         )
 
-        action = self._recommend_action(signal, soft_regime)
-        status = self._status_override(signal, action, soft_regime)
-        events = self._build_events(signal, status, action, soft_regime, var_vel, dt_stag)
+        action = self._recommend_action(signal, soft_regime, irrecoverable_by_accel)
+        status = self._status_override(signal, action, soft_regime, irrecoverable_by_accel)
+        events = self._build_events(signal, status, action, soft_regime, irrecoverable_by_accel, var_vel, var_acc, dt_stag)
 
         applied = False
         intervention: Optional[InterventionResult] = None
@@ -158,6 +161,7 @@ class GVSentinel:
             intervention=intervention,
             post_action_values=post_action_values,
             variance_velocity=var_vel,
+            variance_acceleration=var_acc,
             dt_stagnation=dt_stag,
             soft_regime_flag=soft_regime,
             events=events,
@@ -172,7 +176,9 @@ class GVSentinel:
         status: str,
         action: str,
         soft_regime: bool,
+        irrecoverable_by_accel: bool,
         var_vel: float,
+        var_acc: float,
         dt_stag: float,
     ) -> List[SentinelEvent]:
         events: List[SentinelEvent] = []
@@ -189,11 +195,17 @@ class GVSentinel:
         if var_vel > self.config.variance_velocity_threshold:
             events.append(self._emit("var_velocity", "Variance velocity exceeded threshold.", {"variance_velocity": var_vel}))
 
+        if var_acc > self.config.variance_acceleration_threshold:
+            events.append(self._emit("var_acceleration", "Variance acceleration exceeded threshold.", {"variance_acceleration": var_acc}))
+
         if dt_stag < self.config.dt_stagnation_threshold:
             events.append(self._emit("dt_stagnation", "Δt stagnation detected.", {"dt_stagnation": dt_stag}))
 
         if soft_regime:
             events.append(self._emit("soft_regime", "Low-signal degradation regime flagged.", {}))
+
+        if irrecoverable_by_accel:
+            events.append(self._emit("irrecoverable_accel", "Runaway acceleration detected.", {}))
 
         if status in ("warning", "critical", "irrecoverable"):
             events.append(self._emit("status", f"Recoverability status is {status}.", {"status": status}))
@@ -203,8 +215,8 @@ class GVSentinel:
 
         return events
 
-    def _recommend_action(self, signal: RecoverabilitySignal, soft_regime: bool) -> str:
-        if signal.status == "irrecoverable":
+    def _recommend_action(self, signal: RecoverabilitySignal, soft_regime: bool, irrecoverable_by_accel: bool) -> str:
+        if irrecoverable_by_accel or signal.status == "irrecoverable":
             return "isolate"
 
         if soft_regime:
@@ -226,8 +238,14 @@ class GVSentinel:
 
         return "none"
 
-    def _status_override(self, signal: RecoverabilitySignal, action: str, soft_regime: bool) -> str:
-        if action == "isolate":
+    def _status_override(
+        self,
+        signal: RecoverabilitySignal,
+        action: str,
+        soft_regime: bool,
+        irrecoverable_by_accel: bool,
+    ) -> str:
+        if irrecoverable_by_accel or action == "isolate":
             return "irrecoverable"
 
         if signal.delta_t_estimate is not None:

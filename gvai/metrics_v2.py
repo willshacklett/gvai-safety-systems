@@ -23,12 +23,16 @@ class GVTrendTracker:
     def variance_velocity(self) -> float:
         if len(self.var_history) < 2:
             return 0.0
-        return self.var_history[-1] - self.var_history[0]
+        return self.var_history[-1] - self.var_history[-2]
+
+    def variance_acceleration(self) -> float:
+        if len(self.var_history) < 3:
+            return 0.0
+        v1 = self.var_history[-1] - self.var_history[-2]
+        v0 = self.var_history[-2] - self.var_history[-3]
+        return v1 - v0
 
     def dt_stagnation(self) -> float:
         if len(self.dt_history) < 2:
             return 0.0
         return self.dt_history[-1] - self.dt_history[0]
-
-    def ready(self) -> bool:
-        return len(self.var_history) >= 2
