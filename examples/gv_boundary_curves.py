@@ -55,9 +55,9 @@ def classify_case(gain: float, delay: int, noise: float = 0.05, steps: int = 30)
 
     cfg = SentinelConfig(
         auto_apply=True,
-        variance_velocity_threshold=0.02,
+        variance_velocity_threshold=0.01,
         variance_acceleration_threshold=0.015,
-        dt_stagnation_threshold=0.01,
+        dt_stagnation_threshold=0.005,
         rebalance_strength=0.60,
         damp_strength=0.40,
     )
@@ -159,7 +159,7 @@ def plot_curves(rows: List[dict], delays: List[int], path: Path) -> None:
 
 def main() -> None:
     gains = [round(x, 3) for x in [
-        1.00, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.10
+        1.00, 1.005, 1.01, 1.015, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.10
     ]]
     delays = list(range(0, 11))
 
