@@ -24,8 +24,10 @@ def compute(df: pd.DataFrame):
     t = df["t"]
 
     dsdt = x.diff().fillna(0.0)
-    dsdt_std = dsdt.rolling(20, min_periods=5).std().fillna(0.0)
-    spike = dsdt > (2.0 * dsdt_std)
+    dsdt_med = dsdt.rolling(20, min_periods=5).median().fillna(0.0)
+    dsdt_mad = (dsdt - dsdt_med).abs().rolling(20, min_periods=5).median().fillna(0.0)
+    adaptive_thr = dsdt_med + 2.2 * (1.4826 * dsdt_mad + 0.003)
+    spike = dsdt > adaptive_thr
 
     persistence = spike.astype(float).rolling(16, min_periods=1).mean().fillna(0.0)
 
