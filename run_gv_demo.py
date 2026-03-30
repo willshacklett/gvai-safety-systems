@@ -8,13 +8,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def zscore(series: pd.Series, window: int) -> pd.Series:
-    mean = series.rolling(window, min_periods=max(5, window // 2)).mean()
-    std = series.rolling(window, min_periods=max(5, window // 2)).std(ddof=0)
-    z = (series - mean) / std.replace(0, np.nan)
-    return z.fillna(0.0)
-
-
 def longest_true_run(values: np.ndarray) -> int:
     best = 0
     cur = 0
@@ -35,7 +28,6 @@ def first_true_index(values: np.ndarray):
 def rolling_slope(series: pd.Series, window: int) -> pd.Series:
     vals = series.astype(float).values
     out = np.zeros(len(vals), dtype=float)
-    x = np.arange(window, dtype=float)
 
     for i in range(len(vals)):
         start = max(0, i - window + 1)
@@ -43,36 +35,65 @@ def rolling_slope(series: pd.Series, window: int) -> pd.Series:
         if len(y) < 3:
             out[i] = 0.0
             continue
-        xx = np.arange(len(y), dtype=float)
-        slope = np.polyfit(xx, y, 1)[0]
-        out[i] = slope
+        x = np.arange(len(y), dtype=float)
+        out[i] = float(np.polyfit(x, y, 1)[0])
 
     return pd.Series(out, index=series.index)
+
+
+def rolling_mad(series: pd.Series, window: int) -> pd.Series:
+    med = series.rolling(window, min_periods=max(5, window // 2)).median()
+
+    def mad_fn(x):
+        m = np.median(x)
+        return np.median(np.abs(x - m))
+
+    mad = series.rolling(window, min_periods=max(5, window // 2)).apply(mad_fn, raw=True)
+    mad = 1.4826 * mad
+    return med.fillna(0.0), mad.fillna(0.0)
+
+
+def scaled_lag_state(recovery_fail: pd.Series, rise: float = 0.28, decay: float = 0.82) -> pd.Series:
+    state = np.zeros(len(recovery_fail), dtype=float)
+    cur = 0.0
+    for i, flag in enumerate(recovery_fail.astype(bool).values):
+        if flag:
+            cur = min(1.0, decay * cur + rise)
+        else:
+            cur = max(0.0, decay * cur - 0.02)
+        state[i] = cur
+    return pd.Series(state, index=recovery_fail.index)
 
 
 def compute_gv(
     df: pd.DataFrame,
     metric_col: str = "metric",
     time_col: str = "t",
-    var_window: int = 20,
     baseline_window: int = 30,
-    var_z_threshold: float = 1.75,
-    recovery_window: int = 18,
-    recovery_tol: float = 0.08,
-    gv_threshold: float = 0.78,
+    dsdt_window: int = 21,
+    dynamic_mult: float = 2.2,
+    mad_floor: float = 0.003,
     persistence_window: int = 16,
     slope_window: int = 10,
+    recovery_tol: float = 0.08,
+    gv_threshold: float = 0.76,
 ):
     df = df.copy().reset_index(drop=True)
 
     x = df[metric_col].astype(float)
     t = df[time_col]
 
-    rolling_var = x.rolling(var_window, min_periods=max(5, var_window // 2)).var(ddof=0)
-    rolling_var = rolling_var.bfill().fillna(0.0)
+    dsdt = x.diff().fillna(0.0)
+    dsdt_med, dsdt_mad = rolling_mad(dsdt, dsdt_window)
+    adaptive_dsdt_threshold = dsdt_med + dynamic_mult * np.maximum(dsdt_mad, mad_floor)
+    spike_candidate = dsdt > adaptive_dsdt_threshold
 
-    var_z = zscore(rolling_var, baseline_window)
-    variance_breach = var_z > var_z_threshold
+    persistence = (
+        spike_candidate.astype(float)
+        .rolling(persistence_window, min_periods=1)
+        .mean()
+        .fillna(0.0)
+    )
 
     baseline = x.rolling(baseline_window, min_periods=max(5, baseline_window // 2)).mean()
     deviation = (x - baseline).abs().fillna(0.0)
@@ -82,44 +103,34 @@ def compute_gv(
     positive_slope = np.clip(slope, 0.0, None)
     slope_norm = np.clip(positive_slope / 0.01, 0.0, 1.0)
 
-    persistence = (
-        variance_breach.astype(float)
-        .rolling(persistence_window, min_periods=1)
-        .mean()
-        .fillna(0.0)
-    )
+    recovery_fail = ((deviation > recovery_tol) & (slope > 0)).astype(float)
+    scaled_lag = scaled_lag_state(recovery_fail, rise=0.28, decay=0.82)
 
-    recovery_failure = ((deviation > recovery_tol) & (slope > 0)).astype(float)
-    recovery_failure_persist = (
-        recovery_failure.rolling(persistence_window, min_periods=1).mean().fillna(0.0)
-    )
-
-    var_score = np.clip(var_z / max(var_z_threshold, 1e-6), 0.0, 2.0) / 2.0
-
+    candidate_score = spike_candidate.astype(float)
     gv_composite = (
-        0.25 * var_score
-        + 0.20 * deviation_norm
-        + 0.25 * persistence
-        + 0.15 * slope_norm
-        + 0.15 * recovery_failure_persist
+        0.18 * candidate_score
+        + 0.24 * persistence
+        + 0.18 * deviation_norm
+        + 0.18 * slope_norm
+        + 0.22 * scaled_lag
     )
 
     early_warning = (
         (gv_composite >= gv_threshold)
-        & (persistence >= 0.60)
-        & ((slope_norm >= 0.30) | (recovery_failure_persist >= 0.50))
+        & (persistence >= 0.50)
+        & (scaled_lag >= 0.32)
     )
 
-    df["rolling_var"] = rolling_var
-    df["var_z"] = var_z
-    df["variance_breach"] = variance_breach.astype(int)
+    df["dsdt"] = dsdt
+    df["adaptive_dsdt_threshold"] = adaptive_dsdt_threshold
+    df["spike_candidate"] = spike_candidate.astype(int)
+    df["persistence"] = persistence
     df["deviation"] = deviation
     df["deviation_norm"] = deviation_norm
     df["slope"] = slope
     df["slope_norm"] = slope_norm
-    df["persistence"] = persistence
-    df["recovery_failure"] = recovery_failure.astype(int)
-    df["recovery_failure_persist"] = recovery_failure_persist
+    df["recovery_fail"] = recovery_fail.astype(int)
+    df["scaled_lag"] = scaled_lag
     df["gv_composite"] = gv_composite
     df["early_warning"] = early_warning.astype(int)
 
@@ -141,11 +152,10 @@ def compute_gv(
     summary = {
         "rows": int(len(df)),
         "outcome": outcome_label,
-        "variance_breach_count": int(df["variance_breach"].sum()),
-        "max_gv_composite": float(df["gv_composite"].max()),
+        "candidate_count": int(df["spike_candidate"].sum()),
         "max_persistence": float(df["persistence"].max()),
-        "max_slope_norm": float(df["slope_norm"].max()),
-        "max_recovery_failure_persist": float(df["recovery_failure_persist"].max()),
+        "max_scaled_lag": float(df["scaled_lag"].max()),
+        "max_gv_composite": float(df["gv_composite"].max()),
         "first_warning_t": None if first_warn_idx is None else int(t.iloc[first_warn_idx]),
         "collapse_t": None if collapse_idx is None else int(t.iloc[collapse_idx]),
         "lead_time": lead_time,
@@ -161,7 +171,7 @@ def make_plot(df: pd.DataFrame, summary: dict, out_png: Path, metric_col: str, t
     ax.plot(df[time_col], df[metric_col], label="metric")
     ax.plot(df[time_col], df["gv_composite"], label="gv_composite")
     ax.plot(df[time_col], df["persistence"], label="persistence", alpha=0.8)
-    ax.plot(df[time_col], df["slope_norm"], label="slope_norm", alpha=0.8)
+    ax.plot(df[time_col], df["scaled_lag"], label="scaled_lag", alpha=0.8)
 
     warn_mask = df["early_warning"] == 1
     if warn_mask.any():
@@ -169,7 +179,7 @@ def make_plot(df: pd.DataFrame, summary: dict, out_png: Path, metric_col: str, t
             df.loc[warn_mask, time_col],
             df.loc[warn_mask, metric_col],
             label="early_warning",
-            s=18,
+            s=22,
         )
 
     if summary["first_warning_t"] is not None:
@@ -191,7 +201,7 @@ def make_plot(df: pd.DataFrame, summary: dict, out_png: Path, metric_col: str, t
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run minimal GV demo on a time-series CSV.")
+    parser = argparse.ArgumentParser(description="Run adaptive GV demo on a time-series CSV.")
     parser.add_argument("csv_path", help="Path to CSV with at least columns: t, metric")
     parser.add_argument("--metric-col", default="metric")
     parser.add_argument("--time-col", default="t")
