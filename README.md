@@ -1,33 +1,45 @@
-# gvai-safety-systems
+# GVAI Safety Systems — Minimal Demo
 
-Minimal GV demo runner for time-series traces.
+This is a minimal runnable demo for detecting **irreversible vs recoverable trajectories** in time-series data.
 
-What it does:
-- reads a CSV with at least t and metric columns
-- computes rolling variance
-- computes variance breach
-- computes recovery lag
-- computes a GV composite
-- computes early warning flags
-- reports lead time when outcome is irreversible
+## What it does
 
-Quick start:
-1. python3 -m venv .venv
-2. source .venv/bin/activate
-3. pip install -r requirements.txt
-4. python scripts/make_sample_data.py
-5. python run_gv_demo.py data/sample_irreversible.csv
-6. python run_gv_demo.py data/sample_recoverable.csv
+Given a time series:
 
-Expected outputs in outputs/:
-- *_gv_output.csv
-- *_summary.csv
-- *_plot.png
+- Computes variance, recovery, persistence, slope
+- Builds a composite GV signal
+- Flags early warnings of irreversible behavior
 
-Input format example:
-t,metric,outcome
-0,1.02,recoverable
-1,1.01,recoverable
-2,1.03,recoverable
+## Key Result (demo)
 
-The outcome column is optional but helps with summary and lead-time reporting.
+- Recoverable trace → NO warning
+- Irreversible trace → WARNING triggered
+- Lead time ≈ 100+ steps before collapse
+
+## Quick Run
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+python scripts/make_sample_data.py
+
+python run_gv_demo.py data/sample_irreversible.csv
+python run_gv_demo.py data/sample_recoverable.csv
+
+## Expected Behavior
+
+Irreversible:
+- warned: True
+- lead_time: large positive value
+
+Recoverable:
+- warned: False
+
+## Files
+
+- run_gv_demo.py → main logic
+- scripts/make_sample_data.py → generates demo traces
+- data/ → input traces
+- outputs/ → results (csv + plots)
+
