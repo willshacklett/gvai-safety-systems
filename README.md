@@ -1,73 +1,33 @@
-# GVAI Safety Systems
+# gvai-safety-systems
 
-Runtime infrastructure for measuring recoverability — not just performance.
+Minimal GV demo runner for time-series traces.
 
-GVAI detects when a system has not failed yet, but is already entering a non-recoverable state.
+What it does:
+- reads a CSV with at least t and metric columns
+- computes rolling variance
+- computes variance breach
+- computes recovery lag
+- computes a GV composite
+- computes early warning flags
+- reports lead time when outcome is irreversible
 
----
+Quick start:
+1. python3 -m venv .venv
+2. source .venv/bin/activate
+3. pip install -r requirements.txt
+4. python scripts/make_sample_data.py
+5. python run_gv_demo.py data/sample_irreversible.csv
+6. python run_gv_demo.py data/sample_recoverable.csv
 
-## Core Idea
+Expected outputs in outputs/:
+- *_gv_output.csv
+- *_summary.csv
+- *_plot.png
 
-Most systems fail long before they crash.
+Input format example:
+t,metric,outcome
+0,1.02,recoverable
+1,1.01,recoverable
+2,1.03,recoverable
 
-Traditional monitoring looks for:
-- errors
-- thresholds
-- outages
-
-GVAI looks for:
-- variance expansion
-- drift away from recoverable dynamics
-- shrinking recovery window (Δt)
-
----
-
-## What GVAI Detects
-
-### 1. Variance Breach
-Instability begins to widen across the system.
-
-### 2. Drift Confirmation
-The system is moving away from recoverable behavior.
-
-### 3. Δt Lead Time
-Time between instability detection and collapse.
-
-### 4. Recoverability Status
-
-- stable
-- warning
-- critical
-- irrecoverable
-
----
-
-## Intervention Hooks
-
-- rebalance
-- damp
-- isolate
-
----
-
-## Core Results
-
-1. Sharp phase boundary
-2. Variance precedes collapse
-3. Signal survives topology change
-4. Δt scales with propagation delay
-
----
-
-## Positioning
-
-Runtime counterpart to:
-https://github.com/willshacklett/godscore-ci
-
-Build-time trust + runtime survivability
-
----
-
-## TL;DR
-
-Your system is still running — but it is no longer recoverable.
+The outcome column is optional but helps with summary and lead-time reporting.

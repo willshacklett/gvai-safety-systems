@@ -1,0 +1,2 @@
+rows,outcome,variance_breach_count,max_gv_composite,max_persistence,max_slope_norm,max_recovery_failure_persist,first_warning_t,collapse_t,lead_time,warning_run_length,warned
+220,irreversible,39,0.797001659178776,1.0,1.0,1.0,90,197,107,1,True
