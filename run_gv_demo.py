@@ -3,9 +3,11 @@ import argparse
 import numpy as np
 import pandas as pd
 
+
 def first_true(v):
     idx = np.flatnonzero(v)
     return int(idx[0]) if len(idx) else None
+
 
 def rolling_slope(s, w=10):
     out = []
@@ -19,11 +21,14 @@ def rolling_slope(s, w=10):
         out.append(float(np.polyfit(x, y, 1)[0]))
     return pd.Series(out, index=s.index)
 
+
 def compute(df: pd.DataFrame):
     x = df["metric"].astype(float)
     t = df["t"]
 
     dsdt = x.diff().fillna(0.0)
+
+    # adaptive dS/dt gating
     dsdt_med = dsdt.rolling(20, min_periods=5).median().fillna(0.0)
     dsdt_mad = (dsdt - dsdt_med).abs().rolling(20, min_periods=5).median().fillna(0.0)
     adaptive_thr = dsdt_med + 2.2 * (1.4826 * dsdt_mad + 0.003)
@@ -80,6 +85,7 @@ def compute(df: pd.DataFrame):
     }
     return summary
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
@@ -91,6 +97,7 @@ def main():
     print("\n=== SUMMARY ===")
     for k, v in summary.items():
         print(f"{k} : {v}")
+
 
 if __name__ == "__main__":
     main()
