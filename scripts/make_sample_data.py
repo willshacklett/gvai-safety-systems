@@ -12,6 +12,7 @@ t = np.arange(n)
 x = 1.0 + 0.02 * rng.normal(size=n)
 for i in range(40, 80):
     x[i] += 0.05 * np.exp(-(i - 40) / 10)
+
 recoverable = pd.DataFrame({
     "t": t,
     "metric": x,
@@ -23,6 +24,7 @@ recoverable.to_csv("data/sample_recoverable.csv", index=False)
 x2 = 1.0 + 0.02 * rng.normal(size=n)
 for i in range(120, n):
     x2[i] += 0.02 * (i - 120)
+
 irreversible = pd.DataFrame({
     "t": t,
     "metric": x2,

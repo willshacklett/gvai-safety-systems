@@ -1,12 +1,13 @@
 # GVAI Safety Systems — Minimal Demo
 
-Detects irreversible system trajectories before failure using recoverability dynamics and adaptive entropy-style spike gating.
+Detects irreversible system trajectories before failure using recoverability dynamics, adaptive spike gating, and a transient veto layer.
 
 ## Core shape
 
 - spike -> candidate
 - persistence + failed recovery -> confirmation
-- adaptive dS/dt -> noise-aware candidate refinement
+- adaptive dS/dt -> noise-aware spike gating
+- entropy velocity -> transient veto only
 
 ## Demo expectation
 

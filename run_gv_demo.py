@@ -34,6 +34,11 @@ def compute(df: pd.DataFrame):
     adaptive_thr = dsdt_med + 2.2 * (1.4826 * dsdt_mad + 0.003)
     spike = dsdt > adaptive_thr
 
+    # entropy velocity veto layer (transient filter only)
+    d2sdt = dsdt.diff().fillna(0.0)
+    vel_decay = d2sdt < -0.002
+    spike = spike & (~vel_decay)
+
     persistence = spike.astype(float).rolling(16, min_periods=1).mean().fillna(0.0)
 
     baseline = x.rolling(30, min_periods=5).mean()
@@ -63,6 +68,7 @@ def compute(df: pd.DataFrame):
         + 0.22 * lag
     )
 
+    # core untouched; velocity only filtered spike candidates above
     warn = (gv >= 0.65) & ((persistence >= 0.35) | (lag >= 0.20))
 
     collapse = None
@@ -94,7 +100,8 @@ def main():
     df = pd.read_csv(args.csv)
     summary = compute(df)
 
-    print("\n=== SUMMARY ===")
+    print("")
+    print("=== SUMMARY ===")
     for k, v in summary.items():
         print(f"{k} : {v}")
 
