@@ -1,0 +1,10 @@
+{
+  "outcome": "irreversible",
+  "rows": 220,
+  "max_gv": 0.7749999999999999,
+  "max_persistence": 0.25,
+  "max_lag": 1.0,
+  "warned": true,
+  "first_warning_t": 190,
+  "lead_time": 29
+}

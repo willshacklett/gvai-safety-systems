@@ -1,0 +1,10 @@
+{
+  "outcome": "recoverable",
+  "rows": 220,
+  "max_gv": 0.24089905142992782,
+  "max_persistence": 0.0625,
+  "max_lag": 0.0,
+  "warned": false,
+  "first_warning_t": null,
+  "lead_time": null
+}

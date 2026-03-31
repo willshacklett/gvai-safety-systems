@@ -1,5 +1,8 @@
 from __future__ import annotations
 import argparse
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -72,7 +75,7 @@ def compute(df: pd.DataFrame):
     warn = (gv >= 0.65) & ((persistence >= 0.35) | (lag >= 0.20))
 
     collapse = None
-    if df["outcome"].iloc[-1] == "irreversible":
+    if "outcome" in df.columns and df["outcome"].iloc[-1] == "irreversible":
         collapse = int(np.argmax(x.values))
 
     first = first_true(warn.values)
@@ -80,8 +83,20 @@ def compute(df: pd.DataFrame):
     if collapse is not None and first is not None:
         lead = collapse - first
 
+    enriched = df.copy()
+    enriched["dsdt"] = dsdt
+    enriched["adaptive_threshold"] = adaptive_thr
+    enriched["spike_candidate"] = spike.astype(int)
+    enriched["persistence"] = persistence
+    enriched["deviation"] = deviation
+    enriched["slope"] = slope
+    enriched["recovery_lag"] = lag
+    enriched["gv_signal"] = gv
+    enriched["warning"] = warn.astype(int)
+
     summary = {
-        "outcome": df["outcome"].iloc[-1],
+        "outcome": df["outcome"].iloc[-1] if "outcome" in df.columns else "unknown",
+        "rows": int(len(df)),
         "max_gv": float(gv.max()),
         "max_persistence": float(persistence.max()),
         "max_lag": float(lag.max()),
@@ -89,21 +104,67 @@ def compute(df: pd.DataFrame):
         "first_warning_t": None if first is None else int(t.iloc[first]),
         "lead_time": lead,
     }
-    return summary
+    return enriched, summary
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("csv")
+    ap = argparse.ArgumentParser(
+        description="Minimal runtime irreversibility signal demo."
+    )
+    ap.add_argument("csv", help="Input CSV with at least columns: t, metric")
+    ap.add_argument(
+        "--emit-warnings",
+        action="store_true",
+        help="Print warning events in a runtime-style format",
+    )
+    ap.add_argument(
+        "--write-output",
+        action="store_true",
+        help="Write enriched CSV + summary JSON to outputs/",
+    )
     args = ap.parse_args()
 
     df = pd.read_csv(args.csv)
-    summary = compute(df)
+    required = {"t", "metric"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {sorted(missing)}")
+
+    enriched, summary = compute(df)
 
     print("")
     print("=== SUMMARY ===")
     for k, v in summary.items():
         print(f"{k} : {v}")
+
+    if args.emit_warnings:
+        warning_rows = enriched.loc[enriched["warning"] == 1, ["t", "gv_signal", "persistence", "recovery_lag"]]
+        print("")
+        print("=== WARNING EVENTS ===")
+        if warning_rows.empty:
+            print("No warnings emitted.")
+        else:
+            for _, row in warning_rows.iterrows():
+                print(
+                    f"t={int(row['t'])} WARNING gv={row['gv_signal']:.3f} "
+                    f"persistence={row['persistence']:.3f} lag={row['recovery_lag']:.3f}"
+                )
+
+    if args.write_output:
+        outdir = Path("outputs")
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        stem = Path(args.csv).stem
+        enriched_path = outdir / f"{stem}_enriched.csv"
+        summary_path = outdir / f"{stem}_summary.json"
+
+        enriched.to_csv(enriched_path, index=False)
+        summary_path.write_text(json.dumps(summary, indent=2))
+
+        print("")
+        print("=== WROTE ===")
+        print(enriched_path)
+        print(summary_path)
 
 
 if __name__ == "__main__":
