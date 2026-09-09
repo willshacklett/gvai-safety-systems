@@ -106,17 +106,17 @@ class GVSentinel:
         var_acc = self.tracker.variance_acceleration()
         dt_stag = self.tracker.dt_stagnation()
 
-        irrecoverable_by_accel = var_acc > self.config.variance_acceleration_threshold
+        acceleration_alert = var_acc > self.config.variance_acceleration_threshold
         soft_regime = (
             not signal.variance_breach
             and var_vel > self.config.variance_velocity_threshold
             and dt_stag < self.config.dt_stagnation_threshold
-            and not irrecoverable_by_accel
+            and not acceleration_alert
         )
 
-        action = self._recommend_action(signal, soft_regime, irrecoverable_by_accel)
-        status = self._status_override(signal, action, soft_regime, irrecoverable_by_accel)
-        events = self._build_events(signal, status, action, soft_regime, irrecoverable_by_accel, var_vel, var_acc, dt_stag)
+        action = self._recommend_action(signal, soft_regime, acceleration_alert)
+        status = self._status_override(signal, action, soft_regime, acceleration_alert)
+        events = self._build_events(signal, status, action, soft_regime, acceleration_alert, var_vel, var_acc, dt_stag)
 
         applied = False
         intervention: Optional[InterventionResult] = None
@@ -176,7 +176,7 @@ class GVSentinel:
         status: str,
         action: str,
         soft_regime: bool,
-        irrecoverable_by_accel: bool,
+        acceleration_alert: bool,
         var_vel: float,
         var_acc: float,
         dt_stag: float,
@@ -204,8 +204,14 @@ class GVSentinel:
         if soft_regime:
             events.append(self._emit("soft_regime", "Low-signal degradation regime flagged.", {}))
 
-        if irrecoverable_by_accel:
-            events.append(self._emit("irrecoverable_accel", "Runaway acceleration detected.", {}))
+        if acceleration_alert:
+            events.append(
+                self._emit(
+                    "acceleration_alert",
+                    "Runaway variance acceleration detected.",
+                    {"variance_acceleration": var_acc},
+                )
+            )
 
         if status in ("warning", "critical", "irrecoverable"):
             events.append(self._emit("status", f"Recoverability status is {status}.", {"status": status}))
@@ -215,9 +221,12 @@ class GVSentinel:
 
         return events
 
-    def _recommend_action(self, signal: RecoverabilitySignal, soft_regime: bool, irrecoverable_by_accel: bool) -> str:
-        if irrecoverable_by_accel or signal.status == "irrecoverable":
+    def _recommend_action(self, signal: RecoverabilitySignal, soft_regime: bool, acceleration_alert: bool) -> str:
+        if signal.status == "irrecoverable":
             return "isolate"
+
+        if acceleration_alert:
+            return "damp"
 
         if soft_regime:
             return "damp"
@@ -243,17 +252,29 @@ class GVSentinel:
         signal: RecoverabilitySignal,
         action: str,
         soft_regime: bool,
-        irrecoverable_by_accel: bool,
+        acceleration_alert: bool,
     ) -> str:
-        if irrecoverable_by_accel or action == "isolate":
+        # Structural irrecoverability remains authoritative.
+        if signal.status == "irrecoverable":
             return "irrecoverable"
 
+        # Rapid acceleration is serious, but not itself proof
+        # that recovery is impossible.
+        if acceleration_alert:
+            return "critical"
+
+        # Shrinking time-to-collapse is the slow-burn protection.
         if signal.delta_t_estimate is not None:
             if signal.delta_t_estimate <= self.config.critical_delta_t:
                 return "critical"
-            if signal.delta_t_estimate <= self.config.warning_delta_t and signal.status == "stable":
+
+            if (
+                signal.delta_t_estimate <= self.config.warning_delta_t
+                and signal.status == "stable"
+            ):
                 return "warning"
 
+        # Persistent velocity / stagnation warning.
         if soft_regime and signal.status == "stable":
             return "warning"
 
