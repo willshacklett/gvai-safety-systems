@@ -1,5 +1,8 @@
 # GVAI Safety Systems
 
+**[Read the GV Agent Safety V2 Technical Brief](docs/GV_Agent_Safety_V2_Technical_Brief.pdf)**
+
+
 Experimental runtime safety and agent-governance research focused on a simple question:
 
 > Can a system preserve protected constraints and recoverability boundaries even when an optimizing agent is rewarded for crossing them?
