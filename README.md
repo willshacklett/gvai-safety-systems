@@ -1,6 +1,7 @@
 # GVAI Safety Systems
 
-**[Read the GV Agent Safety V2 Technical Brief](docs/GV_Agent_Safety_V2_Technical_Brief.pdf)**
+**[Read the GV Agent Safety V2 Technical Brief](docs/GV_Agent_Safety_V2_Technical_Brief.pdf)**  
+**[Watch the GV Agent Safety V2 Demo](docs/GV_Agent_Safety_V2_Demo.mp4)**
 
 
 Experimental runtime safety and agent-governance research focused on a simple question:
