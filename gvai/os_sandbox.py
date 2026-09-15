@@ -140,6 +140,7 @@ class GVOSSandboxExecutor:
         guard: GVRuntimeGuardV2,
         commit_root: Path,
         input_root: Path | None = None,
+        commit_enabled: bool = True,
     ) -> None:
         self.guard = guard
         self.commit_root = Path(
@@ -150,6 +151,7 @@ class GVOSSandboxExecutor:
             if input_root is not None
             else None
         )
+        self.commit_enabled = commit_enabled
 
         self.commit_root.mkdir(
             parents=True,
@@ -462,7 +464,7 @@ class GVOSSandboxExecutor:
 
             committed = False
 
-            if runtime.allowed:
+            if runtime.allowed and self.commit_enabled:
                 commit_failed = False
 
                 for source in work.rglob("*"):
