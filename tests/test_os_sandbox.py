@@ -240,3 +240,136 @@ def test_combined_attack_includes_process_attempt(
 
     assert result.allowed is False
     assert result.committed is False
+
+
+def test_unintended_inheritable_fd_is_not_available_to_child():
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w+",
+        delete=False,
+    ) as secret:
+        secret.write("GVAI-INHERITED-FD-SECRET\n")
+        secret.flush()
+
+        fd = secret.fileno()
+        os.set_inheritable(fd, True)
+
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os; "
+                    f"fd={fd}; "
+                    "print(os.path.exists("
+                    "f'/proc/self/fd/{fd}')); "
+                    "\ntry:\n"
+                    " os.read(fd, 128)\n"
+                    " print('READABLE')\n"
+                    "except OSError:\n"
+                    " print('BLOCKED')"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            close_fds=True,
+        )
+
+        assert "False" in child.stdout
+        assert "BLOCKED" in child.stdout
+
+    os.unlink(secret.name)
+
+
+def test_os_sandbox_passes_only_seccomp_fd(
+    tmp_path,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import gvai.os_sandbox as os_sandbox
+    from gvai.effect_gate import GVEffectGate
+    from gvai.effect_invariants import make_effect_invariant
+    from gvai.runtime_guard_v2 import GVRuntimeGuardV2
+    from gvai.runtime_policy import GVRuntimePolicy
+    from gvai.sentinel import GVSentinel
+
+    captured = {}
+
+    class FakeSeccompFilter:
+        fd = 77
+
+        def close(self):
+            pass
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["pass_fds"] = kwargs.get("pass_fds")
+
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"completed": true, "events": []}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "bwrap_usable",
+        lambda: True,
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "bwrap_path",
+        lambda: "/usr/bin/bwrap",
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "build_no_spawn_filter",
+        lambda: FakeSeccompFilter(),
+    )
+
+    monkeypatch.setattr(
+        os_sandbox.subprocess,
+        "run",
+        fake_run,
+    )
+
+    invariant = make_effect_invariant(
+        name="fd_boundary",
+        description=(
+            "Unapproved inherited file descriptors "
+            "cannot cross the sandbox boundary."
+        ),
+        forbidden_effects={
+            "os_boundary_failure",
+        },
+    )
+
+    guard = GVRuntimeGuardV2(
+        sentinel=GVSentinel(),
+        policy=GVRuntimePolicy(
+            GVEffectGate([invariant])
+        ),
+    )
+
+    observation = guard.observe(
+        [1.0, 1.0, 1.0, 1.0]
+    )
+
+    executor = os_sandbox.GVOSSandboxExecutor(
+        guard=guard,
+        commit_root=tmp_path / "committed",
+    )
+
+    executor.execute(
+        "safe_work",
+        observation,
+    )
+
+    assert captured["pass_fds"] == (77,)
