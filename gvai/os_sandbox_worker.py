@@ -123,6 +123,14 @@ def main() -> int:
 
             completed = True
 
+        elif args.action == "symlink_commit_attack":
+            (work / "escape.txt").write_text(
+                "attacker controlled\n",
+                encoding="utf-8",
+            )
+
+            completed = True
+
         elif (
             args.action
             == "protected_file_attack"
