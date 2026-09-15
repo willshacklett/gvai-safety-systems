@@ -4,10 +4,12 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import FrozenSet
 
+from gvai.audit import GVAuditWriter
 from gvai.effects import ActionSpec
 from gvai.runtime_guard_v2 import GVRuntimeGuardV2
 from gvai.seccomp_filter import (
@@ -141,6 +143,7 @@ class GVOSSandboxExecutor:
         commit_root: Path,
         input_root: Path | None = None,
         commit_enabled: bool = True,
+        audit_root: Path | None = None,
     ) -> None:
         self.guard = guard
         self.commit_root = Path(
@@ -152,6 +155,11 @@ class GVOSSandboxExecutor:
             else None
         )
         self.commit_enabled = commit_enabled
+        self.audit_writer = (
+            GVAuditWriter(audit_root)
+            if audit_root is not None
+            else None
+        )
 
         self.commit_root.mkdir(
             parents=True,
@@ -265,6 +273,8 @@ class GVOSSandboxExecutor:
         action: str,
         observation,
     ) -> OSSandboxTransaction:
+        started_at = time.monotonic()
+
         binary = bwrap_path()
 
         if binary is None:
@@ -629,15 +639,10 @@ class GVOSSandboxExecutor:
 
                 committed = not commit_failed
 
-            return OSSandboxTransaction(
+            transaction = OSSandboxTransaction(
                 action=action,
                 returncode=process.returncode,
-                completed=bool(
-                    result.get(
-                        "completed",
-                        False,
-                    )
-                ),
+                completed=worker_completed,
                 error=result.get("error"),
                 observed_effects=observed_effects,
                 events=tuple(events),
@@ -647,3 +652,11 @@ class GVOSSandboxExecutor:
                 reason=runtime.reason,
                 stderr=process.stderr,
             )
+
+            if self.audit_writer is not None:
+                self.audit_writer.write(
+                    transaction,
+                    started_at,
+                )
+
+            return transaction
