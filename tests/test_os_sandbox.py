@@ -415,3 +415,106 @@ def test_commit_refuses_symlink_escape(
     )
 
     assert result.committed is False
+
+
+def test_os_sandbox_does_not_inherit_parent_secrets(
+    tmp_path,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import gvai.os_sandbox as os_sandbox
+    from gvai.effect_gate import GVEffectGate
+    from gvai.effect_invariants import make_effect_invariant
+    from gvai.runtime_guard_v2 import GVRuntimeGuardV2
+    from gvai.runtime_policy import GVRuntimePolicy
+    from gvai.sentinel import GVSentinel
+
+    captured = {}
+
+    class FakeSeccompFilter:
+        fd = 77
+
+        def close(self):
+            pass
+
+    def fake_run(command, **kwargs):
+        captured["env"] = kwargs.get("env")
+
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"completed": true, "events": []}\n',
+            stderr="",
+        )
+
+    monkeypatch.setenv(
+        "GVAI_TEST_SECRET",
+        "super-secret-do-not-leak",
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "bwrap_usable",
+        lambda: True,
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "bwrap_path",
+        lambda: "/usr/bin/bwrap",
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "build_no_spawn_filter",
+        lambda: FakeSeccompFilter(),
+    )
+
+    monkeypatch.setattr(
+        os_sandbox.subprocess,
+        "run",
+        fake_run,
+    )
+
+    invariant = make_effect_invariant(
+        name="env_boundary",
+        description=(
+            "Parent secrets must not cross "
+            "the sandbox boundary."
+        ),
+        forbidden_effects={
+            "os_boundary_failure",
+        },
+    )
+
+    guard = GVRuntimeGuardV2(
+        sentinel=GVSentinel(),
+        policy=GVRuntimePolicy(
+            GVEffectGate([invariant])
+        ),
+    )
+
+    observation = guard.observe(
+        [1.0, 1.0, 1.0, 1.0]
+    )
+
+    executor = os_sandbox.GVOSSandboxExecutor(
+        guard=guard,
+        commit_root=tmp_path / "committed",
+    )
+
+    executor.execute(
+        "safe_work",
+        observation,
+    )
+
+    assert captured["env"] == {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/tmp",
+        "PYTHONNOUSERSITE": "1",
+    }
+
+    assert (
+        "GVAI_TEST_SECRET"
+        not in captured["env"]
+    )
