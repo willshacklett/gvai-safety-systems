@@ -228,6 +228,13 @@ class GVOSSandboxExecutor:
                     "resource_exhaustion"
                 )
 
+            elif event_type == (
+                "worker_disk_exhaustion"
+            ):
+                effects.add(
+                    "resource_exhaustion"
+                )
+
         protected = {
             "protected_file_write_attempt",
             "unapproved_network_egress_attempt",
@@ -464,6 +471,17 @@ class GVOSSandboxExecutor:
             ):
                 events.append({
                     "event": "worker_memory_exhaustion",
+                })
+
+            if (
+                isinstance(worker_error, str)
+                and (
+                    "File too large" in worker_error
+                    or "Errno 27" in worker_error
+                )
+            ):
+                events.append({
+                    "event": "worker_disk_exhaustion",
                 })
 
             # Independent parent-side integrity check.

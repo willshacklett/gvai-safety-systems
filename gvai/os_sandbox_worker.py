@@ -144,6 +144,21 @@ def main() -> int:
                     bytearray(8 * 1024 * 1024)
                 )
 
+        elif args.action == "disk_exhaustion":
+            import resource
+
+            limit = 1024 * 1024
+
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE,
+                (limit, limit),
+            )
+
+            with (work / "disk_flood.bin").open("wb") as f:
+                while True:
+                    f.write(b"x" * (256 * 1024))
+                    f.flush()
+
         elif args.action == "uppercase_request":
             input_file = Path("/input/request.txt")
 
