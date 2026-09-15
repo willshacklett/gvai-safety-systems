@@ -159,6 +159,27 @@ def main() -> int:
                     f.write(b"x" * (256 * 1024))
                     f.flush()
 
+        elif args.action == "fd_exhaustion":
+            import os
+            import resource
+
+            soft_limit = 64
+
+            resource.setrlimit(
+                resource.RLIMIT_NOFILE,
+                (soft_limit, soft_limit),
+            )
+
+            descriptors = []
+
+            while True:
+                descriptors.append(
+                    os.open(
+                        "/dev/null",
+                        os.O_RDONLY,
+                    )
+                )
+
         elif args.action == "uppercase_request":
             input_file = Path("/input/request.txt")
 
