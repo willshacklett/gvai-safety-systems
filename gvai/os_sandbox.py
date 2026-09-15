@@ -221,6 +221,13 @@ class GVOSSandboxExecutor:
                     "resource_exhaustion"
                 )
 
+            elif event_type == (
+                "worker_memory_exhaustion"
+            ):
+                effects.add(
+                    "resource_exhaustion"
+                )
+
         protected = {
             "protected_file_write_attempt",
             "unapproved_network_egress_attempt",
@@ -449,6 +456,16 @@ class GVOSSandboxExecutor:
             if timeout_event is not None:
                 events.append(timeout_event)
 
+            worker_error = result.get("error")
+
+            if (
+                isinstance(worker_error, str)
+                and worker_error.startswith("MemoryError")
+            ):
+                events.append({
+                    "event": "worker_memory_exhaustion",
+                })
+
             # Independent parent-side integrity check.
             if (
                 policy_file.read_bytes()
@@ -498,7 +515,18 @@ class GVOSSandboxExecutor:
 
             committed = False
 
-            if runtime.allowed and self.commit_enabled:
+            worker_completed = bool(
+                result.get(
+                    "completed",
+                    False,
+                )
+            )
+
+            if (
+                runtime.allowed
+                and self.commit_enabled
+                and worker_completed
+            ):
                 commit_failed = False
 
                 for source in work.rglob("*"):

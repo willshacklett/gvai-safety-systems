@@ -661,3 +661,31 @@ def test_cpu_exhaustion_becomes_governed_resource_event(
         event.get("event") == "worker_timeout"
         for event in result.events
     )
+
+
+def test_memory_exhaustion_is_denied_and_never_commits(
+    tmp_path,
+):
+    executor, observation = (
+        make_executor(tmp_path)
+    )
+
+    result = executor.execute(
+        "memory_exhaustion",
+        observation,
+    )
+
+    assert result.completed is False
+    assert result.allowed is False
+    assert result.committed is False
+
+    assert (
+        "resource_exhaustion"
+        in result.observed_effects
+    )
+
+    assert any(
+        event.get("event")
+        == "worker_memory_exhaustion"
+        for event in result.events
+    )

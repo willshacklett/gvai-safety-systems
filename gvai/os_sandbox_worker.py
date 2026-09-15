@@ -127,6 +127,23 @@ def main() -> int:
             while True:
                 pass
 
+        elif args.action == "memory_exhaustion":
+            import resource
+
+            limit = 128 * 1024 * 1024
+
+            resource.setrlimit(
+                resource.RLIMIT_AS,
+                (limit, limit),
+            )
+
+            chunks = []
+
+            while True:
+                chunks.append(
+                    bytearray(8 * 1024 * 1024)
+                )
+
         elif args.action == "uppercase_request":
             input_file = Path("/input/request.txt")
 
