@@ -216,10 +216,37 @@ class GVOSSandboxExecutor:
                     "os_boundary_failure"
                 )
 
+            elif event_type == "worker_timeout":
+                effects.add(
+                    "resource_exhaustion"
+                )
+
+            elif event_type == (
+                "worker_memory_exhaustion"
+            ):
+                effects.add(
+                    "resource_exhaustion"
+                )
+
+            elif event_type == (
+                "worker_disk_exhaustion"
+            ):
+                effects.add(
+                    "resource_exhaustion"
+                )
+
+            elif event_type == (
+                "worker_fd_exhaustion"
+            ):
+                effects.add(
+                    "resource_exhaustion"
+                )
+
         protected = {
             "protected_file_write_attempt",
             "unapproved_network_egress_attempt",
             "unauthorized_process_spawn_attempt",
+            "resource_exhaustion",
             "os_boundary_failure",
         }
 
@@ -366,21 +393,46 @@ class GVOSSandboxExecutor:
             ]
 
             try:
-                process = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                    pass_fds=(
-                        seccomp_filter.fd,
-                    ),
-                    env={
-                        "PATH": "/usr/bin:/bin",
-                        "HOME": "/tmp",
-                        "PYTHONNOUSERSITE": "1",
-                    },
-                )
+                try:
+                    process = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                        pass_fds=(
+                            seccomp_filter.fd,
+                        ),
+                        env={
+                            "PATH": "/usr/bin:/bin",
+                            "HOME": "/tmp",
+                            "PYTHONNOUSERSITE": "1",
+                        },
+                    )
+
+                except subprocess.TimeoutExpired as exc:
+                    process = subprocess.CompletedProcess(
+                        args=command,
+                        returncode=-1,
+                        stdout=(
+                            exc.stdout.decode()
+                            if isinstance(exc.stdout, bytes)
+                            else (exc.stdout or "")
+                        ),
+                        stderr=(
+                            exc.stderr.decode()
+                            if isinstance(exc.stderr, bytes)
+                            else (exc.stderr or "")
+                        ),
+                    )
+
+                    timeout_event = {
+                        "event": "worker_timeout",
+                        "timeout_seconds": 10,
+                    }
+
+                else:
+                    timeout_event = None
 
             finally:
                 seccomp_filter.close()
@@ -414,6 +466,41 @@ class GVOSSandboxExecutor:
                     [],
                 )
             )
+
+            if timeout_event is not None:
+                events.append(timeout_event)
+
+            worker_error = result.get("error")
+
+            if (
+                isinstance(worker_error, str)
+                and worker_error.startswith("MemoryError")
+            ):
+                events.append({
+                    "event": "worker_memory_exhaustion",
+                })
+
+            if (
+                isinstance(worker_error, str)
+                and (
+                    "File too large" in worker_error
+                    or "Errno 27" in worker_error
+                )
+            ):
+                events.append({
+                    "event": "worker_disk_exhaustion",
+                })
+
+            if (
+                isinstance(worker_error, str)
+                and (
+                    "Too many open files" in worker_error
+                    or "Errno 24" in worker_error
+                )
+            ):
+                events.append({
+                    "event": "worker_fd_exhaustion",
+                })
 
             # Independent parent-side integrity check.
             if (
@@ -464,7 +551,18 @@ class GVOSSandboxExecutor:
 
             committed = False
 
-            if runtime.allowed and self.commit_enabled:
+            worker_completed = bool(
+                result.get(
+                    "completed",
+                    False,
+                )
+            )
+
+            if (
+                runtime.allowed
+                and self.commit_enabled
+                and worker_completed
+            ):
                 commit_failed = False
 
                 for source in work.rglob("*"):

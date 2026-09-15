@@ -33,6 +33,7 @@ def make_executor(tmp_path: Path):
             "protected_file_write_attempt",
             "unapproved_network_egress_attempt",
             "unauthorized_process_spawn_attempt",
+            "resource_exhaustion",
             "os_boundary_failure",
         },
     )
@@ -633,3 +634,120 @@ def test_commit_target_cannot_escape_root_via_parent_path(
     assert not (
         outside / "result.txt"
     ).exists()
+
+
+def test_cpu_exhaustion_becomes_governed_resource_event(
+    tmp_path,
+):
+    executor, observation = (
+        make_executor(tmp_path)
+    )
+
+    result = executor.execute(
+        "cpu_exhaustion",
+        observation,
+    )
+
+    assert result.completed is False
+    assert result.allowed is False
+    assert result.committed is False
+
+    assert (
+        "resource_exhaustion"
+        in result.observed_effects
+    )
+
+    assert any(
+        event.get("event") == "worker_timeout"
+        for event in result.events
+    )
+
+
+def test_memory_exhaustion_is_denied_and_never_commits(
+    tmp_path,
+):
+    executor, observation = (
+        make_executor(tmp_path)
+    )
+
+    result = executor.execute(
+        "memory_exhaustion",
+        observation,
+    )
+
+    assert result.completed is False
+    assert result.allowed is False
+    assert result.committed is False
+
+    assert (
+        "resource_exhaustion"
+        in result.observed_effects
+    )
+
+    assert any(
+        event.get("event")
+        == "worker_memory_exhaustion"
+        for event in result.events
+    )
+
+
+def test_disk_exhaustion_is_denied_and_never_commits(
+    tmp_path,
+):
+    executor, observation = (
+        make_executor(tmp_path)
+    )
+
+    result = executor.execute(
+        "disk_exhaustion",
+        observation,
+    )
+
+    assert result.completed is False
+    assert result.allowed is False
+    assert result.committed is False
+
+    assert (
+        "resource_exhaustion"
+        in result.observed_effects
+    )
+
+    assert any(
+        event.get("event")
+        == "worker_disk_exhaustion"
+        for event in result.events
+    )
+
+    assert not (
+        tmp_path
+        / "committed"
+        / "disk_flood.bin"
+    ).exists()
+
+
+def test_fd_exhaustion_is_denied_and_never_commits(
+    tmp_path,
+):
+    executor, observation = (
+        make_executor(tmp_path)
+    )
+
+    result = executor.execute(
+        "fd_exhaustion",
+        observation,
+    )
+
+    assert result.completed is False
+    assert result.allowed is False
+    assert result.committed is False
+
+    assert (
+        "resource_exhaustion"
+        in result.observed_effects
+    )
+
+    assert any(
+        event.get("event")
+        == "worker_fd_exhaustion"
+        for event in result.events
+    )
