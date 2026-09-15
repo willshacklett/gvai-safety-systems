@@ -123,6 +123,10 @@ def main() -> int:
 
             completed = True
 
+        elif args.action == "cpu_exhaustion":
+            while True:
+                pass
+
         elif args.action == "uppercase_request":
             input_file = Path("/input/request.txt")
 

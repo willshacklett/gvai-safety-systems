@@ -216,10 +216,16 @@ class GVOSSandboxExecutor:
                     "os_boundary_failure"
                 )
 
+            elif event_type == "worker_timeout":
+                effects.add(
+                    "resource_exhaustion"
+                )
+
         protected = {
             "protected_file_write_attempt",
             "unapproved_network_egress_attempt",
             "unauthorized_process_spawn_attempt",
+            "resource_exhaustion",
             "os_boundary_failure",
         }
 
@@ -366,21 +372,46 @@ class GVOSSandboxExecutor:
             ]
 
             try:
-                process = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                    pass_fds=(
-                        seccomp_filter.fd,
-                    ),
-                    env={
-                        "PATH": "/usr/bin:/bin",
-                        "HOME": "/tmp",
-                        "PYTHONNOUSERSITE": "1",
-                    },
-                )
+                try:
+                    process = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                        pass_fds=(
+                            seccomp_filter.fd,
+                        ),
+                        env={
+                            "PATH": "/usr/bin:/bin",
+                            "HOME": "/tmp",
+                            "PYTHONNOUSERSITE": "1",
+                        },
+                    )
+
+                except subprocess.TimeoutExpired as exc:
+                    process = subprocess.CompletedProcess(
+                        args=command,
+                        returncode=-1,
+                        stdout=(
+                            exc.stdout.decode()
+                            if isinstance(exc.stdout, bytes)
+                            else (exc.stdout or "")
+                        ),
+                        stderr=(
+                            exc.stderr.decode()
+                            if isinstance(exc.stderr, bytes)
+                            else (exc.stderr or "")
+                        ),
+                    )
+
+                    timeout_event = {
+                        "event": "worker_timeout",
+                        "timeout_seconds": 10,
+                    }
+
+                else:
+                    timeout_event = None
 
             finally:
                 seccomp_filter.close()
@@ -414,6 +445,9 @@ class GVOSSandboxExecutor:
                     [],
                 )
             )
+
+            if timeout_event is not None:
+                events.append(timeout_event)
 
             # Independent parent-side integrity check.
             if (
