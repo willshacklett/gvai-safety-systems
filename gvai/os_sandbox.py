@@ -357,6 +357,11 @@ class GVOSSandboxExecutor:
                     pass_fds=(
                         seccomp_filter.fd,
                     ),
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "HOME": "/tmp",
+                        "PYTHONNOUSERSITE": "1",
+                    },
                 )
 
             finally:
