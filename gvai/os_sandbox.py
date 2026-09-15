@@ -442,7 +442,13 @@ class GVOSSandboxExecutor:
             committed = False
 
             if runtime.allowed:
+                commit_failed = False
+
                 for source in work.rglob("*"):
+                    if source.is_symlink():
+                        commit_failed = True
+                        break
+
                     if not source.is_file():
                         continue
 
@@ -457,17 +463,50 @@ class GVOSSandboxExecutor:
                         / relative
                     )
 
+                    resolved_target = (
+                        target.resolve(
+                            strict=False
+                        )
+                    )
+
+                    try:
+                        resolved_target.relative_to(
+                            self.commit_root
+                        )
+                    except ValueError:
+                        commit_failed = True
+                        break
+
                     target.parent.mkdir(
                         parents=True,
                         exist_ok=True,
                     )
+
+                    # Re-check after directory creation.
+                    resolved_target = (
+                        target.resolve(
+                            strict=False
+                        )
+                    )
+
+                    try:
+                        resolved_target.relative_to(
+                            self.commit_root
+                        )
+                    except ValueError:
+                        commit_failed = True
+                        break
+
+                    if target.is_symlink():
+                        commit_failed = True
+                        break
 
                     shutil.copy2(
                         source,
                         target,
                     )
 
-                committed = True
+                committed = not commit_failed
 
             return OSSandboxTransaction(
                 action=action,
