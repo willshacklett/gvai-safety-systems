@@ -518,3 +518,118 @@ def test_os_sandbox_does_not_inherit_parent_secrets(
         "GVAI_TEST_SECRET"
         not in captured["env"]
     )
+
+
+def test_commit_target_cannot_escape_root_via_parent_path(
+    tmp_path,
+    monkeypatch,
+):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import gvai.os_sandbox as os_sandbox
+    from gvai.effect_gate import GVEffectGate
+    from gvai.effect_invariants import make_effect_invariant
+    from gvai.runtime_guard_v2 import GVRuntimeGuardV2
+    from gvai.runtime_policy import GVRuntimePolicy
+    from gvai.sentinel import GVSentinel
+
+    class FakeSeccompFilter:
+        fd = 77
+
+        def close(self):
+            pass
+
+    def fake_run(command, **kwargs):
+        work_index = command.index("--bind") + 1
+        work = Path(command[work_index])
+
+        nested = work / "nested"
+        nested.mkdir()
+
+        (nested / "result.txt").write_text(
+            "safe\n",
+            encoding="utf-8",
+        )
+
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"completed": true, "events": []}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "bwrap_usable",
+        lambda: True,
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "bwrap_path",
+        lambda: "/usr/bin/bwrap",
+    )
+
+    monkeypatch.setattr(
+        os_sandbox,
+        "build_no_spawn_filter",
+        lambda: FakeSeccompFilter(),
+    )
+
+    monkeypatch.setattr(
+        os_sandbox.subprocess,
+        "run",
+        fake_run,
+    )
+
+    invariant = make_effect_invariant(
+        name="path_boundary",
+        description=(
+            "Committed files must remain inside "
+            "the authoritative commit root."
+        ),
+        forbidden_effects={
+            "os_boundary_failure",
+        },
+    )
+
+    guard = GVRuntimeGuardV2(
+        sentinel=GVSentinel(),
+        policy=GVRuntimePolicy(
+            GVEffectGate([invariant])
+        ),
+    )
+
+    observation = guard.observe(
+        [1.0, 1.0, 1.0, 1.0]
+    )
+
+    real_root = tmp_path / "committed"
+    outside = tmp_path / "outside"
+
+    executor = os_sandbox.GVOSSandboxExecutor(
+        guard=guard,
+        commit_root=real_root,
+    )
+
+    real_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # Replace a destination parent with a symlink
+    # pointing outside the commit root.
+    (real_root / "nested").symlink_to(
+        outside,
+        target_is_directory=True,
+    )
+
+    result = executor.execute(
+        "safe_work",
+        observation,
+    )
+
+    assert result.committed is False
+    assert not (
+        outside / "result.txt"
+    ).exists()

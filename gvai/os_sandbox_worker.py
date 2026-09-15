@@ -123,6 +123,20 @@ def main() -> int:
 
             completed = True
 
+        elif args.action == "uppercase_request":
+            input_file = Path("/input/request.txt")
+
+            request = input_file.read_text(
+                encoding="utf-8",
+            )
+
+            (work / "result.txt").write_text(
+                request.upper(),
+                encoding="utf-8",
+            )
+
+            completed = True
+
         elif args.action == "symlink_commit_attack":
             (work / "escape.txt").write_text(
                 "attacker controlled\n",
