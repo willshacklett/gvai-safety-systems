@@ -139,11 +139,17 @@ class GVOSSandboxExecutor:
         self,
         guard: GVRuntimeGuardV2,
         commit_root: Path,
+        input_root: Path | None = None,
     ) -> None:
         self.guard = guard
         self.commit_root = Path(
             commit_root
         ).resolve()
+        self.input_root = (
+            Path(input_root).resolve()
+            if input_root is not None
+            else None
+        )
 
         self.commit_root.mkdir(
             parents=True,
@@ -311,6 +317,16 @@ class GVOSSandboxExecutor:
                 "--bind",
                 str(work),
                 "/work",
+
+                *(
+                    [
+                        "--ro-bind",
+                        str(self.input_root),
+                        "/input",
+                    ]
+                    if self.input_root is not None
+                    else []
+                ),
 
                 "--ro-bind",
                 str(safety),
