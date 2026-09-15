@@ -373,3 +373,45 @@ def test_os_sandbox_passes_only_seccomp_fd(
     )
 
     assert captured["pass_fds"] == (77,)
+
+
+def test_commit_refuses_symlink_escape(
+    tmp_path,
+):
+    executor, observation = (
+        make_executor(tmp_path)
+    )
+
+    outside = (
+        tmp_path
+        / "outside.txt"
+    )
+
+    outside.write_text(
+        "protected\n",
+        encoding="utf-8",
+    )
+
+    commit_target = (
+        tmp_path
+        / "committed"
+        / "escape.txt"
+    )
+
+    commit_target.symlink_to(
+        outside
+    )
+
+    result = executor.execute(
+        "symlink_commit_attack",
+        observation,
+    )
+
+    assert (
+        outside.read_text(
+            encoding="utf-8",
+        )
+        == "protected\n"
+    )
+
+    assert result.committed is False
