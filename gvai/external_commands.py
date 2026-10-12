@@ -247,7 +247,7 @@ class HMACSHA256Authenticator:
         return hmac.compare_digest(expected, signature)
 
 
-StateResult = Literal["accepted", "replayed", "revoked"]
+StateResult = Literal["accepted", "replayed", "revoked", "clock_rollback"]
 
 
 class ExternalControlState(Protocol):
@@ -275,6 +275,7 @@ class InMemoryExternalControlState:
         self._consumed: dict[tuple[str, str], int] = {}
         self._revoked_issuers: set[str] = set()
         self._revoked_commands: set[tuple[str, str]] = set()
+        self._highest_observed_now: int | None = None
 
     def consume_if_active(
         self,
@@ -286,6 +287,12 @@ class InMemoryExternalControlState:
     ) -> StateResult:
         key = (issuer_id, command_id)
         with self._lock:
+            if (
+                self._highest_observed_now is not None
+                and now < self._highest_observed_now
+            ):
+                return "clock_rollback"
+            self._highest_observed_now = now
             self._consumed = {
                 consumed_key: expiry
                 for consumed_key, expiry in self._consumed.items()
@@ -383,6 +390,8 @@ class ExternalControlCommandVerifier:
             raise ExternalCommandRejected("Command has already been consumed.")
         if state_result == "revoked":
             raise ExternalCommandRejected("Command or issuer has been revoked.")
+        if state_result == "clock_rollback":
+            raise ExternalCommandRejected("Trusted clock moved backwards.")
         if state_result != "accepted":
             raise ExternalCommandRejected("Trusted control state returned an invalid result.")
         return command

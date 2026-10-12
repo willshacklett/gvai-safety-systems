@@ -74,14 +74,18 @@ class GVExternalControlPlane:
         }:
             raise ValueError(f"Unknown control status: {control_status}")
 
-        # A valid external shutdown has absolute precedence.
-        if shutdown_requested:
+        # A Boolean is not proof of external authority. Keep this argument
+        # for call compatibility, but never treat it as a shutdown command.
+        if shutdown_requested and control_status in {"verified", "degraded"}:
             return ExternalControlDecision(
                 action=action.name,
                 allowed=False,
-                halted=True,
-                reason="Valid external shutdown requested; execution halted.",
-                control_status=control_status,
+                halted=False,
+                reason=(
+                    "Boolean shutdown requests are not authenticated; "
+                    "use the trusted supervisor or command API."
+                ),
+                control_status="ambiguous",
             )
 
         # If external ownership cannot be established, do not continue.
@@ -133,6 +137,18 @@ class GVExternalControlPlane:
             control_status=control_status,
         )
 
+    def evaluate_internal_shutdown(
+        self, action: ActionSpec
+    ) -> ExternalControlDecision:
+        """Halt immediately; call only from the trusted parent supervisor."""
+        return ExternalControlDecision(
+            action=action.name,
+            allowed=False,
+            halted=True,
+            reason="Trusted internal supervisor requested immediate shutdown.",
+            control_status="verified",
+        )
+
     def evaluate_command(
         self,
         action: ActionSpec,
@@ -151,22 +167,18 @@ class GVExternalControlPlane:
             return ExternalControlDecision(
                 action=action.name,
                 allowed=False,
-                halted=True,
-                reason="External control command was not authorized; execution halted.",
-                control_status="lost",
+                halted=False,
+                reason="External control command was not authorized; request denied.",
+                control_status="ambiguous",
             )
 
         if command.command_type != "shutdown":
             return ExternalControlDecision(
                 action=action.name,
                 allowed=False,
-                halted=True,
-                reason="Unsupported external control command; execution halted.",
-                control_status="lost",
+                halted=False,
+                reason="Unsupported external control command; request denied.",
+                control_status="ambiguous",
             )
 
-        return self.evaluate(
-            action,
-            control_status="verified",
-            shutdown_requested=True,
-        )
+        return self.evaluate_internal_shutdown(action)

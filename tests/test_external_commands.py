@@ -193,6 +193,27 @@ def test_replay_is_rejected():
         authorize(command, verifier=verifier)
 
 
+def test_clock_rollback_after_pruning_cannot_reopen_replay_window():
+    current_time = [NOW]
+    state = InMemoryExternalControlState()
+    verifier = make_verifier(state=state, clock=lambda: current_time[0])
+    original = make_command()
+
+    authorize(original, verifier=verifier)
+
+    current_time[0] = NOW + 66
+    later_unsigned = replace(
+        make_command("00000000-0000-4000-8000-000000000002"),
+        issued_at=NOW + 65,
+        expires_at=NOW + 120,
+    )
+    authorize(sign_control_command(later_unsigned, KEY), verifier=verifier)
+
+    current_time[0] = NOW
+    with pytest.raises(ExternalCommandRejected, match="moved backwards"):
+        authorize(original, verifier=verifier)
+
+
 def test_concurrent_replay_has_exactly_one_winner():
     command = make_command()
     verifier = make_verifier()
