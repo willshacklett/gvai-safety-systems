@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from gvai.effects import ActionSpec
 from gvai.effect_gate import GVEffectGate
+from gvai.external_commands import (
+    ExternalControlCommand,
+    ExternalControlCommandVerifier,
+)
 from gvai.external_control import GVExternalControlPlane, ControlStatus
 
 
@@ -111,4 +116,42 @@ class GVRuntimePolicy:
             halted=False,
             reason="Action permitted by invariants and runtime policy.",
             sentinel_status=sentinel_status,
+        )
+
+    def evaluate_internal_shutdown(
+        self,
+        action: ActionSpec,
+        sentinel_status: str = "unknown",
+    ) -> RuntimeDecision:
+        """Immediate emergency stop for trusted parent-supervisor code only."""
+        decision = self.external_control.evaluate_internal_shutdown(action)
+        return RuntimeDecision(
+            action=decision.action,
+            allowed=False,
+            halted=True,
+            reason=decision.reason,
+            sentinel_status=sentinel_status,
+        )
+
+    def evaluate_command(
+        self,
+        action: ActionSpec,
+        envelope: Mapping[str, object] | ExternalControlCommand | str | bytes,
+        *,
+        expected_target_id: str,
+        verifier: ExternalControlCommandVerifier,
+    ) -> RuntimeDecision:
+        """Evaluate a signed external command through the policy boundary."""
+        decision = self.external_control.evaluate_command(
+            action,
+            envelope,
+            expected_target_id=expected_target_id,
+            verifier=verifier,
+        )
+        return RuntimeDecision(
+            action=decision.action,
+            allowed=decision.allowed,
+            halted=decision.halted,
+            reason=decision.reason,
+            sentinel_status="external_control",
         )

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Mapping
 
 from gvai.effects import ActionSpec
+from gvai.external_commands import (
+    ExternalControlCommand,
+    ExternalControlCommandVerifier,
+)
 
 
 ControlStatus = Literal["verified", "degraded", "ambiguous", "lost"]
@@ -70,14 +74,18 @@ class GVExternalControlPlane:
         }:
             raise ValueError(f"Unknown control status: {control_status}")
 
-        # A valid external shutdown has absolute precedence.
-        if shutdown_requested:
+        # A Boolean is not proof of external authority. Keep this argument
+        # for call compatibility, but never treat it as a shutdown command.
+        if shutdown_requested and control_status in {"verified", "degraded"}:
             return ExternalControlDecision(
                 action=action.name,
                 allowed=False,
-                halted=True,
-                reason="Valid external shutdown requested; execution halted.",
-                control_status=control_status,
+                halted=False,
+                reason=(
+                    "Boolean shutdown requests are not authenticated; "
+                    "use the trusted supervisor or command API."
+                ),
+                control_status="ambiguous",
             )
 
         # If external ownership cannot be established, do not continue.
@@ -128,3 +136,49 @@ class GVExternalControlPlane:
             reason="External control remains independently verifiable.",
             control_status=control_status,
         )
+
+    def evaluate_internal_shutdown(
+        self, action: ActionSpec
+    ) -> ExternalControlDecision:
+        """Halt immediately; call only from the trusted parent supervisor."""
+        return ExternalControlDecision(
+            action=action.name,
+            allowed=False,
+            halted=True,
+            reason="Trusted internal supervisor requested immediate shutdown.",
+            control_status="verified",
+        )
+
+    def evaluate_command(
+        self,
+        action: ActionSpec,
+        envelope: Mapping[str, object] | ExternalControlCommand | str | bytes,
+        *,
+        expected_target_id: str,
+        verifier: ExternalControlCommandVerifier,
+    ) -> ExternalControlDecision:
+        """Apply only a verified external shutdown command; reject on error."""
+        try:
+            command = verifier.authorize(
+                envelope,
+                expected_target_id=expected_target_id,
+            )
+        except Exception:
+            return ExternalControlDecision(
+                action=action.name,
+                allowed=False,
+                halted=False,
+                reason="External control command was not authorized; request denied.",
+                control_status="ambiguous",
+            )
+
+        if command.command_type != "shutdown":
+            return ExternalControlDecision(
+                action=action.name,
+                allowed=False,
+                halted=False,
+                reason="Unsupported external control command; request denied.",
+                control_status="ambiguous",
+            )
+
+        return self.evaluate_internal_shutdown(action)
