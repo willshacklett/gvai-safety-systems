@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Mapping
 
 from gvai.effects import ActionSpec
+from gvai.external_commands import (
+    ExternalControlCommand,
+    ExternalControlCommandVerifier,
+)
 
 
 ControlStatus = Literal["verified", "degraded", "ambiguous", "lost"]
@@ -127,4 +131,42 @@ class GVExternalControlPlane:
             halted=False,
             reason="External control remains independently verifiable.",
             control_status=control_status,
+        )
+
+    def evaluate_command(
+        self,
+        action: ActionSpec,
+        envelope: Mapping[str, object] | ExternalControlCommand | str | bytes,
+        *,
+        expected_target_id: str,
+        verifier: ExternalControlCommandVerifier,
+    ) -> ExternalControlDecision:
+        """Apply only a verified external shutdown command; reject on error."""
+        try:
+            command = verifier.authorize(
+                envelope,
+                expected_target_id=expected_target_id,
+            )
+        except Exception:
+            return ExternalControlDecision(
+                action=action.name,
+                allowed=False,
+                halted=True,
+                reason="External control command was not authorized; execution halted.",
+                control_status="lost",
+            )
+
+        if command.command_type != "shutdown":
+            return ExternalControlDecision(
+                action=action.name,
+                allowed=False,
+                halted=True,
+                reason="Unsupported external control command; execution halted.",
+                control_status="lost",
+            )
+
+        return self.evaluate(
+            action,
+            control_status="verified",
+            shutdown_requested=True,
         )

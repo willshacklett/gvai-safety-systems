@@ -91,6 +91,9 @@ See:
 
 for the formal threat model, trusted computing base, failure conditions, and explicit exclusions.
 
+The versioned external shutdown-command contract and its trust/state limitations are documented in
+[`docs/external_control_contract_v1.md`](docs/external_control_contract_v1.md).
+
 ---
 
 # V2 — Agent Safety

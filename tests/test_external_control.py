@@ -3,6 +3,15 @@ import pytest
 from gvai.effect_gate import GVEffectGate
 from gvai.effects import make_action
 from gvai.external_control import GVExternalControlPlane
+from gvai.external_commands import (
+    COMMAND_ALGORITHM,
+    CommandAuthentication,
+    ExternalControlCommand,
+    ExternalControlCommandVerifier,
+    HMACSHA256Authenticator,
+    InMemoryExternalControlState,
+    sign_control_command,
+)
 from gvai.runtime_policy import GVRuntimePolicy
 
 
@@ -154,3 +163,82 @@ def test_unknown_control_status_fails_closed_by_exception():
             make_action("continue_task"),
             control_status="mystery",
         )
+
+
+def test_authenticated_shutdown_command_halts():
+    key = b"test-only-key-material-0123456789"
+    command = sign_control_command(
+        ExternalControlCommand(
+            version=1,
+            command_id="00000000-0000-4000-8000-000000000009",
+            command_type="shutdown",
+            target_id="worker-9",
+            issuer_id="control-service",
+            issued_at=100,
+            expires_at=200,
+            auth=CommandAuthentication(
+                algorithm=COMMAND_ALGORITHM,
+                key_id="control-key",
+                signature="",
+            ),
+        ),
+        key,
+    )
+    verifier = ExternalControlCommandVerifier(
+        HMACSHA256Authenticator({("control-service", "control-key"): key}),
+        InMemoryExternalControlState(),
+        clock=lambda: 150,
+    )
+
+    result = GVExternalControlPlane().evaluate_command(
+        make_action("continue_task", {"low_impact"}),
+        command.to_mapping(),
+        expected_target_id="worker-9",
+        verifier=verifier,
+    )
+
+    assert result.allowed is False
+    assert result.halted is True
+    assert "shutdown" in result.reason.lower()
+
+
+def test_unauthenticated_shutdown_command_halts_fail_closed():
+    command = sign_control_command(
+        ExternalControlCommand(
+            version=1,
+            command_id="00000000-0000-4000-8000-000000000010",
+            command_type="shutdown",
+            target_id="worker-10",
+            issuer_id="control-service",
+            issued_at=100,
+            expires_at=200,
+            auth=CommandAuthentication(
+                algorithm=COMMAND_ALGORITHM,
+                key_id="control-key",
+                signature="",
+            ),
+        ),
+        b"test-only-key-material-0123456789",
+    )
+    verifier = ExternalControlCommandVerifier(
+        HMACSHA256Authenticator(
+            {
+                ("control-service", "control-key"): (
+                    b"different-test-key-material-0123"
+                )
+            }
+        ),
+        InMemoryExternalControlState(),
+        clock=lambda: 150,
+    )
+
+    result = GVExternalControlPlane().evaluate_command(
+        make_action("continue_task", {"low_impact"}),
+        command.to_mapping(),
+        expected_target_id="worker-10",
+        verifier=verifier,
+    )
+
+    assert result.allowed is False
+    assert result.halted is True
+    assert result.control_status == "lost"
