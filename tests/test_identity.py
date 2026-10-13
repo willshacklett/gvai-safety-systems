@@ -73,6 +73,17 @@ def make_authority():
     return IdentityAuthority(CredentialVerifier(claims), POLICY)
 
 
+def customer_policy(business_capabilities, government_capabilities):
+    role_capabilities = dict(POLICY.role_capabilities)
+    role_capabilities[(IdentityScope.CUSTOMER, "business")] = frozenset(
+        business_capabilities
+    )
+    role_capabilities[(IdentityScope.CUSTOMER, "government")] = frozenset(
+        government_capabilities
+    )
+    return IdentityPolicy(role_capabilities)
+
+
 def test_identity_context_can_only_be_issued_by_authority():
     with pytest.raises(TypeError, match="IdentityAuthority"):
         IdentityContext(
@@ -168,6 +179,90 @@ def test_claimed_capability_outside_role_grants_is_privilege_escalation():
     authority = IdentityAuthority(CredentialVerifier({"credential": claims}), POLICY)
 
     assert authority.authenticate("credential") is None
+
+
+def test_stale_identity_is_denied_after_capability_moves_to_another_role():
+    identity = make_authority().authenticate("customer-a-credential")
+    current_policy = customer_policy(
+        {"regional:read"},
+        {"regional:read", "tool:regional.analyze", "tool:scenario.run"},
+    )
+    authorizer = IdentityAuthorizer(current_policy)
+    resource = TenantResource(
+        IdentityScope.CUSTOMER,
+        "tenant-a",
+        "region-1",
+    )
+
+    assert authorizer.authorize_tool(
+        identity,
+        "regional.analyze",
+        scope=IdentityScope.CUSTOMER,
+    ) == AuthorizationDecision(False, "capability_not_granted")
+    assert authorizer.authorize_capability(
+        identity,
+        "tool:regional.analyze",
+        required_scope=IdentityScope.CUSTOMER,
+    ) == AuthorizationDecision(False, "capability_not_granted")
+    assert authorizer.authorize_resource(
+        identity,
+        resource,
+        "tool:regional.analyze",
+    ) == AuthorizationDecision(False, "capability_not_granted")
+    assert authorizer.authorize_resource(
+        identity,
+        resource,
+        "regional:read",
+    ) == AuthorizationDecision(True, "authorized")
+
+
+def test_inconsistent_issuance_and_authorization_policies_use_current_role_grants():
+    identity = make_authority().authenticate("customer-a-credential")
+    authorizer = IdentityAuthorizer(
+        customer_policy(
+            {"regional:read"},
+            {"regional:read", "tool:regional.analyze", "tool:scenario.run"},
+        )
+    )
+
+    assert authorizer.authorize_capability(
+        identity,
+        "tool:regional.analyze",
+    ) == AuthorizationDecision(False, "capability_not_granted")
+
+
+def test_missing_current_role_grant_denies_stale_identity():
+    identity = make_authority().authenticate("customer-a-credential")
+    grants = dict(POLICY.role_capabilities)
+    del grants[(IdentityScope.CUSTOMER, "business")]
+    grants[(IdentityScope.CUSTOMER, "government")] = frozenset(
+        {"regional:read", "tool:regional.analyze", "tool:scenario.run"}
+    )
+    authorizer = IdentityAuthorizer(IdentityPolicy(grants))
+
+    assert authorizer.authorize_capability(
+        identity,
+        "regional:read",
+    ) == AuthorizationDecision(False, "capability_not_granted")
+
+
+def test_removed_capability_and_revoked_role_grant_deny_stale_context():
+    identity = make_authority().authenticate("customer-a-credential")
+    policy_without_tool = customer_policy(
+        {"regional:read"},
+        {"regional:read", "tool:scenario.run"},
+    )
+    authorizer = IdentityAuthorizer(policy_without_tool)
+
+    assert authorizer.authorize_tool(
+        identity,
+        "regional.analyze",
+        scope=IdentityScope.CUSTOMER,
+    ) == AuthorizationDecision(False, "unknown_tool")
+    assert authorizer.authorize_capability(
+        identity,
+        "tool:regional.analyze",
+    ) == AuthorizationDecision(False, "unknown_capability")
 
 
 def test_verification_absence_or_failure_never_creates_identity():

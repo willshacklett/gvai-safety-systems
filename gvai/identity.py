@@ -151,6 +151,8 @@ class IdentityAuthority:
 
 @dataclass(frozen=True)
 class TenantResource:
+    """Tenant metadata resolved by trusted server-side resource lookup only."""
+
     scope: IdentityScope
     tenant_id: str
     resource_id: str
@@ -233,6 +235,11 @@ class IdentityAuthorizer:
             return AuthorizationDecision(False, "unknown_capability")
         if capability not in self._policy.known_capabilities:
             return AuthorizationDecision(False, "unknown_capability")
+        role_grants = self._policy.role_capabilities.get(
+            (identity.scope, identity.role)
+        )
+        if role_grants is None or capability not in role_grants:
+            return AuthorizationDecision(False, "capability_not_granted")
         if required_scope is not None:
             if not isinstance(required_scope, IdentityScope):
                 return AuthorizationDecision(False, "scope_mismatch")
