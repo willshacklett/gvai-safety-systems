@@ -18,7 +18,7 @@
         <span>GVAI <strong>Safety Systems</strong></span>
       </a>
       <nav aria-label="Primary navigation">
-        <a href="#mission">Mission</a>
+        <a href="#research">Research</a>
         <a href="#business">Business</a>
         <a href="#government">Government</a>
         <a href="#intelligence">Intelligence</a>
@@ -31,18 +31,19 @@
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero-grid">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="status-mark" aria-hidden="true"></span> Research and engineering</p>
+          <p class="eyebrow"><span class="status-mark" aria-hidden="true"></span> Independent safety engineering</p>
           <h1 id="hero-title">Independent Oversight.<br>Human Control.</h1>
-          <p class="hero-lede">GVAI Safety Systems develops inspectable tools for understanding system strain and governing powerful software within human-owned boundaries.</p>
+          <p class="hero-lede">We make system strain legible and powerful software governable, while keeping decisions, permissions, and the switch under human authority.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#mission">Explore the mission</a>
-            <a class="button button-outline" href="#intelligence">GVAI Intelligence</a>
+            <a class="button button-primary" href="#audiences">Explore what we’re building <span aria-hidden="true">↓</span></a>
+            <a class="button button-outline" href="https://github.com/willshacklett/gvai-safety-systems/blob/main/docs/agent_safety_v2_threat_model.md" target="_blank" rel="noopener noreferrer">Read the threat model <span aria-hidden="true">↗</span></a>
           </div>
-          <p class="hero-disclosure"><strong>Research stage.</strong> Safety and intelligence capabilities described here are experimental, planned, or in development. This website offers no live analysis or operational safety service.</p>
+          <p class="hero-disclosure"><strong>Research stage.</strong> Runtime governance is experimental. GVAI Intelligence is in development. No live analysis or operational safety service is offered here.</p>
         </div>
-        <figure class="research-figure">
+        <figure class="research-figure" id="research">
+          <div class="figure-topline"><span>Research plate / 01</span><span>Experimental</span></div>
           <img src="examples/gv_geometry_map.png" alt="Experimental GV phase map showing a gain and asynchronous-delay boundary, above a jerk proxy map." width="1980" height="1800">
-          <figcaption><span>RESEARCH ARTIFACT</span> GV phase and jerk proxy maps. Static experimental visualizations, not live monitoring.</figcaption>
+          <figcaption><span>GV / SYSTEM GEOMETRY</span><span>Constraint and recoverability studies. Static research visualization, not live monitoring.</span></figcaption>
         </figure>
       </div>
       <div class="hero-index" aria-label="Current project status">
@@ -87,22 +88,28 @@
       </div>
     </section>
 
-    <section class="audiences" aria-labelledby="audiences-title">
+    <section class="audiences" id="audiences" aria-labelledby="audiences-title">
       <div class="section-wrap">
-        <div class="section-label"><span>02</span> Who we are building for</div>
-        <h2 class="section-title" id="audiences-title">Different work. Separate boundaries.</h2>
+        <div class="section-label"><span>02</span> Three paths</div>
+        <h2 class="section-title" id="audiences-title">One platform direction. Distinct permissions.</h2>
         <div class="audience-grid">
           <article class="audience" id="business">
-            <div class="audience-top"><span>Business</span><span class="status-tag">Planned</span></div>
-            <h3>Understand change before acting on it.</h3>
+            <div class="audience-top"><span>01 / Business</span><span class="status-tag">Planned</span></div>
+            <h3>Read the forces reshaping work.</h3>
             <p>Future business tools are intended to explore regional workforce evidence, automation exposure, and transition scenarios. Customer access, data controls, and evaluation are still in development.</p>
-            <a class="text-link" href="#intelligence">See the Intelligence direction <span aria-hidden="true">↓</span></a>
+            <a class="text-link" href="#intelligence">Business direction <span aria-hidden="true">↓</span></a>
           </article>
           <article class="audience" id="government">
-            <div class="audience-top"><span>Government</span><span class="status-tag">Planned</span></div>
-            <h3>Plan with evidence and clear uncertainty.</h3>
+            <div class="audience-top"><span>02 / Government</span><span class="status-tag">Planned</span></div>
+            <h3>Plan with evidence, not false certainty.</h3>
             <p>Future government tools are intended to support regional exploration and planning. No public-sector analysis service or decision system is offered by this page.</p>
-            <a class="text-link" href="#intelligence">See the Intelligence direction <span aria-hidden="true">↓</span></a>
+            <a class="text-link" href="#intelligence">Government direction <span aria-hidden="true">↓</span></a>
+          </article>
+          <article class="audience audience-platform" id="intelligence-path">
+            <div class="audience-top"><span>03 / GVAI Intelligence</span><span class="status-tag">In development</span></div>
+            <h3>Intelligence with boundaries built in.</h3>
+            <p>A future platform for internal engineering and external customers, with separate identities, tenant boundaries, tool permissions, and independent enforcement.</p>
+            <a class="text-link" href="#intelligence">Platform direction <span aria-hidden="true">↓</span></a>
           </article>
         </div>
       </div>
@@ -148,12 +155,20 @@
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <a class="brand brand-footer" href="#top">
-        <img src="assets/gvai-mark.svg" alt="" width="34" height="34">
-        <span>GVAI <strong>Safety Systems</strong></span>
-      </a>
-      <p>Experimental work. No guarantee of protection or general containment.</p>
-      <a href="https://github.com/willshacklett/gvai-safety-systems" target="_blank" rel="noopener noreferrer">Source on GitHub <span aria-hidden="true">↗</span></a>
+      <div class="footer-brand-block">
+        <a class="brand brand-footer" href="#top">
+          <img src="assets/gvai-mark.svg" alt="" width="34" height="34">
+          <span>GVAI <strong>Safety Systems</strong></span>
+        </a>
+        <p>Experimental work. No guarantee of protection or general containment.</p>
+      </div>
+      <nav class="footer-nav" aria-label="Footer navigation">
+        <a href="#research">Research</a>
+        <a href="#audiences">Business and Government</a>
+        <a href="#intelligence">GVAI Intelligence</a>
+        <a href="#documentation">Documentation</a>
+      </nav>
+      <a class="footer-source" href="https://github.com/willshacklett/gvai-safety-systems" target="_blank" rel="noopener noreferrer">Source on GitHub <span aria-hidden="true">↗</span></a>
     </div>
   </footer>
 </body>
