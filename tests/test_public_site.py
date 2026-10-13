@@ -8,6 +8,26 @@ import unittest
 from scripts.prepare_public_site import PUBLIC_FILES, REPOSITORY_ROOT, prepare_site
 
 
+VOID_ELEMENTS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
 class PublicPageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -17,6 +37,8 @@ class PublicPageParser(HTMLParser):
         self.external_links: list[str] = []
         self.has_script = False
         self.images_without_alt: list[str] = []
+        self.open_elements: list[str] = []
+        self.structure_errors: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attributes = dict(attrs)
@@ -40,6 +62,26 @@ class PublicPageParser(HTMLParser):
                 self.external_links.append(href)
             elif href:
                 self.local_resources.append(href)
+        if tag not in VOID_ELEMENTS:
+            self.open_elements.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in VOID_ELEMENTS:
+            self.structure_errors.append(f"Void element has closing tag: </{tag}>")
+        elif not self.open_elements:
+            self.structure_errors.append(f"Unmatched closing tag: </{tag}>")
+        elif self.open_elements[-1] != tag:
+            self.structure_errors.append(
+                f"Misnested closing tag: </{tag}> while <{self.open_elements[-1]}> is open"
+            )
+        else:
+            self.open_elements.pop()
+
+    def finish(self) -> None:
+        self.close()
+        self.structure_errors.extend(
+            f"Unclosed element: <{tag}>" for tag in reversed(self.open_elements)
+        )
 
 
 class PublicSiteTests(unittest.TestCase):
@@ -80,6 +122,23 @@ class PublicSiteTests(unittest.TestCase):
         self.assertTrue(
             all(link.startswith("https://github.com/willshacklett/") for link in self.parser.external_links)
         )
+
+    def test_homepage_has_balanced_html_nesting(self) -> None:
+        self.parser.finish()
+
+        self.assertEqual(self.parser.structure_errors, [])
+        self.assertEqual(self.parser.open_elements, [])
+
+    def test_html_validator_detects_misnested_and_unmatched_closing_tags(self) -> None:
+        misnested = PublicPageParser()
+        misnested.feed("<main><section></main></section>")
+        misnested.finish()
+        self.assertTrue(any("Misnested closing tag" in error for error in misnested.structure_errors))
+
+        unmatched = PublicPageParser()
+        unmatched.feed("<html></html></main>")
+        unmatched.finish()
+        self.assertTrue(any("Unmatched closing tag" in error for error in unmatched.structure_errors))
 
     def test_builder_publishes_only_the_explicit_allowlist(self) -> None:
         with TemporaryDirectory() as temporary:
