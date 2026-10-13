@@ -97,6 +97,9 @@ The framework-independent identity and tenant-authorization contract is document
 The versioned external shutdown-command contract and its trust/state limitations are documented in
 [`docs/external_control_contract_v1.md`](docs/external_control_contract_v1.md).
 
+The static GVAI Safety Systems public website foundation and local preview instructions are documented in
+[`docs/public_website_foundation.md`](docs/public_website_foundation.md).
+
 ---
 
 # V2 — Agent Safety
