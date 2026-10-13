@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="background" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#102b5c"/>
+      <stop offset="60%" stop-color="#07172f"/>
+      <stop offset="100%" stop-color="#030916"/>
+    </radialGradient>
+    <linearGradient id="vGradient" x1="0%" y1="0%" x2="30%" y2="100%">
+      <stop offset="0%" stop-color="#91baff"/>
+      <stop offset="45%" stop-color="#4382ff"/>
+      <stop offset="100%" stop-color="#1254e8"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <circle cx="256" cy="256" r="242" fill="url(#background)"/>
+  <circle cx="256" cy="256" r="238" fill="none" stroke="#347cff" stroke-width="12" filter="url(#glow)"/>
+  <text x="76" y="343" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="270" font-weight="700" letter-spacing="-35">G</text>
+  <text x="284" y="348" fill="url(#vGradient)" font-family="Arial, Helvetica, sans-serif" font-size="230" font-style="italic" font-weight="700">v</text>
+</svg>
