@@ -113,9 +113,14 @@ a:focus-visible {
 }
 
 .header-inner nav a:hover,
-.header-link:hover,
-.site-footer a:hover {
+.header-link:hover {
   color: var(--forest);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.site-footer a:hover {
+  color: var(--lime);
   text-decoration: underline;
   text-underline-offset: 4px;
 }
@@ -140,7 +145,7 @@ a:focus-visible {
 
 .hero-grid {
   width: min(var(--content), calc(100% - 48px));
-  min-height: 580px;
+  min-height: 620px;
   margin-inline: auto;
   padding: 68px 0 48px;
   display: grid;
@@ -197,7 +202,7 @@ h3 {
 h1 {
   max-width: 720px;
   margin-bottom: 22px;
-  font-size: 58px;
+  font-size: 64px;
 }
 
 .hero-lede {
@@ -274,19 +279,43 @@ h1 {
   height: auto;
 }
 
+.figure-topline {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px 10px;
+  color: var(--forest);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.figure-topline span:last-child {
+  padding: 4px 7px;
+  background: #f4ddcf;
+  color: #71351f;
+}
+
 .research-figure figcaption {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 14px;
   padding: 12px 6px 4px;
   color: var(--muted);
   font-size: 11px;
 }
 
-.research-figure figcaption span {
+.research-figure figcaption span:first-child {
   color: var(--forest);
   font-size: 9px;
   font-weight: 800;
+}
+
+.research-figure figcaption span:last-child {
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .hero-index {
@@ -445,12 +474,13 @@ h1 {
 
 .audience-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .audience {
-  padding: 26px;
+  min-width: 0;
+  padding: 24px 22px;
   background: var(--paper);
   border: 1px solid #cbd7ce;
   border-top: 3px solid var(--forest);
@@ -469,14 +499,24 @@ h1 {
 }
 
 .audience h3 {
-  max-width: 440px;
-  margin-top: 28px;
-  font-size: 30px;
+  min-height: 66px;
+  margin-top: 26px;
+  font-size: 27px;
 }
 
 .audience p {
-  min-height: 96px;
+  min-height: 132px;
   margin-bottom: 18px;
+}
+
+.audience-platform {
+  background: #e9ede2;
+  border-top-color: var(--coral);
+}
+
+.audience-platform .status-tag {
+  border-color: #d9b49f;
+  color: #71351f;
 }
 
 .intelligence-heading {
@@ -580,11 +620,15 @@ h1 {
 }
 
 .footer-inner {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) auto;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px 24px;
+  gap: 18px 30px;
+}
+
+.footer-brand-block {
+  display: grid;
+  gap: 7px;
 }
 
 .brand-footer {
@@ -592,16 +636,28 @@ h1 {
   font-size: 13px;
 }
 
-.footer-inner p,
-.footer-inner > a:last-child {
+.footer-brand-block p {
   margin: 0;
   color: #b8c9bf;
   font-size: 11px;
 }
 
-.footer-inner > a:last-child {
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.footer-nav a,
+.footer-source {
+  color: #d8e3dc;
+  font-size: 11px;
   font-weight: 700;
   text-decoration: none;
+}
+
+.footer-source span {
+  color: var(--lime);
 }
 
 @keyframes arrive {
@@ -630,7 +686,23 @@ h1 {
   }
 
   h1 {
-    font-size: 48px;
+    font-size: 52px;
+  }
+
+  .audience-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audience-platform {
+    grid-column: 1 / -1;
+  }
+
+  .audience h3 {
+    min-height: 0;
+  }
+
+  .audience p {
+    min-height: 0;
   }
 }
 
@@ -714,6 +786,10 @@ h1 {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .audience-platform {
+    grid-column: auto;
+  }
+
   .principle,
   .principle + .principle,
   .identity-lane,
@@ -744,6 +820,11 @@ h1 {
     font-size: 26px;
   }
 
+  .research-figure figcaption {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
   .documentation {
     padding: 56px 0;
   }
@@ -751,6 +832,11 @@ h1 {
   .documentation-inner {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .footer-inner {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 }
 

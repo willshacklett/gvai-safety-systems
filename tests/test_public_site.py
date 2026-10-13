@@ -37,6 +37,9 @@ class PublicPageParser(HTMLParser):
         self.external_links: list[str] = []
         self.has_script = False
         self.images_without_alt: list[str] = []
+        self.audience_path_ids: list[str] = []
+        self.navigation_anchors: list[str] = []
+        self.navigation_depth = 0
         self.open_elements: list[str] = []
         self.structure_errors: list[str] = []
 
@@ -46,6 +49,10 @@ class PublicPageParser(HTMLParser):
             self.ids.add(attributes["id"])
         if tag == "script":
             self.has_script = True
+        if tag == "nav":
+            self.navigation_depth += 1
+        if tag == "article" and "audience" in attributes.get("class", "").split():
+            self.audience_path_ids.append(attributes.get("id", ""))
         if tag == "img":
             source = attributes.get("src", "")
             if source:
@@ -56,6 +63,8 @@ class PublicPageParser(HTMLParser):
             self.local_resources.append(attributes.get("href", ""))
         if tag == "a":
             href = attributes.get("href", "")
+            if self.navigation_depth and href.startswith("#"):
+                self.navigation_anchors.append(href[1:])
             if href.startswith("#"):
                 self.local_anchors.append(href[1:])
             elif href.startswith("https://"):
@@ -76,6 +85,8 @@ class PublicPageParser(HTMLParser):
             )
         else:
             self.open_elements.pop()
+        if tag == "nav" and self.navigation_depth:
+            self.navigation_depth -= 1
 
     def finish(self) -> None:
         self.close()
@@ -98,9 +109,18 @@ class PublicSiteTests(unittest.TestCase):
         self.assertIn('id="business"', self.page)
         self.assertIn('id="government"', self.page)
         self.assertIn('id="intelligence"', self.page)
+        self.assertEqual(
+            set(self.parser.audience_path_ids),
+            {"business", "government", "intelligence-path"},
+        )
+        self.assertTrue(
+            {"business", "government", "intelligence"}.issubset(
+                self.parser.navigation_anchors
+            )
+        )
         self.assertIn("In development", self.page)
         self.assertIn("Experimental", self.page)
-        self.assertIn("no live analysis", self.page)
+        self.assertIn("No live analysis", self.page)
 
     def test_public_page_has_no_legacy_domain_or_live_runtime(self) -> None:
         public_source = self.page + self.styles
@@ -110,6 +130,10 @@ class PublicSiteTests(unittest.TestCase):
         self.assertFalse(self.parser.has_script)
         self.assertNotIn("@import", self.styles.lower())
         self.assertNotIn("url(http", self.styles.lower())
+        self.assertIn("@media (max-width: 900px)", self.styles)
+        self.assertIn("@media (max-width: 680px)", self.styles)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", self.styles)
+        self.assertIn(":focus-visible", self.styles)
 
     def test_local_assets_and_section_links_resolve(self) -> None:
         self.assertFalse(self.parser.images_without_alt)
