@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -185,6 +186,56 @@ class PublicSiteTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 prepare_site(output)
+
+    def test_pages_workflow_is_main_only_gated_and_uses_pinned_actions(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/deploy-public-site.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('push:\n    branches: ["main"]', workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertGreaterEqual(
+            workflow.count("github.repository == 'willshacklett/gvai-safety-systems'"),
+            2,
+        )
+        self.assertGreaterEqual(
+            workflow.count("github.ref == 'refs/heads/main'"),
+            2,
+        )
+        self.assertIn("needs: validate_build", workflow)
+        self.assertIn("path: dist/public-site", workflow)
+        self.assertIn("build_type", workflow)
+        self.assertIn("name: github-pages", workflow)
+        self.assertIn("pages: write", workflow)
+        self.assertIn("id-token: write", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+
+        action_refs = re.findall(
+            r"(?m)^\s+uses:\s+([^\s]+)@([0-9a-f]{40})(?:\s+#.*)?$",
+            workflow,
+        )
+        expected_actions = {
+            "actions/checkout",
+            "actions/setup-python",
+            "actions/upload-pages-artifact",
+            "actions/configure-pages",
+            "actions/deploy-pages",
+        }
+        self.assertEqual({action for action, _sha in action_refs}, expected_actions)
+        self.assertTrue(all(len(sha) == 40 for _action, sha in action_refs))
+
+    def test_deployment_notes_record_manual_pages_and_exposure_gates(self) -> None:
+        deployment_notes = (
+            REPOSITORY_ROOT / "docs/public_website_foundation.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("legacy publishing from `main` at `/`", deployment_notes)
+        self.assertIn("pilot_input/request.txt", deployment_notes)
+        self.assertIn("response body was deliberately not fetched", deployment_notes)
+        self.assertIn(
+            "before merging the deployment workflow pr", deployment_notes.lower()
+        )
+        self.assertIn("required-reviewer rule", deployment_notes)
 
 
 if __name__ == "__main__":
