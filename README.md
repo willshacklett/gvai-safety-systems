@@ -91,6 +91,9 @@ See:
 
 for the formal threat model, trusted computing base, failure conditions, and explicit exclusions.
 
+The framework-independent identity and tenant-authorization contract is documented in
+[`docs/identity_authorization_v1.md`](docs/identity_authorization_v1.md). It is not a production login or deployed multi-tenant service.
+
 The versioned external shutdown-command contract and its trust/state limitations are documented in
 [`docs/external_control_contract_v1.md`](docs/external_control_contract_v1.md).
 
