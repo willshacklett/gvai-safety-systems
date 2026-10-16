@@ -24,6 +24,7 @@ class GVAuditRecord:
     committed: bool
     halted: bool
     reason: str
+    exit_confirmed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -72,6 +73,7 @@ class GVAuditWriter:
             committed=transaction.committed,
             halted=transaction.halted,
             reason=transaction.reason,
+            exit_confirmed=getattr(transaction, "exit_confirmed", False),
         )
 
         path = (
