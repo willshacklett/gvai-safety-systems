@@ -43,4 +43,73 @@ The state interface requires `consume_if_active` to atomically check issuer/comm
 
 ## Limitations
 
-HMAC is symmetric authentication, not a public-key signature. Every verifier holding a key can also forge commands; use a separately controlled issuer/verifier key boundary and do not expose verifier keys to workloads. The legacy `shutdown_requested` Boolean remains in the method signatures for call compatibility, but `True` is denied without halting; it is not an authenticated shutdown mechanism. External requests must use `GVRuntimePolicy.evaluate_command` or `GVExternalControlPlane.evaluate_command`. Trusted parent supervisor code may use the explicit `evaluate_internal_shutdown` methods for immediate emergency stops. These APIs are only separated from workload authority by the documented parent/child process boundary; Python does not enforce caller identity within a process. V1 has no transport, endpoint, account identity, key-management service, durable revocation database, automatic process termination, or distributed transaction. Authorization is not evidence that a supervisor has stopped a worker. No production readiness or Railway capability is implied.
+HMAC is symmetric authentication, not a public-key signature. Every verifier holding a key can also forge commands; use a separately controlled issuer/verifier key boundary and do not expose verifier keys to workloads. The legacy `shutdown_requested` Boolean remains in the method signatures for call compatibility, but `True` is denied without halting; it is not an authenticated shutdown mechanism. `GVRuntimePolicy.evaluate_command` and `GVExternalControlPlane.evaluate_command` are policy-only APIs: they authorize a decision but do not terminate a process. Use the trusted supervisor integration below when cancellation is required. Trusted parent code may use the explicit `evaluate_internal_shutdown` methods to obtain emergency-stop decisions, but must still enforce cancellation. These APIs are only separated from workload authority by the documented parent/child process boundary; Python does not enforce caller identity within a process. V1 itself has no transport, endpoint, account identity, key-management service, durable revocation database, automatic process termination, or distributed transaction. Authorization is not evidence that a supervisor has stopped a worker. No production readiness or Railway capability is implied.
+
+## Trusted supervisor integration
+
+The supervisor is trusted host code, not code running in the governed worker.
+Its identity authority, role grants, resource ownership metadata, effect policy,
+external-command verifier, output destination, and audit storage must be supplied
+and controlled by the host. None may be taken from worker claims. Identity
+authorization does not grant external shutdown authority; shutdown uses the
+separately configured, target-bound command verifier.
+
+`gvai.supervisor.TrustedSupervisor` is configured through keyword-only
+`target_id`, `authority`, `authorizer`, `guard`, `command_verifier`, `resources`,
+and `root` arguments. `resources` is a host-owned resource-ID-to-`TenantResource`
+mapping, not request-supplied tenant labels. The optional resource capability
+defaults to `resource:execute`; tool grants remain separately required. Optional
+`input_root` must not overlap the supervisor root.
+
+The host calls `execute(evidence, resource_id, action, observation)`; the
+supervisor authenticates evidence and authorizes the resource and fixed action
+before starting the sandbox. The observation is trusted parent runtime state,
+not worker-supplied recoverability data. `shutdown(envelope)` verifies and
+consumes a command for the configured target before latching and canceling.
+Rejected commands raise `ExternalCommandRejected`. The returned confirmation
+and deadline fields must be checked; acceptance alone is not cancellation.
+
+Permitted output is staged in `root/generation-<uuid>/` and published through
+an atomic `root/current` symlink change, rather than copied into a live output
+tree. Consumers must resolve `current` once for each transaction to avoid
+mixing generations. Previously published output is not revoked by shutdown,
+but pending generations cannot become current after shutdown. Audit snapshots
+are available through `evidence`, with host-side records in
+`root/control.jsonl`. Keep this root outside worker mounts and under exclusive
+trusted-host control.
+
+Supervision additionally requires readable host procfs. The parent creates a
+dedicated session/process group and omits Bubblewrap's separate `--new-session`
+option so the fixed worker remains in that group. Cancellation covers the whole
+group; confirmation combines launcher reaping with an independent procfs check
+for absence of live group members. This relies on the existing fixed worker
+having no session-changing or process-spawning operation, and is not an
+arbitrary-code containment claim. Worker JSON is not evidence of exit.
+Unavailable exit-observation mechanisms prevent launch or output promotion.
+
+Process creation occurs outside the lifecycle lock. If shutdown races an
+in-progress launch, it waits for the startup handoff within its deadline and
+cancels the handed-off process. A late handoff is still canceled and cannot
+promote output, but an uncompleted handoff must return `confirmed=False`, not
+claim that the system has already stopped.
+
+The lifecycle must distinguish:
+
+- command rejection, which cannot set the shutdown latch;
+- authenticated shutdown acceptance, which permanently prevents new work and
+  promotion of pending output for that instance;
+- cancellation signaling, which is not itself evidence of process exit;
+- independently observed process exit, including the actual return code;
+- failure to confirm exit within the acceptance deadline, which must not be
+  reported as a successful stop or permit later promotion.
+
+There is no worker-accessible reset or resume operation. Creating a replacement
+supervisor is a trusted-host operation, not a way for a worker to clear a latch.
+The existing in-memory replay backend still has its documented process-local
+limitations; replacement instances do not provide durable replay protection.
+
+The one-second acceptance criterion is measured on a supported Linux sandbox
+host, not inferred from a successful policy decision, a kill request, or a
+worker-reported status. Run the full suite with `python -m pytest -ra` and report
+all security-critical skips. Missing Bubblewrap, libseccomp, or usable namespaces
+is a fail-closed condition, not permission to run a weaker backend.

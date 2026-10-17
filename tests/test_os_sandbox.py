@@ -13,13 +13,17 @@ from gvai.runtime_policy import GVRuntimePolicy
 from gvai.sentinel import GVSentinel
 
 
-pytestmark = pytest.mark.skipif(
-    not bwrap_usable(),
-    reason=(
-        "bubblewrap/user namespaces "
-        "not available on this host"
-    ),
-)
+@pytest.fixture(autouse=True)
+def require_real_sandbox(request):
+    mocked_tests = {
+        "test_os_sandbox_passes_only_seccomp_fd",
+        "test_os_sandbox_does_not_inherit_parent_secrets",
+        "test_commit_target_cannot_escape_root_via_parent_path",
+        "test_unintended_inheritable_fd_is_not_available_to_child",
+        "test_legacy_workspace_stays_outside_input_parent",
+    }
+    if request.node.name not in mocked_tests and not bwrap_usable():
+        pytest.skip("bubblewrap/user namespaces or libseccomp not available on this host")
 
 
 def make_executor(tmp_path: Path):
@@ -80,6 +84,42 @@ def test_safe_os_transaction_commits(
         / "committed"
         / "result.txt"
     ).exists()
+
+
+def test_legacy_workspace_stays_outside_input_parent(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import gvai.os_sandbox as os_sandbox
+
+    monkeypatch.setattr(os_sandbox, "bwrap_usable", lambda: True)
+    monkeypatch.setattr(os_sandbox, "bwrap_path", lambda: "/usr/bin/bwrap")
+    monkeypatch.setattr(
+        os_sandbox, "build_no_spawn_filter",
+        lambda: SimpleNamespace(fd=77, close=lambda: None),
+    )
+    executor, observation = make_executor(tmp_path)
+    executor.input_root = tmp_path.resolve()
+    temporary_directory = os_sandbox.tempfile.TemporaryDirectory
+
+    def checked_directory(*args, **kwargs):
+        assert kwargs.get("dir") is None
+        return temporary_directory(*args, **kwargs)
+
+    def fake_run(command, **kwargs):
+        work = Path(command[command.index("--bind") + 1])
+        safety = Path(command[command.index("/safety") - 1])
+        assert not work.is_relative_to(executor.input_root)
+        assert not safety.is_relative_to(executor.input_root)
+        (work / "result.txt").write_text("safe work\n")
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"completed":true,"error":null,"events":[]}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(os_sandbox.tempfile, "TemporaryDirectory", checked_directory)
+    monkeypatch.setattr(os_sandbox.subprocess, "run", fake_run)
+    assert executor.execute("safe_work", observation).committed
 
 
 def test_kernel_blocks_protected_file_write(
@@ -243,7 +283,7 @@ def test_combined_attack_includes_process_attempt(
     assert result.committed is False
 
 
-def test_unintended_inheritable_fd_is_not_available_to_child():
+def test_unintended_inheritable_fd_is_not_available_to_child(tmp_path):
     import os
     import subprocess
     import sys
@@ -252,6 +292,7 @@ def test_unintended_inheritable_fd_is_not_available_to_child():
     with tempfile.NamedTemporaryFile(
         mode="w+",
         delete=False,
+        dir=tmp_path,
     ) as secret:
         secret.write("GVAI-INHERITED-FD-SECRET\n")
         secret.flush()
