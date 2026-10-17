@@ -52,6 +52,64 @@ Both drafts change the sandbox command/process-launch path. When integrating:
 
 ## Diagnosis and policy design
 
+### Reported live failure and minimal next experiment
+
+The operator reports **19 passed, 1 setup error**, stopped at the first error,
+on the target baseline above, as unprivileged `gvaitest` (UID/GID 1000).
+Both `gvai-bwrap` and `gvai-worker` were loaded in enforce mode; stacking was
+supported and `kernel.apparmor_restrict_unprivileged_userns=1`.
+Bubblewrap stderr was exactly:
+
+```text
+bwrap: loopback: Failed to look up lo: No such file or directory
+```
+
+Observed AppArmor denials were launcher reads of `/proc/filesystems` and
+`/proc/<pid>/mounts`, several disconnected-path `getattr` operations, and Unix
+datagram socket creation. Complete audit records and syscall traces were not
+supplied. None of these observations alone proves causation.
+
+The source-supported leading hypothesis is the **socket creation denial**:
+Bubblewrap 0.9.0 calls `if_nametoindex("lo")` before opening its raw routing
+netlink socket. In glibc 2.39, `if_nametoindex` calls `__opensock`, which tries
+`AF_UNIX`, `AF_INET`, then `AF_INET6` datagram sockets for `SIOCGIFINDEX`.
+If all fail, glibc explicitly sets `errno=ENOENT`, hiding the original socket
+errors. The existing launcher allows only raw netlink, so this mechanism
+explains both the Unix denial and the misleading "No such file or directory".
+It does **not** establish that `lo` is missing. Exact target libc behavior and
+the causal link still require a controlled target-host rerun.
+
+The only candidate permission added is **launcher-only**
+`unix (create) type=dgram,`. This permits an unbound ioctl socket, not Unix
+bind/connect/send/receive, Internet sockets, or broader capabilities. The
+worker profile is unchanged and continues to `audit deny network`, including
+Unix sockets, in the mandatory stack. A later ioctl or bootstrap step might
+still fail; do not pre-authorize it.
+
+The other denials remain unallowed:
+
+* libselinux initialization probes `/proc/filesystems` and, if that fails,
+  falls back to `/proc/mounts` (resolved through the caller's proc directory).
+  Local Bubblewrap links libselinux; target linkage and audit correlation
+  remain to be checked. These probes are a plausible explanation for the
+  paired procfs denials, not the specific loopback lookup failure.
+* Disconnected-path `getattr` needs the full operation/path/error/PID record
+  and the setup stage. Do not infer a required path or allow
+  `attach_disconnected`, recursive procfs reads, or broad file permissions.
+
+For the next **separately approved human-run** experiment, stop dispatch and
+reap governed processes, preserve the current policy and full audit evidence,
+and apply only the one-rule launcher change using the existing-profile
+revision procedure below. Keep worker policy, namespaces (especially
+`--unshare-net`), capability dropping, seccomp, sysctls, and account unchanged.
+First run the namespace/stack acceptance case with `-x`; then, if it succeeds,
+run the entire acceptance suite without early stopping and the regressions.
+Save stdout, stderr, exit status, and complete timestamp-correlated audit
+records (profile, PID/comm, operation, name/info, requested/denied masks,
+family/type/protocol and peer where present). If failure advances, that is
+diagnostic progress, **not acceptance**. Review the next fatal operation
+before any further policy change; do not permit every remaining log entry.
+
 Ubuntu's user-namespace restriction is distinct from ordinary DAC and the
 `unprivileged_userns_clone` sysctl. An unconfined application can enter the
 restricted `unprivileged_userns` domain and then lose the capability and procfs
@@ -77,6 +135,18 @@ It declares two **enforcing, confined** profiles:
    initiation, and writes to procfs/sysfs/safety state. It has no exec or
    profile-change permission. The retained launcher label does not preserve
    launcher authority through the worker profile's denials.
+
+The transition matches the **resolved interpreter executable**, not its
+arguments: both `python3 -I -c ...` in the diagnostic acceptance probe and
+`python3 /runner.py --action ...` in the executor must take the same mandatory
+stack. Thus `-c` is compatible, but its success alone does not validate the
+fixed-worker mount or action path. AppArmor does not authenticate Python
+source or arguments; the trusted executor fixes the sole worker bind mount
+and command. The lightweight `bwrap_usable()` `python3 -c` check lacks the
+worker script, seccomp installation, and label assertions, and is **only an
+availability check**, never security acceptance. Mandatory host cases now
+also run the real fixed-worker executor for safe work and file/network/spawn
+attacks without mocks or setup skips.
 
 ### Why a plain `Px` / `Cx` replacement is not proposed
 
@@ -196,9 +266,11 @@ test "$(cat /sys/kernel/security/apparmor/features/domain/stack)" = yes
 sudo cat /sys/kernel/security/apparmor/profiles
 ```
 
-Stop if the baseline differs, either GVAI profile name is already loaded, or
-another profile attaches to `/usr/bin/bwrap`. Do not replace a vendor or local
-policy silently. Save the above output and the full existing profile list in
+For a fresh installation, stop if the baseline differs, either GVAI profile
+name is already loaded, or another profile attaches to `/usr/bin/bwrap`.
+The reported host already has both GVAI profiles: use the separately approved
+revision procedure below, **not** the fresh-install commands. Never replace a
+vendor or unrelated local policy. Save the above output and full profile list in
 administrator-owned review evidence. Verify `gvaitest` cannot use sudo and has
 no `docker`, `lxd`, or other privilege-bearing groups.
 
@@ -227,6 +299,68 @@ This file persists across AppArmor service reload/reboot. There are no changes
 to the system-wide `unprivileged_userns` policy, sysctl configuration, or service
 units. Verify only the two new enforcing profiles were added.
 
+### Revising the already-loaded GVAI candidate (human only)
+
+This procedure is for a **future explicitly approved diagnostic experiment**,
+not an instruction to load this local proposal now. Keep governed workloads
+stopped. Confirm both existing GVAI profiles are enforcing, the installed file
+is the operator's known prior candidate, and no vendor/unrelated attachment
+conflicts exist. Stop if the installed source cannot be tied to the loaded
+baseline: a file backup alone does not establish what policy is in the kernel.
+Review the installed-source/candidate diff; only the launcher Unix-datagram
+creation rule and its comment may differ. The worker stanza must be identical.
+Preserve the existing source and audit evidence in administrator-owned storage.
+
+After all checks and explicit approval, as administrator:
+
+```bash
+set -euo pipefail
+cd /opt/gvai-safety-systems
+if sudo ps -e -o label= | grep -q 'gvai-bwrap\|gvai-worker'; then
+  echo 'STOP: GVAI-labelled processes remain; cancel and reap them first.' >&2
+  exit 1
+fi
+sudo test -f /etc/apparmor.d/usr.bin.bwrap.gvai
+sudo test ! -e /root/gvai-apparmor-loopback-review
+sudo install -d -o root -g root -m 0700 /root/gvai-apparmor-loopback-review
+sudo cp -- /etc/apparmor.d/usr.bin.bwrap.gvai \
+  /root/gvai-apparmor-loopback-review/before.policy
+sudo chmod 0600 /root/gvai-apparmor-loopback-review/before.policy
+sudo cat /sys/kernel/security/apparmor/profiles | \
+  sudo tee /root/gvai-apparmor-loopback-review/profiles.before >/dev/null
+sudo sha256sum /root/gvai-apparmor-loopback-review/before.policy \
+  security/apparmor/usr.bin.bwrap.gvai
+sudo apparmor_parser -Q -K --warn=all --Werror \
+  security/apparmor/usr.bin.bwrap.gvai
+sudo install -o root -g root -m 0644 \
+  security/apparmor/usr.bin.bwrap.gvai /etc/apparmor.d/usr.bin.bwrap.gvai
+sudo apparmor_parser -r -K /etc/apparmor.d/usr.bin.bwrap.gvai
+sudo aa-status
+sudo cat /sys/kernel/security/apparmor/profiles
+test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+```
+
+Compare the full profile list to the saved list: names/enforce mode and all
+unrelated profiles must be unchanged. Only `gvai-bwrap` gains a permission;
+`gvai-worker` is reloaded identically. If replacement fails, keep dispatch stopped, inspect both
+actual loaded names, and use the revision rollback below. Do not assume the
+multi-profile replacement was atomic.
+
+First diagnostic rerun (unprivileged, mandatory host prerequisites, no skips):
+
+```bash
+sudo -u gvaitest env -i PATH=/usr/bin:/bin HOME=/home/gvaitest \
+  PYTHONDONTWRITEBYTECODE=1 GVAI_APPARMOR_ACCEPTANCE=1 \
+  /opt/gvai-safety-systems/.venv/bin/python -m pytest \
+  -q -rs -x -p no:cacheprovider tests/test_apparmor_sandbox.py \
+  -k test_supported_host_namespaces_and_enforcing_stack
+```
+
+If this passes, run **all** commands below without `-x`. A passed diagnostic
+case alone is not acceptance. Retain failed-run evidence even after rollback.
+
+### Revised acceptance requirements
+
 Run the mandatory acceptance suite, then existing OS and control regressions:
 
 ```bash
@@ -246,12 +380,33 @@ sudo aa-status
 test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
 ```
 
-Expected: zero failed tests and **zero skipped security cases** on the supported
-host. Existing OS tests can skip on setup failure; the explicit acceptance
-suite cannot. Retain failures and audit records. Denials from deliberate worker
-attacks are expected; bootstrap denials or absence of the stacked enforcing
-label are blockers. Do not run an automatic profile generator to turn these
-denials into allowances. After selecting/integrating a supervisor draft, also
+Expected: zero failures/errors and **zero skipped security cases** on the
+supported host. The explicit suite has eight mandatory host cases: three
+inline-probe checks, four real fixed-worker action cases, and one unapproved
+executable check. Existing OS tests can skip on setup failure; any such skip
+is an acceptance blocker, not a pass. Require:
+
+* The inline probe executes under exactly `gvai-bwrap//&gvai-worker (enforce)`
+  (profile order may differ), with isolated user/PID/network namespaces.
+* All capability sets are zero, `NoNewPrivs=1`, `Seccomp=2`; capset, namespace
+  creation, mount/remount/unmount, profile change, launcher re-exec and child
+  spawning remain denied, and no privilege recovery succeeds.
+* Unix datagram/stream, Internet datagram (IPv4/IPv6), and raw netlink socket
+  **creation** fail with `EACCES`/`EPERM` under the worker. A connection failure
+  such as `ENETUNREACH` alone is insufficient to validate AppArmor networking.
+* Safe work through the actual fixed `/runner.py` executor commits the exact
+  expected output; file, network, and spawn attacks complete as blocked
+  attempts without boundary failure, authorization, or output promotion.
+* Unauthorized host reads, safety/policy writes, and profile changes remain
+  blocked; setup fails closed and only the reviewed interpreter is executable.
+
+Retain failures and complete audit records, correlated by PID/time with the
+test and stderr. Denials from deliberate worker attacks are expected.
+Remaining launcher denials must be explained and shown nonfatal, not silently
+ignored or automatically allowed; disconnected-path denials remain blockers
+until attributed. Absence of the enforcing stack is always a blocker.
+Do not run an automatic profile generator to permit logged denials.
+After selecting/integrating a supervisor draft, also
 run its real `tests/test_supervisor.py` tests and acceptance cases on this host;
 that file is intentionally absent on this branch.
 
@@ -263,7 +418,37 @@ live workers: removing an enforcing profile can remove their confinement.
 If startup failed partway through, inspect the actual loaded profiles before
 rollback; do not assume a successful load or that the load was atomic.
 
-For a successfully loaded candidate from the procedure above:
+**Revision rollback:** if the two profiles existed before the experiment,
+restore the preserved enforcing baseline rather than removing it. After
+stopping dispatch and independently verifying no GVAI-labelled processes
+remain, run as administrator:
+
+```bash
+set -euo pipefail
+if sudo ps -e -o label= | grep -q 'gvai-bwrap\|gvai-worker'; then
+  echo 'STOP: GVAI-labelled processes remain; cancel and reap them first.' >&2
+  exit 1
+fi
+sudo apparmor_parser -Q -K --warn=all --Werror \
+  /root/gvai-apparmor-loopback-review/before.policy
+sudo install -o root -g root -m 0644 \
+  /root/gvai-apparmor-loopback-review/before.policy \
+  /etc/apparmor.d/usr.bin.bwrap.gvai
+sudo apparmor_parser -r -K /etc/apparmor.d/usr.bin.bwrap.gvai
+sudo aa-status
+sudo cat /sys/kernel/security/apparmor/profiles
+test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
+test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+```
+
+Verify both GVAI names are enforcing and the full profile list matches
+`profiles.before`. Keep the backup and failed-run evidence. Keep workloads
+stopped: restoring the prior profile restores its known startup failure, not
+an accepted sandbox. Stop and request administrator investigation if restoration
+fails; never unload or switch to complain/unconfined mode to continue.
+
+**Fresh-install rollback only:** for profiles newly added by the fresh-install
+procedure, with no preexisting GVAI policy to restore:
 
 ```bash
 set -euo pipefail
@@ -293,28 +478,61 @@ continue to fail closed. Do not disable AppArmor or alter the restriction sysctl
 
 ## Validation record and remaining blockers
 
+### Local correction to PR #16 (not published)
+
+Prepared on `feature/ubuntu-bwrap-apparmor` from
+`668f30b8d561892f07431dea576fd40aed37235f`. The starting worktree was clean.
+Only this runbook, the candidate policy, and `tests/test_apparmor_sandbox.py`
+changed. The entire worker profile and production launcher/worker code are
+unchanged. No commits, pushes, PR updates, SSH, server changes, kernel policy
+loads, sysctl changes, or governed workload activation were performed. PRs #14/#15
+were not modified.
+
 Local validation uses Ubuntu 24.04.5 userspace and Bubblewrap 0.9.0, but kernel
-`6.8.0-1064-azure`, an unconfined caller, and user-namespace restriction **0**.
-No sysctl or live policy was changed. The missing parser was extracted from
-Ubuntu's `apparmor_4.0.1really4.0.1-0ubuntu0.24.04.9_amd64.deb` into session
-storage, not installed or activated. Compilation uses its bundled ABI 4.0 and
-`-Q -K`, with no kernel load or cache writes.
+`6.8.0-1064-azure`, glibc 2.39, an unconfined UID/GID 1000 caller, and
+user-namespace restriction **0**. Local `/usr/bin/python3` is Python 3.12.3;
+local pytest ran in a session-only Python 3.14.2 virtualenv, not the target
+Python environment. No sysctl or live policy was changed. The previously
+extracted, uninstalled AppArmor 4.0.1 parser from Ubuntu's
+`apparmor_4.0.1really4.0.1-0ubuntu0.24.04.9_amd64.deb` was reused from session
+storage, not installed or activated. Compilation used its bundled config
+(`--config-file`) and ABI 4.0 (`-I`), plus `--warn=all --Werror -Q -K`,
+with no kernel load or cache writes.
+
+| Validation | Result |
+| --- | --- |
+| AppArmor 4.0.1 / ABI 4.0 compile, warnings as errors | Passed after supplying bundled config |
+| Focused `test_apparmor_sandbox.py` + `test_os_sandbox.py` | **38 passed, 8 skipped**, no failures/errors |
+| Full local `python -m pytest -q -rs -p no:cacheprovider` | **214 passed, 8 skipped**, no failures/errors |
+| Explicit local `GVAI_APPARMOR_ACCEPTANCE=1` suite | **22 passed, 8 setup errors**, no skips; restriction sysctl is 0, not required 1 |
+| `git diff --check` | Passed |
+| Restricted target-host acceptance / enforcing kernel stack | **Not verified** |
+
+All eight ordinary-run skips are the explicit opt-in target-host cases; the
+existing OS regression tests executed. The eight explicit acceptance errors
+occurred at prerequisites before host probes/worker execution. They confirm
+fail-closed prerequisite handling, **not successful host acceptance**.
+
+Validation setup limitations were resolved without system installation:
+neither available Python initially had pytest; Python 3.12 venv creation
+failed because ensurepip was absent. A session-only Python 3.14 venv restored
+the existing requirements. The editor test tool reported no discovered tests,
+so the existing pytest runner was used directly. The initial parser invocation
+failed warnings-as-errors because `/etc/apparmor/parser.conf` was absent;
+rerunning with the extracted package's config and ABI succeeded. No source
+or policy failure was suppressed.
 
 * Local focused tests cover mandatory policy structure, absolute executable
   selection, unsafe binary rejection, fail-closed bootstrap/results, and
   existing real Bubblewrap containment and authorization contracts.
-* Final local full regression: **211 passed, 4 skipped**. The four skips are
-  the explicitly opt-in supported-host cases; existing OS tests executed.
-  AppArmor 4.0.1 compilation with ABI 4.0, `--warn=all --Werror -Q -K`
-  completed successfully, as did `git diff --check`.
-* Ordinary local runs explicitly skip the four new supported-host cases.
-* Explicit local acceptance (`GVAI_APPARMOR_ACCEPTANCE=1`) fails on the absent
-  restricted-host prerequisites instead of skipping. This is a negative check,
-  **not successful host acceptance**: one test failed and three fixture setups
-  errored, all because the local restriction sysctl is 0 rather than 1.
+  New local contracts constrain the launcher socket rule to creation only and
+  preserve the sole stacked exec transition and fixed executor command.
+  They are static/mocked regression evidence, not kernel enforcement evidence.
 * Syntax compilation cannot verify mount path mediation, procfs remapping,
-  routing-netlink permission, kernel stacking, launcher capability removal,
-  or supervisor shutdown. All remain target-host verification requirements.
+  ioctl/socket behavior, routing-netlink permission, kernel stacking, launcher
+  capability removal, or supervisor shutdown. All remain target-host
+  verification requirements. The supplied live result is a startup failure,
+  not a partial security acceptance; complete audit records are still needed.
 * The launcher has broad mount-class and temporary/setup-path permissions.
   A Bubblewrap/kernel vulnerability is outside this policy's guarantee.
   Stacking must be observed to remove those permissions from the worker.
@@ -335,7 +553,13 @@ storage, not installed or activated. Compilation uses its bundled ABI 4.0 and
   establishes early `no_new_privs`, namespace/mapping/pivot order, capability
   dropping, and seccomp-before-exec.
 * [Bubblewrap v0.9.0 loopback initialization](https://github.com/containers/bubblewrap/blob/v0.9.0/network.c)
-  uses raw routing-netlink for the isolated loopback.
+  calls `if_nametoindex("lo")` before raw routing-netlink setup.
+* [glibc 2.39 interface lookup](https://github.com/bminor/glibc/blob/glibc-2.39/sysdeps/unix/sysv/linux/if_index.c)
+  and [ioctl socket selection](https://github.com/bminor/glibc/blob/glibc-2.39/socket/opensock.c)
+  establish the Unix/IPv4/IPv6 datagram fallbacks and final `ENOENT`.
+* [libselinux initialization](https://github.com/SELinuxProject/selinux/blob/3.5/libselinux/src/init.c)
+  explains a possible nonfatal source of the two procfs reads; it does not
+  establish the target denials' cause.
 * [Linux 6.8 AppArmor transitions](https://github.com/torvalds/linux/blob/v6.8/security/apparmor/domain.c)
   explains the `no_new_privs` label-subset check and stacked subsets. Ubuntu
   backports still require actual host verification.

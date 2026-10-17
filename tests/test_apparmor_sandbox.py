@@ -4,6 +4,7 @@ import errno
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from gvai.effect_gate import GVEffectGate
+from gvai.effect_invariants import make_effect_invariant
 from gvai.os_sandbox import GVOSSandboxExecutor, _runtime_mounts, bwrap_path
 from gvai.runtime_guard_v2 import GVRuntimeGuardV2
 from gvai.runtime_policy import GVRuntimePolicy
@@ -47,6 +49,74 @@ def test_policy_has_mandatory_stacked_worker_and_no_escape():
     assert " pix" not in policy
     assert " pux" not in policy
     assert "capability," not in policy.split("profile gvai-worker")[0]
+
+
+def test_loopback_socket_permission_is_launcher_only_and_create_only():
+    policy = "\n".join(
+        line.split("#", 1)[0] for line in POLICY.read_text().splitlines()
+    )
+    launcher, worker = policy.split("profile gvai-worker flags=(enforce) {")
+    assert re.findall(r"^[ \t]*(unix\b[^,]*,)", launcher, re.MULTILINE) == [
+        "unix (create) type=dgram,",
+    ]
+    assert re.findall(r"^[ \t]*(network\b[^,]*,)", launcher, re.MULTILINE) == [
+        "network netlink raw,",
+    ]
+    assert not re.search(r"^\s*(?:unix|network)\b", worker, re.MULTILINE)
+    assert "audit deny network," in worker
+    assert "attach_disconnected" not in policy
+    assert "/proc/filesystems" not in policy
+    assert not re.search(r"/proc/[^\n]*\bmounts\b", policy)
+
+
+def test_python_interpreter_is_the_only_execution_transition():
+    policy = "\n".join(
+        line.split("#", 1)[0] for line in POLICY.read_text().splitlines()
+    )
+    exec_rules = re.findall(
+        r"^\s*(/\S+)\s+([a-zA-Z]*x)\s*(?:->\s*(\S+))?,",
+        policy, re.MULTILINE,
+    )
+    assert exec_rules == [("/usr/bin/python3.12", "rPx", "&gvai-worker")]
+    assert "change_profile" not in policy
+
+
+def test_executor_keeps_fixed_worker_and_namespace_boundary(tmp_path, monkeypatch):
+    import gvai.os_sandbox as sandbox
+
+    monkeypatch.setattr(sandbox, "bwrap_usable", lambda: True)
+    monkeypatch.setattr(sandbox, "bwrap_path", lambda: "/usr/bin/bwrap")
+    captured = {}
+
+    def run(command, **kwargs):
+        captured.update(command=command, **kwargs)
+        return subprocess.CompletedProcess(
+            command, 0, '{"completed": true, "events": [], "error": null}', "",
+        )
+
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+    guard = GVRuntimeGuardV2(GVSentinel(), GVRuntimePolicy(GVEffectGate([])))
+    executor = GVOSSandboxExecutor(guard, tmp_path / "committed")
+    result = executor.execute("safe_work", guard.observe([1.0] * 4))
+    assert result.completed
+    command = captured["command"]
+    assert command[0] == "/usr/bin/bwrap"
+    assert command[-4:] == [
+        "/usr/bin/python3", "/runner.py", "--action", "safe_work",
+    ]
+    assert "-c" not in command
+    worker = str(Path(sandbox.__file__).resolve().with_name("os_sandbox_worker.py"))
+    assert any(
+        command[i:i + 3] == ["--ro-bind", worker, "/runner.py"]
+        for i in range(len(command) - 2)
+    )
+    for namespace in ("user", "pid", "net", "uts", "ipc"):
+        assert f"--unshare-{namespace}" in command
+    assert command[command.index("--cap-drop") + 1] == "ALL"
+    assert captured["pass_fds"] == (int(command[command.index("--seccomp") + 1]),)
+    assert captured["env"] == {
+        "PATH": "/usr/bin:/bin", "HOME": "/tmp", "PYTHONNOUSERSITE": "1",
+    }
 
 
 def test_bwrap_ignores_path_shadow(tmp_path, monkeypatch):
@@ -169,6 +239,12 @@ def syscall_result(call):
     ctypes.set_errno(0)
     return 0 if call() == 0 else ctypes.get_errno()
 
+def socket_creation(family, kind):
+    def create():
+        with socket.socket(family, kind):
+            pass
+    return denied(create)
+
 status = dict(
     line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines()
     if ":" in line
@@ -211,9 +287,18 @@ result = {
         lambda: Path("/proc/self/uid_map").write_text("0 0 1\n")
     ),
     "network": denied(lambda: socket.create_connection(("1.1.1.1", 443), timeout=1)),
+    "socket_creation": {
+        "unix_dgram": socket_creation(socket.AF_UNIX, socket.SOCK_DGRAM),
+        "unix_stream": socket_creation(socket.AF_UNIX, socket.SOCK_STREAM),
+        "inet_dgram": socket_creation(socket.AF_INET, socket.SOCK_DGRAM),
+        "inet6_dgram": socket_creation(socket.AF_INET6, socket.SOCK_DGRAM),
+        "netlink_raw": socket_creation(socket.AF_NETLINK, socket.SOCK_RAW),
+    },
     "spawn": denied(lambda: subprocess.run(["/usr/bin/true"], check=True)),
     "unshare": syscall_result(lambda: libc.unshare(0x10000000)),
     "mount": syscall_result(lambda: libc.mount(b"tmpfs", b"/tmp", b"tmpfs", 0, None)),
+    "remount": syscall_result(lambda: libc.mount(None, b"/work", None, 32, None)),
+    "umount": syscall_result(lambda: libc.umount2(b"/work", 0)),
     "capset": syscall_result(lambda: libc.capset(ctypes.byref(header), caps)),
     "clear_nnp": syscall_result(lambda: libc.prctl(38, 0, 0, 0, 0)),
     "bwrap_exec": denied(lambda: os.execv("/usr/bin/bwrap", ["bwrap", "--version"])),
@@ -224,7 +309,7 @@ print(json.dumps(result))
 
 
 @pytest.fixture
-def host_probe(tmp_path):
+def host_requirements():
     assert os.getuid() == 1000, "run as unprivileged gvaitest, never root"
     assert os.getgid() == 1000
     assert Path("/sys/module/apparmor/parameters/enabled").read_text().strip() == "Y"
@@ -234,6 +319,10 @@ def host_probe(tmp_path):
     assert bwrap_path() == "/usr/bin/bwrap"
     assert subprocess.check_output(["/usr/bin/bwrap", "--version"], text=True).strip() == "bubblewrap 0.9.0"
     assert Path("/usr/bin/python3").resolve() == Path("/usr/bin/python3.12")
+
+
+@pytest.fixture
+def host_probe(tmp_path, host_requirements):
     secret = tmp_path / "host-secret"
     secret.write_text("must not cross boundary")
     # Use the same launcher-authorized temporary tree as the executor.
@@ -296,7 +385,10 @@ def test_supported_host_worker_cannot_recover_launcher_privileges(host_probe):
         assert int(status[field], 16) == 0, (field, status)
     assert status["NoNewPrivs"] == "1"
     assert status["Seccomp"] == "2"
-    for operation in ("unshare", "mount", "capset", "bwrap_exec", "profile_change"):
+    for operation in (
+        "unshare", "mount", "remount", "umount", "capset",
+        "bwrap_exec", "profile_change",
+    ):
         assert host_probe[operation] in {errno.EPERM, errno.EACCES}, (operation, host_probe)
     assert host_probe["clear_nnp"] in {errno.EPERM, errno.EINVAL}
 
@@ -308,12 +400,47 @@ def test_supported_host_files_network_and_processes_are_blocked(host_probe):
     for operation in ("policy_write", "uid_map_write"):
         assert host_probe[operation] in {errno.EROFS, errno.EACCES, errno.EPERM}
     assert host_probe["network"] in {errno.EACCES, errno.EPERM, errno.ENETUNREACH}
+    for family, error in host_probe["socket_creation"].items():
+        assert error in {errno.EACCES, errno.EPERM}, (family, host_probe)
     assert host_probe["spawn"] in {errno.EACCES, errno.EPERM}
 
 
 @HOST
-def test_supported_host_bwrap_cannot_execute_unapproved_payload():
-    assert Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").read_text().strip() == "1"
+@pytest.mark.parametrize("action,effect", [
+    ("safe_work", None),
+    ("protected_file_attack", "protected_file_write_attempt"),
+    ("network_attack", "unapproved_network_egress_attempt"),
+    ("process_attack", "unauthorized_process_spawn_attempt"),
+])
+def test_supported_host_fixed_worker_executor(tmp_path, host_requirements, action, effect):
+    invariant = make_effect_invariant(
+        name="host_worker_boundary",
+        description="The fixed worker must not cross the OS boundary.",
+        forbidden_effects={
+            "os_boundary_failure", "protected_file_write_attempt",
+            "unapproved_network_egress_attempt", "unauthorized_process_spawn_attempt",
+        },
+    )
+    guard = GVRuntimeGuardV2(
+        GVSentinel(), GVRuntimePolicy(GVEffectGate([invariant])),
+    )
+    executor = GVOSSandboxExecutor(guard, tmp_path / "committed")
+    result = executor.execute(action, guard.observe([1.0] * 4))
+    assert result.returncode == 0, result.stderr
+    assert result.completed, (result.error, result.stderr)
+    assert result.error is None
+    assert "os_boundary_failure" not in result.observed_effects
+    if effect is None:
+        assert result.allowed and result.committed
+        assert (tmp_path / "committed/result.txt").read_text() == "safe work\n"
+    else:
+        assert effect in result.observed_effects
+        assert not result.allowed and not result.committed
+        assert not list((tmp_path / "committed").iterdir())
+
+
+@HOST
+def test_supported_host_bwrap_cannot_execute_unapproved_payload(host_requirements):
     process = subprocess.run(
         [
             "/usr/bin/bwrap", "--unshare-user", "--unshare-pid",

@@ -11,6 +11,8 @@ profile gvai-bwrap /usr/bin/bwrap flags=(enforce) {
   capability net_admin,
   capability sys_ptrace,
   network netlink raw,
+  # glibc if_nametoindex("lo") uses an unbound socket for SIOCGIFINDEX.
+  unix (create) type=dgram,
 
   # These operations are needed for Bubblewrap's two pivot_root operations.
   # DAC and namespace capabilities still apply; this is not a host root grant.
