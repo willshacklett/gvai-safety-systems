@@ -13,16 +13,9 @@ from gvai.runtime_policy import GVRuntimePolicy
 from gvai.sentinel import GVSentinel
 
 
-pytestmark = pytest.mark.skipif(
-    not bwrap_usable(),
-    reason=(
-        "bubblewrap/user namespaces "
-        "not available on this host"
-    ),
-)
-
-
 def make_executor(tmp_path: Path):
+    if not bwrap_usable():
+        pytest.skip("Security-critical OS enforcement: bubblewrap/user namespaces/seccomp unavailable")
     invariant = make_effect_invariant(
         name="os_boundary",
         description=(
@@ -243,7 +236,7 @@ def test_combined_attack_includes_process_attempt(
     assert result.committed is False
 
 
-def test_unintended_inheritable_fd_is_not_available_to_child():
+def test_unintended_inheritable_fd_is_not_available_to_child(tmp_path):
     import os
     import subprocess
     import sys
@@ -252,6 +245,7 @@ def test_unintended_inheritable_fd_is_not_available_to_child():
     with tempfile.NamedTemporaryFile(
         mode="w+",
         delete=False,
+        dir=tmp_path,
     ) as secret:
         secret.write("GVAI-INHERITED-FD-SECRET\n")
         secret.flush()
@@ -286,6 +280,21 @@ def test_unintended_inheritable_fd_is_not_available_to_child():
     os.unlink(secret.name)
 
 
+class FakeProcess:
+    pid = 99999999
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def communicate(self, timeout):
+        return self.stdout, self.stderr
+
+    def wait(self, timeout):
+        return self.returncode
+
+
 def test_os_sandbox_passes_only_seccomp_fd(
     tmp_path,
     monkeypatch,
@@ -300,6 +309,7 @@ def test_os_sandbox_passes_only_seccomp_fd(
     from gvai.sentinel import GVSentinel
 
     captured = {}
+    monkeypatch.setattr(os_sandbox, "libseccomp_available", lambda: True)
 
     class FakeSeccompFilter:
         fd = 77
@@ -311,9 +321,9 @@ def test_os_sandbox_passes_only_seccomp_fd(
         captured["command"] = command
         captured["pass_fds"] = kwargs.get("pass_fds")
 
-        return SimpleNamespace(
+        return FakeProcess(
             returncode=0,
-            stdout='{"completed": true, "events": []}\n',
+            stdout='{"action": "safe_work", "completed": true, "error": null, "events": []}\n',
             stderr="",
         )
 
@@ -337,7 +347,7 @@ def test_os_sandbox_passes_only_seccomp_fd(
 
     monkeypatch.setattr(
         os_sandbox.subprocess,
-        "run",
+        "Popen",
         fake_run,
     )
 
@@ -432,6 +442,7 @@ def test_os_sandbox_does_not_inherit_parent_secrets(
     from gvai.sentinel import GVSentinel
 
     captured = {}
+    monkeypatch.setattr(os_sandbox, "libseccomp_available", lambda: True)
 
     class FakeSeccompFilter:
         fd = 77
@@ -442,9 +453,9 @@ def test_os_sandbox_does_not_inherit_parent_secrets(
     def fake_run(command, **kwargs):
         captured["env"] = kwargs.get("env")
 
-        return SimpleNamespace(
+        return FakeProcess(
             returncode=0,
-            stdout='{"completed": true, "events": []}\n',
+            stdout='{"action": "safe_work", "completed": true, "error": null, "events": []}\n',
             stderr="",
         )
 
@@ -473,7 +484,7 @@ def test_os_sandbox_does_not_inherit_parent_secrets(
 
     monkeypatch.setattr(
         os_sandbox.subprocess,
-        "run",
+        "Popen",
         fake_run,
     )
 
@@ -534,6 +545,7 @@ def test_commit_target_cannot_escape_root_via_parent_path(
     from gvai.runtime_guard_v2 import GVRuntimeGuardV2
     from gvai.runtime_policy import GVRuntimePolicy
     from gvai.sentinel import GVSentinel
+    monkeypatch.setattr(os_sandbox, "libseccomp_available", lambda: True)
 
     class FakeSeccompFilter:
         fd = 77
@@ -553,9 +565,9 @@ def test_commit_target_cannot_escape_root_via_parent_path(
             encoding="utf-8",
         )
 
-        return SimpleNamespace(
+        return FakeProcess(
             returncode=0,
-            stdout='{"completed": true, "events": []}\n',
+            stdout='{"action": "safe_work", "completed": true, "error": null, "events": []}\n',
             stderr="",
         )
 
@@ -579,7 +591,7 @@ def test_commit_target_cannot_escape_root_via_parent_path(
 
     monkeypatch.setattr(
         os_sandbox.subprocess,
-        "run",
+        "Popen",
         fake_run,
     )
 
