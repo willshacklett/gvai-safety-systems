@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -63,7 +66,26 @@ def _runtime_mounts() -> list[str]:
 
 
 def bwrap_path() -> str | None:
-    return shutil.which("bwrap")
+    binary = Path("/usr/bin/bwrap")
+    try:
+        metadata = binary.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_mode & (stat.S_ISUID | stat.S_ISGID | 0o022)
+        or not os.access(binary, os.X_OK)
+    ):
+        return None
+    try:
+        os.getxattr(binary, "security.capability", follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno != errno.ENODATA:
+            raise
+    else:
+        return None
+    return str(binary)
 
 
 def bwrap_usable() -> bool:
@@ -209,6 +231,9 @@ class GVOSSandboxExecutor:
                 effects.add(
                     "os_boundary_failure"
                 )
+
+            elif event_type == "os_boundary_failure":
+                effects.add("os_boundary_failure")
 
             elif event_type == (
                 "process_spawn_blocked"
@@ -470,6 +495,38 @@ class GVOSSandboxExecutor:
                         "events": [],
                     }
 
+            if (
+                not isinstance(result, dict)
+                or type(result.get("completed")) is not bool
+                or not isinstance(result.get("events"), list)
+                or any(
+                    not isinstance(event, dict)
+                    or not isinstance(event.get("event"), str)
+                    for event in result.get("events", [])
+                )
+                or (
+                    result.get("error") is not None
+                    and not isinstance(result.get("error"), str)
+                )
+            ):
+                result = {
+                    "completed": False,
+                    "error": "Worker returned missing or malformed results.",
+                    "events": [],
+                }
+
+            execution_failed = (
+                process.returncode != 0
+                or not result["completed"]
+                or result.get("error") is not None
+            )
+            if execution_failed:
+                result["completed"] = False
+                result["error"] = result.get("error") or (
+                    f"Sandbox execution failed (exit {process.returncode})."
+                )
+                result["events"].append({"event": "os_boundary_failure"})
+
             events = list(
                 result.get(
                     "events",
@@ -570,6 +627,7 @@ class GVOSSandboxExecutor:
 
             if (
                 runtime.allowed
+                and not execution_failed
                 and self.commit_enabled
                 and worker_completed
             ):
@@ -646,10 +704,12 @@ class GVOSSandboxExecutor:
                 error=result.get("error"),
                 observed_effects=observed_effects,
                 events=tuple(events),
-                allowed=runtime.allowed,
+                allowed=runtime.allowed and not execution_failed,
                 committed=committed,
                 halted=runtime.halted,
-                reason=runtime.reason,
+                reason=(
+                    result["error"] if execution_failed else runtime.reason
+                ),
                 stderr=process.stderr,
             )
 

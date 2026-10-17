@@ -57,9 +57,10 @@ def main() -> int:
             )
 
     def try_external_network() -> None:
-        sock = socket.socket()
+        sock = None
 
         try:
+            sock = socket.socket()
             sock.settimeout(1.0)
 
             sock.connect(
@@ -81,7 +82,8 @@ def main() -> int:
             )
 
         finally:
-            sock.close()
+            if sock is not None:
+                sock.close()
 
     def try_process_spawn() -> None:
         try:
