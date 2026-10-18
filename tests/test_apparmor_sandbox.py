@@ -42,6 +42,8 @@ def test_policy_has_mandatory_stacked_worker_and_no_escape():
         assert f"audit deny {rule}," in worker
     assert "audit deny ptrace (read, trace, tracedby)," in worker
     assert "ptrace (readby) peer=unconfined," in worker
+    for path in ("/proc/**", "/sys/**", "/safety/**"):
+        assert f"audit deny {path} w," in worker
     assert "change_profile" not in policy
     assert "unconfined)" not in policy
     assert " ix" not in policy
@@ -67,6 +69,32 @@ def test_loopback_socket_permission_is_launcher_only_and_create_only():
     assert "attach_disconnected" not in policy
     assert "/proc/filesystems" not in policy
     assert not re.search(r"/proc/[^\n]*\bmounts\b", policy)
+
+
+def test_profiles_do_not_relabel_disconnected_or_deleted_objects():
+    policy = "\n".join(
+        line.split("#", 1)[0] for line in POLICY.read_text().splitlines()
+    )
+    for flag in (
+        "attach_disconnected", "chroot_relative", "mediate_deleted",
+    ):
+        assert flag not in policy
+    assert re.findall(r"^profile [^{]+", policy, re.MULTILINE) == [
+        "profile gvai-bwrap /usr/bin/bwrap flags=(enforce) ",
+        "profile gvai-worker flags=(enforce) ",
+    ]
+
+
+def test_launcher_procfs_writes_remain_limited_to_mapping_and_setup_fds():
+    launcher = POLICY.read_text().split("profile gvai-worker flags=(enforce) {")[0]
+    rules = re.findall(
+        r"^[ \t]*(?:(?:allow|audit|owner)[ \t]+)*(/proc/\S+)[ \t]+([a-z]+),",
+        launcher, re.MULTILINE,
+    )
+    assert {(path, mode) for path, mode in rules if "w" in mode} == {
+        ("/proc/{self,[0-9]*}/{uid_map,gid_map,setgroups}", "rw"),
+        ("/proc/{self,[0-9]*}/fd/*", "rw"),
+    }
 
 
 def test_python_interpreter_is_the_only_execution_transition():
@@ -218,6 +246,66 @@ def test_unavailable_sandbox_never_falls_back(tmp_path, monkeypatch):
         GVOSSandboxExecutor(guard, tmp_path / "committed")
 
 
+MAPPING_FAILURES = (
+    "bwrap: setting up uid map: Permission denied\n",
+    "bwrap: error writing to setgroups: Permission denied\n",
+    "bwrap: setting up gid map: Permission denied\n",
+)
+
+
+@pytest.mark.parametrize("stderr", MAPPING_FAILURES)
+def test_mapping_setup_failure_makes_sandbox_unavailable(tmp_path, monkeypatch, stderr):
+    import gvai.os_sandbox as sandbox
+
+    monkeypatch.setattr(sandbox, "bwrap_path", lambda: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandbox, "libseccomp_available", lambda: True)
+    calls = []
+
+    def failed_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1, "ok\n", stderr)
+
+    monkeypatch.setattr(sandbox.subprocess, "run", failed_run)
+    guard = GVRuntimeGuardV2(GVSentinel(), GVRuntimePolicy(GVEffectGate([])))
+    with pytest.raises(sandbox.OSSandboxUnavailable, match="Refusing to fall back"):
+        GVOSSandboxExecutor(guard, tmp_path / "committed")
+    assert len(calls) == 1
+    assert calls[0][0] == "/usr/bin/bwrap"
+    for namespace in ("user", "pid", "net", "uts", "ipc"):
+        assert f"--unshare-{namespace}" in calls[0]
+    assert not list((tmp_path / "committed").iterdir())
+
+
+@pytest.mark.parametrize("stderr", MAPPING_FAILURES)
+def test_mapping_failure_after_availability_check_preserves_evidence_and_denies_commit(
+    tmp_path, monkeypatch, stderr,
+):
+    import gvai.os_sandbox as sandbox
+
+    monkeypatch.setattr(sandbox, "bwrap_usable", lambda: True)
+    monkeypatch.setattr(sandbox, "bwrap_path", lambda: "/usr/bin/bwrap")
+
+    def failed_run(command, **kwargs):
+        work = Path(command[command.index("--bind") + 1])
+        (work / "must-not-commit").write_text("untrusted")
+        return subprocess.CompletedProcess(
+            command, 1, '{"completed": true, "events": [], "error": null}', stderr,
+        )
+
+    monkeypatch.setattr(sandbox.subprocess, "run", failed_run)
+    guard = GVRuntimeGuardV2(GVSentinel(), GVRuntimePolicy(GVEffectGate([])))
+    executor = GVOSSandboxExecutor(guard, tmp_path / "committed")
+    result = executor.execute("safe_work", guard.observe([1.0] * 4))
+    assert result.returncode == 1
+    assert result.stderr == stderr
+    assert result.error
+    assert not result.completed
+    assert not result.allowed
+    assert not result.committed
+    assert "os_boundary_failure" in result.observed_effects
+    assert not list((tmp_path / "committed").iterdir())
+
+
 PROBE = r"""
 import ctypes
 import errno
@@ -283,8 +371,20 @@ result = {
     "profile_change": denied(
         lambda: Path("/proc/self/attr/current").write_text("changeprofile gvai-bwrap")
     ),
+    "profile_change_worker": denied(
+        lambda: Path("/proc/self/attr/current").write_text("changeprofile gvai-worker")
+    ),
+    "profile_change_unconfined": denied(
+        lambda: Path("/proc/self/attr/current").write_text("changeprofile unconfined")
+    ),
     "uid_map_write": denied(
         lambda: Path("/proc/self/uid_map").write_text("0 0 1\n")
+    ),
+    "gid_map_write": denied(
+        lambda: Path("/proc/self/gid_map").write_text("0 0 1\n")
+    ),
+    "setgroups_write": denied(
+        lambda: Path("/proc/self/setgroups").write_text("allow\n")
     ),
     "network": denied(lambda: socket.create_connection(("1.1.1.1", 443), timeout=1)),
     "socket_creation": {
@@ -303,6 +403,7 @@ result = {
     "clear_nnp": syscall_result(lambda: libc.prctl(38, 0, 0, 0, 0)),
     "bwrap_exec": denied(lambda: os.execv("/usr/bin/bwrap", ["bwrap", "--version"])),
 }
+result["label_after_attempts"] = Path("/proc/self/attr/current").read_text().strip()
 Path("/work/probe.txt").write_text("safe output\n")
 print(json.dumps(result))
 """
@@ -387,9 +488,11 @@ def test_supported_host_worker_cannot_recover_launcher_privileges(host_probe):
     assert status["Seccomp"] == "2"
     for operation in (
         "unshare", "mount", "remount", "umount", "capset",
-        "bwrap_exec", "profile_change",
+        "bwrap_exec", "profile_change", "profile_change_worker",
+        "profile_change_unconfined",
     ):
         assert host_probe[operation] in {errno.EPERM, errno.EACCES}, (operation, host_probe)
+    assert host_probe["label_after_attempts"] == host_probe["label"]
     assert host_probe["clear_nnp"] in {errno.EPERM, errno.EINVAL}
 
 
@@ -397,7 +500,9 @@ def test_supported_host_worker_cannot_recover_launcher_privileges(host_probe):
 def test_supported_host_files_network_and_processes_are_blocked(host_probe):
     for operation in ("host_file", "apparmor_write"):
         assert host_probe[operation] in {errno.ENOENT, errno.EACCES, errno.EPERM}
-    for operation in ("policy_write", "uid_map_write"):
+    for operation in (
+        "policy_write", "uid_map_write", "gid_map_write", "setgroups_write",
+    ):
         assert host_probe[operation] in {errno.EROFS, errno.EACCES, errno.EPERM}
     assert host_probe["network"] in {errno.EACCES, errno.EPERM, errno.ENETUNREACH}
     for family, error in host_probe["socket_creation"].items():

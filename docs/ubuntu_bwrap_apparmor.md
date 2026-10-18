@@ -7,6 +7,12 @@ Nothing in this change loads policy, changes sysctls, installs a service, or
 contacts the DigitalOcean server. Do not enable governed workloads until all
 host acceptance and supervisor cancellation tests pass without security skips.
 
+**Current disposition after the second live failure: STOP.** UID-map setup is
+blocked by AppArmor disconnected-path resolution. No safe policy-only
+correction has been established. The installation/revision commands below are
+historical, human-gated procedures, not a recommendation to reload this
+unchanged candidate or to activate workloads. See the second-failure diagnosis.
+
 Target supplied by the operator:
 
 | Component | Required baseline |
@@ -52,7 +58,7 @@ Both drafts change the sandbox command/process-launch path. When integrating:
 
 ## Diagnosis and policy design
 
-### Reported live failure and minimal next experiment
+### First live failure and historical socket experiment
 
 The operator reports **19 passed, 1 setup error**, stopped at the first error,
 on the target baseline above, as unprivileged `gvaitest` (UID/GID 1000).
@@ -97,7 +103,7 @@ The other denials remain unallowed:
   and the setup stage. Do not infer a required path or allow
   `attach_disconnected`, recursive procfs reads, or broad file permissions.
 
-For the next **separately approved human-run** experiment, stop dispatch and
+For the first **separately approved human-run** experiment, the proposal was to stop dispatch and
 reap governed processes, preserve the current policy and full audit evidence,
 and apply only the one-rule launcher change using the existing-profile
 revision procedure below. Keep worker policy, namespaces (especially
@@ -109,6 +115,153 @@ records (profile, PID/comm, operation, name/info, requested/denied masks,
 family/type/protocol and peer where present). If failure advances, that is
 diagnostic progress, **not acceptance**. Review the next fatal operation
 before any further policy change; do not permit every remaining log entry.
+
+### Second live failure: UID-map open on a disconnected procfs mount
+
+At commit `66b0d4e27716a7cff8d21f8c1561bbd834b43391`, the operator reports
+**22 passed, 1 host setup error**, stopped at the first error. The target
+baseline was unchanged: Ubuntu 24.04.5 / kernel 6.8.0-147-generic,
+non-setuid Bubblewrap 0.9.0, AppArmor 4.0.1, restricted user namespaces enabled,
+both GVAI profiles enforcing, and unprivileged UID/GID 1000. The revised
+launcher Unix datagram creation rule was installed and loaded.
+
+Bubblewrap stderr:
+
+```text
+bwrap: setting up uid map: Permission denied
+```
+
+Supplied critical audit event:
+
+```text
+apparmor="DENIED" operation="open" class="file" info="Failed name lookup - disconnected path" error=-13 profile="gvai-bwrap" name="proc/7029/uid_map" requested_mask="wr" denied_mask="wr"
+```
+
+Other observations were `/proc/filesystems`, `/proc/<pid>/mounts`, and
+disconnected-path `getattr` denials. The operator preserved the full log at
+`/root/gvai-apparmor-uid-map-failure.log` on DigitalOcean. That file was **not
+accessed**, and no claim here depends on its unavailable contents.
+
+**Established from the supplied evidence:** a launcher-labelled mapping-file
+open failed AppArmor name resolution with `EACCES`. This is stronger evidence
+than the earlier unattributed `getattr` messages. The candidate already has
+`/proc/{self,[0-9]*}/{uid_map,gid_map,setgroups} rw,`; the missing leading `/`
+in the audit name is not a request to add a relative-path rule. AppArmor can
+return a partial name for auditing while refusing to use it for mediation.
+Adding `/proc/** rw,`, an `owner` qualifier, another capability, or a rule
+spelling out PID 7029 does not repair failed name resolution. The denial is
+at **open**, before the mapping write's separate kernel authorization checks.
+
+#### Upstream sequence and mount provenance
+
+The following is verified against upstream Bubblewrap **v0.9.0**, not a trace
+of the distribution-patched binary or target Ubuntu kernel:
+
+1. `main()` opens `/proc` with `O_PATH` before `raw_clone()`.
+   The clone always includes `CLONE_NEWNS`; the fixed executor also requests
+   user, PID, network, UTS, and IPC namespaces. Open FDs retain their original
+   mount references; cloning the mount tree does not retarget them.
+2. For non-setuid execution, the child initializes loopback and then calls
+   `write_uid_gid_map(..., pid=-1, deny_groups=TRUE, map_root=FALSE)`.
+   With `--dev`, the initial maps are `0 1000 1` for UID and GID, with
+   `setgroups=deny` between the two writes.
+3. That helper opens `self` using `openat(proc_fd, ..., O_PATH)`, then
+   `write_file_at()` opens `uid_map` with **`O_RDWR|O_CLOEXEC`**, explaining
+   the audit's `wr` mask. It writes UID map, then (when requested) `setgroups`,
+   then GID map. It does not re-open `/proc` in the child's mount namespace.
+4. Only after that first mapping does setup make mounts slave, build the
+   root tree, perform the first pivot, detach `oldroot`, perform the second
+   pivot, and detach the temporary setup root.
+5. Because `--dev` required namespace UID/GID 0 for devpts, another
+   `unshare(CLONE_NEWUSER)` maps UID/GID back to 1000 via the **same original
+   proc FD** (`1000 0 1`, `deny_groups=FALSE`). Thus fixing only the first
+   mapping's FD provenance would not resolve the entire sequence.
+6. Capabilities are dropped, setup's proc FD is closed on the exec path,
+   seccomp is applied, and Python is executed through the mandatory worker
+   stack. The UID-map error prevents reaching that transition.
+
+In Linux v6.8, `copy_mnt_ns()` copies mount topology and retargets the task's
+root/cwd, not open file descriptions. `our_mnt()` checks whether a mount belongs
+to the current mount namespace. AppArmor's `d_namespace_path()` treats a
+foreign-namespace mount as disconnected, even if a familiar `/proc` spelling
+exists in both namespaces. Without attachment, `disconnect()` returns
+`-EACCES` and strips a leading slash. `profile_path_perm()` returns that error
+**before** the pathname permission matcher runs.
+
+**Strong source-supported diagnosis:** the inherited procfs FD can already
+be disconnected for the **first mapping immediately after `CLONE_NEWNS`**.
+It is incorrect to infer that this denial must occur after `pivot_root` or
+an unmount. A local, unconfined mount-identity experiment opened `/proc`,
+passed its FD through `unshare --user --map-root-user --mount`, and compared it
+with a fresh `/proc` FD: the old mount ID was absent from the child's mountinfo
+while the fresh mount ID was present. No policy was loaded and no sysctl
+changed. This corroborates FD/mount provenance, **not AppArmor acceptance**.
+
+**Still unverified:** which mapping call failed on the host, the exact
+distribution build and Ubuntu backport behavior, PID/stage correlation, and
+subsequent DAC/user-namespace mapping checks. Both mapping calls use the same
+stderr. The supplied record alone does not distinguish them. A PID from the
+original procfs view also does not establish the process's inner PID.
+The procfs read and `getattr` denials remain separately unattributed.
+
+#### Options considered: no disconnected-path shortcut
+
+| Approach | Assessment |
+| --- | --- |
+| More procfs path permissions | Does not fix resolution; increases exposure without addressing the fatal operation. Rejected. |
+| `attach_disconnected` on the launcher | Changes naming for all its disconnected objects, not just mapping files. The Noble manual explicitly warns of aliasing and unauthorized access and calls it a debugging/development facility. Existing broad setup-path/mount grants make this particularly concerning. Not adopted. |
+| `attach_disconnected.path` with a private prefix | Can separate synthetic names from ordinary root names, but remains profile-wide attachment. A prefix plus mapping globs does not prove procfs object identity, mount provenance, or that a PID is the intended child. Exact parser/kernel support and alias safety are unverified. Not adopted. |
+| `mediate_deleted` or `chroot_relative` | Changes different path semantics; not a demonstrated repair for a foreign-mount FD. Not adopted. |
+| Extra `--proc /proc` or a wrapper bind mount | The command already mounts a worker procfs. It does not retarget Bubblewrap's earlier retained FD. A bind creates another mount reference; reopening through the connected view is still required. Keeping host procfs visible to the worker is unacceptable. |
+| Remove `--dev`, PID isolation, root pivots, or use namespace UID 0 permanently | Avoids or moves some setup steps but changes device/isolation/identity contracts, and does not repair the pre-clone FD. Not a drop-in correction. |
+| Setuid launcher, host-capable mapping helpers, or unconfined mapping service | Enlarges host authority/TCB; no justification here. Not adopted. |
+| Connected-procfs launcher implementation | Preferred research direction, but requires a separately reviewed Bubblewrap patch/redesign and kernel-backed tests. Not implemented or claimed safe here. |
+
+A narrowly restricted profile **can authorize connected mapping paths** in
+principle, but ordinary path rules cannot selectively turn a disconnected
+object into a verified procfs mapping file. No safe policy-only change for
+the stock launch sequence has been demonstrated. Stop rather than relaxing
+this boundary.
+
+For a future launcher patch, re-resolve mapping paths through a verified
+procfs mount in the **current** mount namespace before the initial mapping;
+after the root pivots, use a connected current-PID-namespace procfs view for
+the second mapping. One bounded prototype to evaluate is a separate,
+short-lived mapping-only proc FD for the `pid=-1` branch, opened afresh at each
+mapping call; do not silently reuse the inherited FD if opening or verifying
+the connected view fails. Mapping uses `self`, but numeric PIDs and other uses
+of the global proc FD have different semantics: blindly replacing that global
+FD could break mount helpers, PID lookups, or cleanup. Review every use instead.
+Preserve both intended maps, deny-setgroups sequencing, mount isolation,
+device behavior, capability bounding-set cleanup after nested userns,
+`no_new_privs`, seccomp timing, and the mandatory stacked exec.
+Verify mount identity and procfs type, close all setup FDs, and remove all
+host/setup views before untrusted execution. No host UID-map service, alternate
+binary path, new capabilities, or permissive policy is proposed in this PR.
+Even a mapping-only prototype could leave other disconnected-FD operations
+blocked. Those need separate attribution, not broader attachment or a claim
+that this design resolves every bootstrap operation.
+
+#### Next evidence collection and acceptance gate
+
+No further live policy experiment is recommended with this unchanged
+candidate. A human can separately authorize **read-only evidence collection**
+from the preserved log: correlate complete audit event serials, PID/comm,
+timestamps, namespace/mount identities, mapping pass, and process exit status.
+Determine the exact installed Bubblewrap build/source. Any future tracing must
+be explicitly authorized in a controlled test environment; ptrace can alter
+behavior, so its result is not acceptance. Do not change enforcement just to
+get a trace. This investigation did not access or modify DigitalOcean.
+
+Before considering a redesigned launcher, reproduce both map passes in a
+disposable restricted/enforcing Ubuntu environment. Require connected object
+provenance, no surviving setup mount/FD, an exact enforcing two-profile label,
+zero capabilities, `NoNewPrivs=1`, active seccomp, all namespace/identity
+contracts, and all existing negative/fixed-worker cases with zero security
+skips. Worker UID-map, GID-map and setgroups writes must remain blocked.
+Neither the latest 22 passing tests nor disappearance of a single mapping
+denial demonstrates that boundary. Supervisor cancellation remains a separate
+acceptance blocker.
 
 Ubuntu's user-namespace restriction is distinct from ordinary DAC and the
 `unprivileged_userns_clone` sysctl. An unconfined application can enter the
@@ -160,6 +313,14 @@ prove the Ubuntu kernel implements this transition as expected.** Require the
 observed two-profile enforcing label and all negative tests on the target.
 Do not clear `no_new_privs`, use an unconfined launcher, or drop the worker
 profile to work around a denial.
+
+Every member of the stack must permit an operation. In particular the worker
+has no executable or `change_profile` grant: the launcher's Python exec rule
+cannot by itself authorize a second exec from the worker or remove the worker
+component. Negative syscall results alone cannot attribute enforcement to
+AppArmor (seccomp, DAC, and read-only mounts can also deny them). Acceptance
+must observe the exact enforcing stack before and after privilege-recovery
+attempts, as well as the capability and syscall results.
 
 ### Namespace setup, mapping, and privilege removal
 
@@ -478,7 +639,7 @@ continue to fail closed. Do not disable AppArmor or alter the restriction sysctl
 
 ## Validation record and remaining blockers
 
-### Local correction to PR #16 (not published)
+### First-failure validation (historical, now in baseline)
 
 Prepared on `feature/ubuntu-bwrap-apparmor` from
 `668f30b8d561892f07431dea576fd40aed37235f`. The starting worktree was clean.
@@ -543,6 +704,78 @@ or policy failure was suppressed.
 * No publication or draft PR is performed; the final task instruction forbids
   publishing. This is a local review artifact only.
 
+### Second-failure investigation (local only)
+
+Revalidated on `feature/ubuntu-bwrap-apparmor` at
+`66b0d4e27716a7cff8d21f8c1561bbd834b43391`. This runbook and
+`tests/test_apparmor_sandbox.py` already contained uncommitted second-failure
+investigation edits at the start of this pass; those edits were preserved,
+checked against public upstream sources, and extended. Only those two files
+differ from HEAD. **Neither profile nor any production
+launcher/worker code changed.** No commit, push, merge, deployment, PR update,
+DigitalOcean access, policy activation, or sysctl change was performed.
+PRs #14/#15 were not modified.
+
+The local environment remains Ubuntu 24.04.5 userspace, Bubblewrap 0.9.0,
+kernel `6.8.0-1064-azure`, unconfined UID/GID 1000, restriction sysctl **0**.
+Tests used a newly restored session-only Python 3.14.2 virtualenv after the
+default Python reported that pytest was missing; sandbox Python is 3.12.3.
+The AppArmor parser was also absent. Ubuntu's
+`apparmor_4.0.1really4.0.1-0ubuntu0.24.04.9_amd64.deb` was downloaded and
+extracted into session storage, not installed. Compilation used that parser's
+bundled config and ABI 4.0 with `--warn=all --Werror -Q -K`, without
+installing/loading policy or writing its cache. A version-only invocation
+warned that the system parser config was absent; the configured compile
+produced no warnings.
+
+New regression contracts reject disconnected/deleted-object relabelling and
+procfs write expansion. Synthetic UID-map, setgroups, and GID-map errors test
+both availability failure without fallback and execution failure after a
+previous availability check, retaining stderr and refusing authorization/output
+promotion even with success-shaped JSON. Only UID-map failure was reported
+live; setgroups/GID-map failures are anticipatory test cases. The mandatory
+host probe additionally attempts GID-map and setgroups writes under the worker.
+It now attempts replacement with the launcher-only, worker-only, and unconfined
+labels, and requires the observed label after all negative attempts to equal
+the initial enforcing stack. The embedded probe's Python syntax was compiled
+separately because ordinary pytest runs skip its execution.
+These unit contracts are **not proof of kernel enforcement**.
+
+The inline probe's interpreter-only mandatory `rPx -> &gvai-worker` transition
+and the real fixed `/runner.py` executor cases remain unchanged. All worker
+capability/network/mount/userns/process/file/policy restrictions remain in the
+policy and acceptance requirements. The latest live failure occurs before
+worker exec; loaded profiles alone cannot establish that the stack has been
+entered or that launcher privileges are unrecoverable. Runtime verification
+remains blocked, not waived.
+
+| Second-investigation validation | Result |
+| --- | --- |
+| AppArmor 4.0.1 / ABI 4.0, `--warn=all --Werror -Q -K`, bundled config/includes | Passed; unchanged policy, no load/cache writes |
+| Focused `test_apparmor_sandbox.py` + `test_os_sandbox.py` | **46 passed, 8 skipped**, no failures/errors |
+| Full `python -m pytest -q -rs -p no:cacheprovider` | **222 passed, 8 skipped**, no failures/errors |
+| Explicit `GVAI_APPARMOR_ACCEPTANCE=1` suite | **30 passed, 8 setup errors**, no skips |
+| Local inherited/reopened procfs FD experiment | Old mount absent from current mountinfo, fresh mount present |
+| Regression module and embedded acceptance probe Python syntax | Passed |
+| `git diff --check` and policy/production-code comparison to HEAD | Passed; policy and production code identical |
+| Restricted-kernel transition, mapping correction, target-host acceptance | **Not verified** |
+
+Every ordinary-run skip is an explicit opt-in host case; existing OS
+regressions ran. Every explicit acceptance setup error is the local restriction
+sysctl mismatch (`0`, required `1`) before probe execution, not the target UID-map
+failure. No restriction was changed to make a test pass. The editor test tool
+found no tests, so validation used the existing pytest runner directly.
+The parser succeeded on its first configured compile in this pass.
+The default-Python missing-pytest failure, missing system parser, and editor
+test discovery limitation were resolved using the isolated dependencies and
+pytest runner described above. There were no regression assertion failures.
+No test of the proposed launcher
+redesign was run because no redesign was implemented.
+
+**Review decision requested:** retain the current restrictions and stop
+acceptance here; separately scope a connected-procfs launcher patch and its
+restricted/enforcing-kernel verification before any further policy revision.
+
 ## Research sources
 
 * [Ubuntu Security: Understanding AppArmor user namespace restriction](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)
@@ -552,6 +785,20 @@ or policy failure was suppressed.
 * [Bubblewrap v0.9.0 implementation](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c)
   establishes early `no_new_privs`, namespace/mapping/pivot order, capability
   dropping, and seccomp-before-exec.
+* [Mapping helper](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c#L950),
+  [pre-clone proc FD](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c#L2816),
+  [first mapping](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c#L3050),
+  [nested userns mapping](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c#L3209),
+  and [write helper](https://github.com/containers/bubblewrap/blob/v0.9.0/utils.c#L447)
+  establish both mapping passes and the `O_RDWR` open.
+* [Linux v6.8 mount namespace copying](https://github.com/torvalds/linux/blob/v6.8/fs/namespace.c#L3760)
+  and [`our_mnt()`](https://github.com/torvalds/linux/blob/v6.8/fs/namespace.c#L5243)
+  distinguish the mount in an inherited FD from a mount in the current namespace.
+* [AppArmor path resolution](https://github.com/torvalds/linux/blob/v6.8/security/apparmor/path.c)
+  and [file permission checks](https://github.com/torvalds/linux/blob/v6.8/security/apparmor/file.c#L249)
+  establish disconnected-name rejection before ordinary path-rule matching.
+  These upstream sources corroborate the mechanism; they do not certify
+  Ubuntu's exact target kernel build.
 * [Bubblewrap v0.9.0 loopback initialization](https://github.com/containers/bubblewrap/blob/v0.9.0/network.c)
   calls `if_nametoindex("lo")` before raw routing-netlink setup.
 * [glibc 2.39 interface lookup](https://github.com/bminor/glibc/blob/glibc-2.39/sysdeps/unix/sysv/linux/if_index.c)
