@@ -140,6 +140,11 @@ def test_executor_keeps_fixed_worker_and_namespace_boundary(tmp_path, monkeypatc
     )
     for namespace in ("user", "pid", "net", "uts", "ipc"):
         assert f"--unshare-{namespace}" in command
+    for option, path in (("--proc", "/proc"), ("--dev", "/dev")):
+        assert command.count(option) == 1
+        assert command[command.index(option) + 1] == path
+    for option in ("--userns", "--userns2", "--userns-block-fd", "--uid", "--gid"):
+        assert option not in command
     assert command[command.index("--cap-drop") + 1] == "ALL"
     assert captured["pass_fds"] == (int(command[command.index("--seccomp") + 1]),)
     assert captured["env"] == {
@@ -247,6 +252,8 @@ def test_unavailable_sandbox_never_falls_back(tmp_path, monkeypatch):
 
 
 MAPPING_FAILURES = (
+    "bwrap: Can't open /proc: Permission denied\n",
+    "bwrap: open /proc/self failed: Permission denied\n",
     "bwrap: setting up uid map: Permission denied\n",
     "bwrap: error writing to setgroups: Permission denied\n",
     "bwrap: setting up gid map: Permission denied\n",
@@ -358,7 +365,7 @@ result = {
     )},
     "namespaces": {
         name: os.readlink("/proc/self/ns/" + name)
-        for name in ("user", "pid", "net")
+        for name in ("user", "pid", "mnt", "net", "uts", "ipc")
     },
     "uid_map": Path("/proc/self/uid_map").read_text().split(),
     "gid_map": Path("/proc/self/gid_map").read_text().split(),
@@ -407,6 +414,13 @@ result["label_after_attempts"] = Path("/proc/self/attr/current").read_text().str
 Path("/work/probe.txt").write_text("safe output\n")
 print(json.dumps(result))
 """
+
+
+def test_host_probe_compiles_without_host_acceptance():
+    compile(
+        "HOST_SECRET = '/unmounted-host-secret'\n" + PROBE,
+        "<apparmor-host-probe>", "exec",
+    )
 
 
 @pytest.fixture
@@ -472,6 +486,7 @@ def test_supported_host_namespaces_and_enforcing_stack(host_probe):
         "gvai-bwrap", "gvai-worker",
     }
     assert result["label"].endswith(" (enforce)")
+    assert set(result["namespaces"]) == {"user", "pid", "mnt", "net", "uts", "ipc"}
     for name, namespace in result["namespaces"].items():
         assert namespace != os.readlink(f"/proc/self/ns/{name}")
     assert result["uid_map"] == ["1000", "0", "1"]
