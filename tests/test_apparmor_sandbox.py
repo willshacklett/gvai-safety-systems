@@ -291,8 +291,15 @@ def test_mapping_failure_after_availability_check_preserves_evidence_and_denies_
 
     monkeypatch.setattr(sandbox, "bwrap_usable", lambda: True)
     monkeypatch.setattr(sandbox, "bwrap_path", lambda: "/usr/bin/bwrap")
+    calls = []
+    closed = []
+    monkeypatch.setattr(
+        sandbox, "build_no_spawn_filter",
+        lambda: SimpleNamespace(fd=77, close=lambda: closed.append(77)),
+    )
 
     def failed_run(command, **kwargs):
+        calls.append((command, kwargs))
         work = Path(command[command.index("--bind") + 1])
         (work / "must-not-commit").write_text("untrusted")
         return subprocess.CompletedProcess(
@@ -311,6 +318,11 @@ def test_mapping_failure_after_availability_check_preserves_evidence_and_denies_
     assert not result.committed
     assert "os_boundary_failure" in result.observed_effects
     assert not list((tmp_path / "committed").iterdir())
+    assert len(calls) == 1
+    assert calls[0][1]["pass_fds"] == (77,)
+    assert closed == [77]
+    for namespace in ("user", "pid", "net", "uts", "ipc"):
+        assert f"--unshare-{namespace}" in calls[0][0]
 
 
 PROBE = r"""
@@ -430,10 +442,54 @@ def host_requirements():
     assert Path("/sys/module/apparmor/parameters/enabled").read_text().strip() == "Y"
     assert Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").read_text().strip() == "1"
     assert Path("/proc/sys/kernel/unprivileged_userns_clone").read_text().strip() == "1"
-    assert int(Path("/proc/sys/user/max_user_namespaces").read_text()) > 0
+    assert Path("/proc/sys/user/max_user_namespaces").read_text().strip() == "3692"
+    assert Path("/sys/kernel/security/apparmor/features/domain/stack").read_text().strip() == "yes"
     assert bwrap_path() == "/usr/bin/bwrap"
     assert subprocess.check_output(["/usr/bin/bwrap", "--version"], text=True).strip() == "bubblewrap 0.9.0"
     assert Path("/usr/bin/python3").resolve() == Path("/usr/bin/python3.12")
+
+
+@pytest.mark.parametrize("mismatch", [
+    None, "enabled", "restriction", "clone", "limit", "stack",
+])
+def test_host_preflight_requires_reproduction_baseline(monkeypatch, request, mismatch):
+    import gvai.os_sandbox as sandbox
+
+    values = {
+        "/sys/module/apparmor/parameters/enabled": ("enabled", "Y"),
+        "/proc/sys/kernel/apparmor_restrict_unprivileged_userns": ("restriction", "1"),
+        "/proc/sys/kernel/unprivileged_userns_clone": ("clone", "1"),
+        "/proc/sys/user/max_user_namespaces": ("limit", "3692"),
+        "/sys/kernel/security/apparmor/features/domain/stack": ("stack", "yes"),
+    }
+
+    def read_text(path):
+        key, value = values[str(path)]
+        return "0\n" if key == mismatch else value + "\n"
+
+    def version(command, **kwargs):
+        assert command == ["/usr/bin/bwrap", "--version"]
+        assert kwargs == {"text": True}
+        return "bubblewrap 0.9.0\n"
+
+    original_resolve = Path.resolve
+    monkeypatch.setattr(os, "getuid", lambda: 1000)
+    monkeypatch.setattr(os, "getgid", lambda: 1000)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(
+        Path, "resolve",
+        lambda path: (
+            Path("/usr/bin/python3.12") if path == Path("/usr/bin/python3")
+            else original_resolve(path)
+        ),
+    )
+    monkeypatch.setattr(sandbox.subprocess, "check_output", version)
+    monkeypatch.setattr(__name__ + ".bwrap_path", lambda: "/usr/bin/bwrap")
+    if mismatch is None:
+        request.getfixturevalue("host_requirements")
+    else:
+        with pytest.raises(AssertionError):
+            request.getfixturevalue("host_requirements")
 
 
 @pytest.fixture

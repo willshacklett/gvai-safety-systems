@@ -19,6 +19,10 @@ source review corroborates the inherited-procfs-FD mechanism but establishes
 no safe correction; neither policy nor production launcher/worker code is
 changed by this follow-up. See the dated investigation record below.
 
+For the separate next-build design, see the
+[disposable reproduction plan](ubuntu_bwrap_reproduction.md). It does not
+authorize another server experiment or implement a launcher correction.
+
 Target supplied by the operator:
 
 | Component | Required baseline |
