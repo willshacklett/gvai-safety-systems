@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GVAI offline safety knowledge registry v1",
+  "description": "Data for independent review, not an executable policy or production safety certification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "release_version", "publication_status", "published_at",
+    "license", "source_snapshot", "safeguards", "scenarios", "failures", "evidence"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "release_version": {"$ref": "#/$defs/version"},
+    "publication_status": {"const": "offline_review_only"},
+    "published_at": {"type": "null"},
+    "license": {"const": "Apache-2.0"},
+    "source_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "inspected_revision", "meaning"],
+      "properties": {
+        "repository": {"const": "willshacklett/gvai-safety-systems"},
+        "inspected_revision": {"$ref": "#/$defs/sha1"},
+        "meaning": {"const": "Inspected source snapshot, not the producing revision of historical evidence."}
+      }
+    },
+    "safeguards": {
+      "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeguard"}
+    },
+    "scenarios": {
+      "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/scenario"}
+    },
+    "failures": {
+      "type": "array", "maxItems": 100, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/failure"}
+    },
+    "evidence": {
+      "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/evidence"}
+    }
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "texts": {
+      "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/text"}
+    },
+    "id": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9-]*$"},
+    "ids": {
+      "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    },
+    "version": {"type": "string", "maxLength": 32, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "sha1": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {
+      "type": "string", "maxLength": 40, "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|\\+00:00)$"
+    },
+    "path": {
+      "description": "Repository-relative identifier only; never a URL or an instruction to fetch or execute.",
+      "type": "string", "minLength": 1, "maxLength": 240,
+      "pattern": "^([A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*/)*[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+$"
+    },
+    "assertion_type": {"enum": ["measured_observation", "attributed_historical_report", "claim", "hypothesis"]},
+    "implementation_status": {"enum": ["implemented", "proposed", "unverified"]},
+    "evidence_status": {"enum": ["historical_unreproduced", "independently_reproduced", "unverified"]},
+    "safeguard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "purpose", "assertion_type", "implementation_status",
+        "evidence_status", "threat_assumptions", "enforcement_requirements",
+        "trusted_components", "limitations", "scenario_ids", "evidence_ids", "adoption"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"$ref": "#/$defs/version"},
+        "purpose": {"$ref": "#/$defs/text"},
+        "assertion_type": {"$ref": "#/$defs/assertion_type"},
+        "implementation_status": {"$ref": "#/$defs/implementation_status"},
+        "evidence_status": {"$ref": "#/$defs/evidence_status"},
+        "threat_assumptions": {"$ref": "#/$defs/texts"},
+        "enforcement_requirements": {"$ref": "#/$defs/texts"},
+        "trusted_components": {"$ref": "#/$defs/texts"},
+        "limitations": {"$ref": "#/$defs/texts"},
+        "scenario_ids": {"$ref": "#/$defs/ids"},
+        "evidence_ids": {"$ref": "#/$defs/ids"},
+        "adoption": {"$ref": "#/$defs/adoption"}
+      }
+    },
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supported_environment", "required_external_controls", "compatibility_exclusions",
+        "verification_requirements", "independent_enforcement_required",
+        "human_approval_required", "on_missing_prerequisites", "rollback_requirements"
+      ],
+      "properties": {
+        "supported_environment": {"$ref": "#/$defs/texts"},
+        "required_external_controls": {"$ref": "#/$defs/texts"},
+        "compatibility_exclusions": {"$ref": "#/$defs/texts"},
+        "verification_requirements": {"$ref": "#/$defs/texts"},
+        "independent_enforcement_required": {"const": true},
+        "human_approval_required": {"const": true},
+        "on_missing_prerequisites": {"const": "unsupported_do_not_weaken_controls"},
+        "rollback_requirements": {"$ref": "#/$defs/texts"}
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "assertion_type", "preconditions", "prohibited_outcome",
+        "safe_reproduction", "expected_result"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"$ref": "#/$defs/version"},
+        "assertion_type": {"$ref": "#/$defs/assertion_type"},
+        "preconditions": {"$ref": "#/$defs/texts"},
+        "prohibited_outcome": {"$ref": "#/$defs/text"},
+        "safe_reproduction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["test_file", "test_name", "requirements", "automatic_execution"],
+          "properties": {
+            "test_file": {"$ref": "#/$defs/path"},
+            "test_name": {"type": "string", "maxLength": 160, "pattern": "^test_[a-z0-9_]+$"},
+            "requirements": {"$ref": "#/$defs/texts"},
+            "automatic_execution": {"const": false}
+          }
+        },
+        "expected_result": {"$ref": "#/$defs/text"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "classification", "assertion_type", "safeguard_id",
+        "affected_versions", "description", "evidence_ids", "mitigation",
+        "superseded_by"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"$ref": "#/$defs/version"},
+        "classification": {"enum": ["observed", "hypothetical"]},
+        "assertion_type": {"$ref": "#/$defs/assertion_type"},
+        "safeguard_id": {"$ref": "#/$defs/id"},
+        "affected_versions": {
+          "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/version"}
+        },
+        "description": {"$ref": "#/$defs/text"},
+        "evidence_ids": {
+          "type": "array", "maxItems": 100, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "mitigation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "requirements", "evidence_ids"],
+          "properties": {
+            "status": {"enum": ["proposed", "tested", "unverified"]},
+            "requirements": {"$ref": "#/$defs/texts"},
+            "evidence_ids": {
+              "type": "array", "maxItems": 100, "uniqueItems": true,
+              "items": {"$ref": "#/$defs/id"}
+            }
+          }
+        },
+        "superseded_by": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"classification": {"const": "hypothetical"}}},
+          "then": {"properties": {"assertion_type": {"const": "hypothesis"}}},
+          "else": {
+            "properties": {
+              "assertion_type": {"enum": ["measured_observation", "attributed_historical_report"]},
+              "evidence_ids": {"minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"mitigation": {"properties": {"status": {"const": "tested"}}}}},
+          "then": {"properties": {"mitigation": {"properties": {"evidence_ids": {"minItems": 1}}}}}
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "scenario_id", "assertion_type", "evidence_status",
+        "test_identity", "attribution", "recorded_at", "expected_outcome",
+        "observed_outcome", "execution_status", "reproduction_status",
+        "producing_revision", "dependency_versions", "independent_reproducer",
+        "test_counts", "environment", "artifact", "limitations"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"$ref": "#/$defs/version"},
+        "scenario_id": {"$ref": "#/$defs/id"},
+        "assertion_type": {"$ref": "#/$defs/assertion_type"},
+        "evidence_status": {"$ref": "#/$defs/evidence_status"},
+        "test_identity": {"$ref": "#/$defs/path"},
+        "attribution": {"$ref": "#/$defs/text"},
+        "recorded_at": {"$ref": "#/$defs/timestamp"},
+        "expected_outcome": {"$ref": "#/$defs/text"},
+        "observed_outcome": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/text"}]},
+        "execution_status": {"enum": ["reported_pass", "reported_fail", "measured_pass", "measured_fail", "skipped", "not_run"]},
+        "reproduction_status": {"enum": ["not_independently_reproduced", "independently_reproduced"]},
+        "producing_revision": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha1"}]},
+        "dependency_versions": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/texts"}]},
+        "independent_reproducer": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/text"}]},
+        "test_counts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["passed", "failed", "skipped"],
+          "properties": {
+            "passed": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000},
+            "failed": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000},
+            "skipped": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000}
+          }
+        },
+        "environment": {
+          "type": "object", "additionalProperties": false,
+          "required": ["system", "release", "machine", "python", "prerequisites"],
+          "properties": {
+            "system": {"$ref": "#/$defs/text"},
+            "release": {"$ref": "#/$defs/text"},
+            "machine": {"$ref": "#/$defs/text"},
+            "python": {"$ref": "#/$defs/text"},
+            "prerequisites": {"$ref": "#/$defs/texts"}
+          }
+        },
+        "artifact": {
+          "type": "object", "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {"$ref": "#/$defs/path"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "limitations": {"$ref": "#/$defs/texts"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"assertion_type": {"const": "attributed_historical_report"}}},
+          "then": {"properties": {"execution_status": {"enum": ["reported_pass", "reported_fail"]}}}
+        },
+        {
+          "if": {"properties": {"assertion_type": {"const": "measured_observation"}}},
+          "then": {
+            "properties": {
+              "execution_status": {"enum": ["measured_pass", "measured_fail"]},
+              "producing_revision": {"$ref": "#/$defs/sha1"},
+              "dependency_versions": {"$ref": "#/$defs/texts"},
+              "observed_outcome": {"$ref": "#/$defs/text"},
+              "test_counts": {
+                "properties": {
+                  "passed": {"type": "integer"},
+                  "failed": {"type": "integer"},
+                  "skipped": {"type": "integer"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"assertion_type": {"enum": ["claim", "hypothesis"]}}},
+          "then": {"properties": {"execution_status": {"enum": ["not_run", "skipped"]}, "observed_outcome": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"reproduction_status": {"const": "not_independently_reproduced"}}},
+          "then": {
+            "properties": {
+              "independent_reproducer": {"type": "null"},
+              "evidence_status": {"enum": ["historical_unreproduced", "unverified"]}
+            }
+          },
+          "else": {
+            "properties": {
+              "evidence_status": {"const": "independently_reproduced"},
+              "assertion_type": {"const": "measured_observation"},
+              "independent_reproducer": {"$ref": "#/$defs/text"},
+              "producing_revision": {"$ref": "#/$defs/sha1"},
+              "dependency_versions": {"$ref": "#/$defs/texts"}
+            }
+          }
+        }
+      ]
+    },
+    "integrity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "release_version", "algorithm", "publisher_authenticated", "warning", "files"],
+      "properties": {
+        "schema_version": {"const": "1.0.0"},
+        "release_version": {"$ref": "#/$defs/version"},
+        "algorithm": {"const": "sha256"},
+        "publisher_authenticated": {"const": false},
+        "warning": {"const": "Checksums alone do not authenticate the publisher. Obtain the expected manifest digest through an independently trusted review or release channel."},
+        "files": {
+          "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/manifest_entry"}
+        }
+      }
+    },
+    "manifest_entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}
