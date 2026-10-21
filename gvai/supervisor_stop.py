@@ -1,5 +1,7 @@
 """Disconnected stop-only controller. No admission, dispatch or publication API."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import fcntl
 import json
