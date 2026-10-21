@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Blocked Iron Switch VIII prerequisite inventory",
+  "description": "This schema deliberately cannot certify readiness or authorize execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "purpose", "source", "target_claims", "requirements", "review", "boundaries", "completion_rule", "preservation_rule"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "status": {"const": "blocked"},
+    "purpose": {"$ref": "#/$defs/text"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inspected_checkout", "design_revision", "design_path", "design_blob", "candidate_revision", "authoritative_experiment_revision", "phase_v_checkpoint", "phase_v_status", "reconciliation"],
+      "properties": {
+        "inspected_checkout": {"$ref": "#/$defs/git_hash"},
+        "design_revision": {"$ref": "#/$defs/git_hash"},
+        "design_path": {"const": "docs/ubuntu_bwrap_reproduction.md"},
+        "design_blob": {"$ref": "#/$defs/git_hash"},
+        "candidate_revision": {"$ref": "#/$defs/git_hash"},
+        "authoritative_experiment_revision": {"type": "null"},
+        "phase_v_checkpoint": {"$ref": "#/$defs/git_hash"},
+        "phase_v_status": {"const": "unavailable"},
+        "reconciliation": {"$ref": "#/$defs/text"}
+      }
+    },
+    "target_claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "ubuntu", "kernel", "architecture", "bubblewrap_reported_version", "apparmor_parser_reported_version", "python", "warning"],
+      "properties": {
+        "classification": {"const": "operator_supplied_not_verified"},
+        "ubuntu": {"$ref": "#/$defs/text"},
+        "kernel": {"$ref": "#/$defs/text"},
+        "architecture": {"$ref": "#/$defs/text"},
+        "bubblewrap_reported_version": {"$ref": "#/$defs/text"},
+        "apparmor_parser_reported_version": {"$ref": "#/$defs/text"},
+        "python": {"$ref": "#/$defs/text"},
+        "warning": {"$ref": "#/$defs/text"}
+      }
+    },
+    "requirements": {
+      "type": "array", "minItems": 12, "maxItems": 12, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "required_evidence", "status", "verified_pin", "evidence_sha256"],
+        "properties": {
+          "id": {
+            "enum": ["base-image", "hypervisor", "kernel", "bubblewrap", "apparmor", "reviewed-source", "policy-provenance", "python-dependencies", "provisioning-inputs", "administrator-export", "independent-ownership", "emergency-recovery"]
+          },
+          "required_evidence": {"$ref": "#/$defs/text"},
+          "status": {"const": "missing"},
+          "verified_pin": {"type": "null"},
+          "evidence_sha256": {"type": "null"}
+        }
+      }
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "approval_evidence", "rule"],
+      "properties": {
+        "status": {"const": "pending_independent_human_review"},
+        "approval_evidence": {"type": "null"},
+        "rule": {"$ref": "#/$defs/text"}
+      }
+    },
+    "boundaries": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provisioning_authorized", "policy_loading_authorized", "workloads_authorized", "digitalocean_access_authorized", "publication_authorized", "host_acceptance_verified", "independent_cancellation_verified", "emergency_recovery_verified"],
+      "properties": {
+        "provisioning_authorized": {"const": false},
+        "policy_loading_authorized": {"const": false},
+        "workloads_authorized": {"const": false},
+        "digitalocean_access_authorized": {"const": false},
+        "publication_authorized": {"const": false},
+        "host_acceptance_verified": {"const": false},
+        "independent_cancellation_verified": {"const": false},
+        "emergency_recovery_verified": {"const": false}
+      }
+    },
+    "completion_rule": {"$ref": "#/$defs/text"},
+    "preservation_rule": {"$ref": "#/$defs/text"}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "git_hash": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"}
+  }
+}
