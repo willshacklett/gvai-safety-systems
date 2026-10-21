@@ -6,6 +6,9 @@ from dataclasses import dataclass, replace
 import re
 
 
+_MAX_FENCE = 2**63 - 1
+
+
 @dataclass(frozen=True)
 class Context:
     domain: str
@@ -140,7 +143,11 @@ def _challenge(request: SyntheticRequest) -> tuple[str, str, int, str]:
 
 
 def _cancel(state: ModelState) -> ModelState:
-    return replace(state, fence=state.fence + 1, attempts=tuple(
+    valid_fence = _integer(state.fence)
+    next_fence = min(state.fence + 1, _MAX_FENCE) if valid_fence else state.fence
+    return replace(state, fence=next_fence,
+                   uncertain=state.uncertain or not valid_fence or next_fence == _MAX_FENCE,
+                   attempts=tuple(
         replace(item, phase=(
             "cancel_required" if item.phase in ("dispatch_pending", "modeled_running")
             else "invalidated"
@@ -169,16 +176,27 @@ def transition(
     """
     if type(state) is not ModelState:
         raise ValueError("A model state is required.")
+    if event == "shutdown":
+        # STOP ownership is independent of the validity of stored model context.
+        state = replace(state, stopped=True)
+        if (
+            type(state.context) is Context
+            and _integer(state.context.shutdown_generation)
+            and state.context.shutdown_generation < _MAX_FENCE
+        ):
+            state = replace(state, context=replace(
+                state.context, shutdown_generation=state.context.shutdown_generation + 1,
+            ))
+        else:
+            state = replace(state, uncertain=True)
     if not _integer(state.fence):
-        return ModelResult(_cancel(replace(state, uncertain=True, fence=0)), "invalid_fence")
+        return ModelResult(_cancel(replace(state, uncertain=True)), "invalid_fence")
     if not _context(state.context) or not _integer(state.now):
         return ModelResult(_cancel(replace(state, uncertain=True)), "invalid_state")
     if not _integer(now) or now < state.now:
-        if event == "shutdown":
-            state = replace(state, stopped=True, context=replace(
-                state.context, shutdown_generation=state.context.shutdown_generation + 1,
-            ))
         return ModelResult(_cancel(replace(state, uncertain=True)), "clock_uncertain")
+    if state.fence == _MAX_FENCE:
+        state = _cancel(replace(state, uncertain=True))
     state = replace(state, now=now)
     if any(
         item.phase in ("reserved", "dispatch_pending", "modeled_running", "modeled_complete")
@@ -194,9 +212,6 @@ def transition(
                         uncertain=True)
         return ModelResult(_cancel(state), "independent_recovery_required")
     if event == "shutdown":
-        state = replace(state, stopped=True, context=replace(
-            state.context, shutdown_generation=state.context.shutdown_generation + 1,
-        ))
         return ModelResult(_cancel(state), "shutdown_latched")
     if event == "revoke":
         if (

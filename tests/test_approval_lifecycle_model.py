@@ -564,3 +564,152 @@ def test_crash_cannot_erase_a_fenced_completion_record(state, scenario):
     assert crashed.attempts[0].phase == "invalidated"
     assert crashed.attempts[0].output_digest == "a" * 64
     assert crashed.attempts[0].dispatch_count == 1
+
+
+CORRUPT_METADATA = [
+    ("now", None), ("now", True), ("now", -1), ("now", 2**63),
+    ("context", None), ("context", {}),
+    ("fence", None), ("fence", True), ("fence", -1),
+    ("fence", "0"), ("fence", 2**63), ("fence", 2**80),
+]
+
+
+def assert_history_preserved(before, after):
+    assert after.consumed == before.consumed
+    assert after.challenges == before.challenges
+    assert after.revoked >= before.revoked
+    assert [item.request for item in after.attempts] == [item.request for item in before.attempts]
+    assert [item.fence for item in after.attempts] == [item.fence for item in before.attempts]
+    assert [item.dispatch_count for item in after.attempts] == [
+        item.dispatch_count for item in before.attempts
+    ]
+    assert [item.output_digest for item in after.attempts] == [
+        item.output_digest for item in before.attempts
+    ]
+
+
+@pytest.mark.parametrize("field,value", CORRUPT_METADATA)
+@pytest.mark.parametrize("cut", range(6))
+def test_stop_precedes_invalid_stored_metadata(state, scenario, field, value, cut):
+    corrupt = replace(prefix(state, scenario, cut), **{field: value})
+    stopped = step(corrupt, "shutdown")
+    assert stopped.stopped and stopped.uncertain
+    assert_history_preserved(corrupt, stopped)
+    if field == "fence":
+        assert type(stopped.fence) is type(value)
+        assert stopped.fence == value
+    if cut:
+        expected = (
+            "modeled_promoted" if cut == 5 else
+            "cancel_required" if cut in (2, 3) else "invalidated"
+        )
+        assert stopped.attempts[0].phase == expected
+    for event in ("shutdown", "restart", "crash", *STAGES):
+        stopped = step(stopped, event, request=scenario, fence=0)
+        assert stopped.stopped and stopped.uncertain
+        assert_history_preserved(corrupt, stopped)
+
+
+@pytest.mark.parametrize("generation", [None, True, -1, 2**63 - 1, 2**63])
+def test_stop_preserves_unincrementable_generation(state, scenario, generation):
+    corrupt = replace(prefix(state, scenario, 2), context=replace(
+        state.context, shutdown_generation=generation,
+    ))
+    stopped = step(corrupt, "shutdown")
+    assert stopped.stopped and stopped.uncertain
+    assert type(stopped.context.shutdown_generation) is type(generation)
+    assert stopped.context.shutdown_generation == generation
+    assert stopped.attempts[0].phase == "cancel_required"
+    assert_history_preserved(corrupt, stopped)
+
+
+@pytest.mark.parametrize("field,value", CORRUPT_METADATA)
+def test_invalid_metadata_defers_cancel_ack_without_losing_evidence(state, scenario, field, value):
+    pending = step(prefix(state, scenario, 2), "shutdown")
+    corrupt = replace(pending, **{field: value})
+    deferred = step(corrupt, "cancel_ack", request=scenario, fence=0)
+    assert deferred.stopped and deferred.uncertain
+    assert deferred.attempts[0].phase == "cancel_required"
+    assert_history_preserved(corrupt, deferred)
+
+
+@pytest.mark.parametrize("time", [None, True, NOW - 1, -1, 2**63])
+def test_invalid_event_time_defers_cancel_ack(state, scenario, time):
+    pending = step(prefix(state, scenario, 2), "shutdown")
+    deferred = step(pending, "cancel_ack", now=time, request=scenario, fence=0)
+    assert deferred.attempts[0].phase == "cancel_required"
+    assert deferred.stopped and deferred.uncertain
+    acknowledged = step(deferred, "cancel_ack", request=scenario, fence=0)
+    assert acknowledged.attempts[0].phase == "modeled_cancelled"
+    assert acknowledged.stopped and acknowledged.uncertain
+    assert_history_preserved(pending, acknowledged)
+
+
+@pytest.mark.parametrize("control", [
+    "shutdown", "revoke", "context_change", "expiry", "crash", "restart",
+])
+@pytest.mark.parametrize("cut", range(6))
+def test_fence_exhaustion_is_terminal_and_preserves_history(state, scenario, control, cut):
+    near_limit = replace(prefix(state, scenario, cut), fence=2**63 - 2)
+    exhausted = invalidate(near_limit, scenario, control)
+    if control == "expiry" and cut in (0, 5):
+        # No unpublished attempt exists to invalidate.
+        assert exhausted.fence == near_limit.fence
+        assert not exhausted.uncertain
+        assert_history_preserved(near_limit, exhausted)
+        return
+    assert exhausted.fence == 2**63 - 1
+    assert exhausted.uncertain
+    assert_history_preserved(near_limit, exhausted)
+    for event in ("shutdown", "revoke", "crash", "restart", *STAGES):
+        exhausted = step(exhausted, event, now=exhausted.now, request=scenario, fence=0)
+        assert exhausted.fence == 2**63 - 1
+        assert exhausted.uncertain
+        assert_history_preserved(near_limit, exhausted)
+
+
+@pytest.mark.parametrize("event", STAGES)
+def test_preexisting_maximum_fence_cannot_advance(state, scenario, event):
+    current = replace(prefix(state, scenario, STAGES.index(event)), fence=2**63 - 1)
+    blocked = step(current, event, request=scenario, fence=2**63 - 1)
+    assert blocked.fence == 2**63 - 1 and blocked.uncertain
+    assert_history_preserved(current, blocked)
+    assert not any(item.phase == "modeled_promoted" for item in blocked.attempts)
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_cancel_ack_at_terminal_fence_does_not_recover_authority(state, scenario, restart):
+    running = replace(prefix(state, scenario, 3), fence=2**63 - 2)
+    stopped = step(running, "shutdown")
+    if restart:
+        stopped = step(stopped, "restart")
+    for wrong_fence in (None, True, 1, 2**63 - 1):
+        rejected = step(stopped, "cancel_ack", request=scenario, fence=wrong_fence)
+        assert rejected.attempts[0].phase == "cancel_required"
+    acknowledged = step(stopped, "cancel_ack", request=scenario, fence=0)
+    assert acknowledged.attempts[0].phase == "modeled_cancelled"
+    assert acknowledged.stopped and acknowledged.uncertain
+    assert acknowledged.fence == 2**63 - 1
+    assert_history_preserved(running, acknowledged)
+    for event in STAGES:
+        blocked = step(acknowledged, event, request=scenario, fence=0)
+        assert blocked == acknowledged
+
+
+@pytest.mark.parametrize("control", ["revoke", "expiry"])
+def test_stop_and_other_invalidation_both_orderings(state, scenario, control):
+    for order in permutations(("shutdown", control)):
+        current = prefix(state, scenario, 3)
+        for event in order:
+            if event == "shutdown":
+                current = step(current, event, now=current.now)
+            else:
+                current = invalidate(current, scenario, event)
+        assert current.stopped
+        assert current.attempts[0].phase == "cancel_required"
+        assert step(current, "promote", now=current.now, request=scenario, fence=0) == current
+
+
+def test_non_model_state_still_rejects_without_fabricating_stop():
+    with pytest.raises(ValueError, match="model state"):
+        transition(None, "shutdown", now=NOW)

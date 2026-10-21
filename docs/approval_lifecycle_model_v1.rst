@@ -49,7 +49,8 @@ Modeled rules
 * issued_at <= not_before <= now < expires_at, maximum lifetime 60 seconds.
   Exact expiry fences all unpublished attempts and prevents completion/promotion.
   Time rollback/uncertainty permanently blocks admission in that model instance.
-* Shutdown latches permanently, even with uncertain time. Revocation increments the control generation
+* Shutdown latches before stored clock/context/fence validation, even with
+  uncertain time or malformed prior metadata. Revocation increments the control generation
   and conservatively invalidates all outstanding requests/running attempts.
 * Verifier/store/audit failure, crash or uncertain cancellation latches
   uncertainty and invalidates every unpublished attempt.
@@ -129,3 +130,30 @@ external effects after crashes. Output release must have its own atomic fenced
 commit and protected evidence; copied files and optional later audit are not
 equivalent. These requirements are not implemented or proven by deterministic
 serialized traces, and the model has no actual concurrency or persistence.
+
+STOP precedence and terminal fences
+----------------------------------
+
+For a ModelState with structurally intact attempt records, shutdown sets stopped
+before validating stored context, time or fence. A missing/non-ModelState input
+still raises ValueError: arbitrary corrupted attempt containers are not a
+supported recovery format. The shutdown generation advances only when its
+stored type/range permits a safe increment; otherwise it is preserved and
+uncertainty latches. Invalid context/time is not repaired by STOP.
+
+Fences saturate at 2**63-1 and latch permanent uncertainty upon reaching that
+terminal value, even if the preceding state was otherwise valid. Invalid fences
+(including out-of-range integers) are preserved, never coerced or reset.
+Repeated invalidation, STOP, crash and restart cannot reopen admission.
+Tombstones, dispatch counts, output digests and historical promotions survive;
+pending/running attempts remain cancellation obligations, not successful work.
+
+Cancellation acknowledgement is conservative: an invalid stored fence/context/
+clock, invalid event time or clock rollback prevents acknowledgement recording
+on that call. It preserves the cancellation obligation and latches uncertainty.
+STOP on the same invalid metadata still latches. With valid metadata, including
+a saturated terminal fence, an exact request/original attempt fence may record
+modeled_cancelled even after restart or STOP. It never repairs metadata, resets
+fences, clears uncertainty/STOP, retries dispatch or permits promotion.
+These acknowledgements remain hypothetical scenario evidence, not proof that
+an external process has terminated.
