@@ -9,7 +9,9 @@ import os
 import stat
 import threading
 
-from gvai.linux_containment_stop import CleanupEvidence, OwnedContainment
+from gvai.linux_containment_stop import (
+    CleanupEvidence, OwnedContainment, _close_descriptors_once,
+)
 
 
 MAX_GENERATION = 2**63 - 1
@@ -100,10 +102,15 @@ class StopJournal:
                 raise ValueError("Invalid journal lock.")
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._state = self._load()
-        except Exception:
+        except BaseException as error:
+            descriptors = [self._dir]
             if self._lock_fd is not None:
-                os.close(self._lock_fd)
-            os.close(self._dir)
+                descriptors.insert(0, self._lock_fd)
+            self._dir = None
+            self._lock_fd = None
+            cleanup_error = _close_descriptors_once(descriptors)
+            if cleanup_error is not None:
+                raise error from cleanup_error
             raise
 
     def _load(self) -> StopState:
@@ -209,8 +216,14 @@ class StopJournal:
         with self._mutex:
             if not self._closed:
                 self._closed = True
-                os.close(self._lock_fd)
-                os.close(self._dir)
+                descriptors = [self._dir]
+                if self._lock_fd is not None:
+                    descriptors.insert(0, self._lock_fd)
+                self._lock_fd = None
+                self._dir = None
+                error = _close_descriptors_once(descriptors)
+                if error is not None:
+                    raise error
 
 
 class StopController:

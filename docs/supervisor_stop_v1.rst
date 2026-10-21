@@ -64,6 +64,8 @@ snapshot; external trusted storage/recovery controls remain necessary.
 ``durable`` means this STOP record's write and synchronization completed under
 the assumed filesystem semantics, not that storage is tamper-proof or a
 distributed fencing service. No missing/corrupt state grants permission.
+Journal closure attempts each owned descriptor once even if an earlier close
+fails, then propagates the first close error without retrying any descriptor.
 
 Containment ownership contract
 ------------------------------
@@ -96,6 +98,8 @@ reaper completeness, kernel support or the parent itself. Passing integers or
 constructing an object proves none of these prerequisites. This interface must
 never be exposed to customers or workers. A future independently reviewed
 host-side provisioning boundary must establish the above invariants.
+Containment closure likewise attempts each retained descriptor once, propagates
+the first close error after all attempts, and never retries an ambiguous number.
 
 ``stop`` writes only ``1`` to the retained kill descriptor, seeks/reads the
 retained events descriptor and uses nonblocking ``waitid(P_PIDFD, WEXITED |

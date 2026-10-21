@@ -11,7 +11,9 @@ import stat
 import sys
 import threading
 
-from gvai.linux_containment_stop import CleanupEvidence, OwnedContainment
+from gvai.linux_containment_stop import (
+    CleanupEvidence, OwnedContainment, _close_descriptors_once,
+)
 
 
 _CGROUP2_SUPER_MAGIC = 0x63677270
@@ -146,10 +148,15 @@ class ValidatedContainmentDescriptors:
                     os.close(reference)
         except BaseException as exc:
             self._closed = True
-            self._release()
+            cleanup_error = self._release()
             if not isinstance(exc, Exception):
+                if cleanup_error is not None:
+                    raise exc from cleanup_error
                 raise
-            raise ContainmentIdentityRejected("Descriptor provenance validation failed.") from exc
+            detail = "Descriptor provenance validation failed."
+            if cleanup_error is not None:
+                detail += f" Closing retained descriptors also failed: {cleanup_error}"
+            raise ContainmentIdentityRejected(detail) from exc
 
     @property
     def identity(self) -> ContainmentIdentity:
@@ -176,20 +183,17 @@ class ValidatedContainmentDescriptors:
                 raise ContainmentIdentityRejected("Distinct parent-owned child pidfds required.")
             return _ValidatedStopBinding(self._fds, child_pidfds)
 
-    def _release(self) -> None:
+    def _release(self):
         descriptors, self._fds = self._fds, []
-        for fd in descriptors:
-            try:
-                os.close(fd)
-            except OSError:
-                # Never retry close: an FD number may already have been reused.
-                pass
+        return _close_descriptors_once(descriptors)
 
     def close(self) -> None:
         with self._lock:
             if not self._closed:
                 self._closed = True
-                self._release()
+                error = self._release()
+                if error is not None:
+                    raise error
 
 
 class _ValidatedStopBinding:
@@ -201,7 +205,6 @@ class _ValidatedStopBinding:
         self._directory = None
         self._adapter = None
         adapter = None
-        initialized = False
         try:
             self._directory = _duplicate(validated[0])
             # Keep the instance reachable if the legacy constructor is interrupted.
@@ -209,17 +212,19 @@ class _ValidatedStopBinding:
             adapter.__init__(
                 kill_fd=validated[1], events_fd=validated[2], child_pidfds=children,
             )
-            initialized = True
             self._adapter = adapter
         except BaseException as exc:
             self._closed = True
-            if adapter is not None and (initialized or not isinstance(exc, Exception)):
-                # The adapter cleans ordinary constructor exceptions itself, but
-                # not BaseException cancellation. Close each retained FD once.
-                for fd in getattr(adapter, "_fds", ()):
-                    _close_once(fd)
+            descriptors = []
+            if adapter is not None:
+                descriptors.extend(getattr(adapter, "_fds", ()))
+                adapter._fds = []
             if self._directory is not None:
-                _close_once(self._directory)
+                directory, self._directory = self._directory, None
+                descriptors.append(directory)
+            cleanup_error = _close_descriptors_once(descriptors)
+            if cleanup_error is not None:
+                raise exc from cleanup_error
             raise
 
     def stop(self) -> CleanupEvidence:
@@ -232,14 +237,19 @@ class _ValidatedStopBinding:
         with self._lock:
             if not self._closed:
                 self._closed = True
+                error = None
                 try:
                     self._adapter.close()
-                finally:
-                    _close_once(self._directory)
-
-
-def _close_once(fd):
-    try:
-        os.close(fd)
-    except OSError:
-        pass
+                except BaseException as exc:
+                    error = exc
+                directory, self._directory = self._directory, None
+                cleanup_error = (
+                    _close_descriptors_once((directory,))
+                    if directory is not None else None
+                )
+                if error is not None:
+                    if cleanup_error is not None:
+                        raise error from cleanup_error
+                    raise error
+                if cleanup_error is not None:
+                    raise cleanup_error

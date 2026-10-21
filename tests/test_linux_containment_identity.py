@@ -315,10 +315,37 @@ def test_close_errors_do_not_skip_other_handles_or_retry_reused_numbers(kernel, 
             raise OSError(errno.EINTR, "Ambiguous close.")
 
     monkeypatch.setattr(os, "close", interrupted)
-    value.close()
+    with pytest.raises(OSError, match="Ambiguous close"):
+        value.close()
     value.close()
     assert calls == [1001, 1002, 1003]
     assert kernel["objects"][1001][0].st_ino == 999
+
+
+def test_constructor_rollback_attempts_all_closes_and_preserves_validation_failure(
+    kernel, monkeypatch,
+):
+    signal = OSError("Synthetic metadata failure.")
+
+    def failed_fstat(fd):
+        raise signal
+
+    monkeypatch.setattr(module.os, "fstat", failed_fstat)
+    original_close = module.os.close
+    calls = []
+
+    def close(fd):
+        calls.append(fd)
+        original_close(fd)
+        if fd == 1001:
+            raise OSError("First rollback close failed.")
+
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(ContainmentIdentityRejected, match="Closing retained descriptors") as error:
+        validate()
+    assert error.value.__cause__ is signal
+    assert calls == [1001, 1002, 1003]
+    assert not retained(kernel)
 
 
 @pytest.mark.parametrize("system,machine", [("darwin", "x86_64"), ("linux", "i686"), ("linux", "unknown")])
@@ -462,6 +489,31 @@ def test_binding_constructs_without_cleanup_and_uses_retained_controls(binding_k
     binding.close()
     binding.close()
     assert binding.stop().status == "uncertain"
+    assert_only_originals(binding_kernel)
+
+
+def test_binding_close_attempts_directory_after_adapter_close_error(binding_kernel, monkeypatch):
+    value = validate()
+    binding = value.bind_stop(child_pidfds=(13,))
+    owned = [*binding._adapter._fds, binding._directory]
+    original_close = module.os.close
+    calls = []
+
+    def close(fd):
+        calls.append(fd)
+        original_close(fd)
+        if fd == owned[0]:
+            raise OSError("Adapter close failed after release.")
+
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(OSError, match="Adapter close failed"):
+        binding.close()
+    assert calls == owned
+    assert all(fd not in binding_kernel["objects"] for fd in owned)
+    assert binding.stop().status == "uncertain"
+    binding.close()
+    assert calls == owned
+    value.close()
     assert_only_originals(binding_kernel)
 
 

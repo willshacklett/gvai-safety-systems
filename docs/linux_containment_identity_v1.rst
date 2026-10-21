@@ -60,7 +60,8 @@ The validator API exposes immutable identity metadata, idempotent closure and
 Reading identity
 after closure rejects. Construction failures close all retained duplicates and
 temporary reference handles without closing the caller's originals. Close errors
-do not trigger retries against potentially reused descriptor numbers.
+do not trigger retries against potentially reused descriptor numbers; cleanup
+still attempts every owned descriptor once and propagates the first close error.
 
 The parent must not close/reuse originals during duplication or mutate their
 shared open-file descriptions. Retention protects against subsequent numeric

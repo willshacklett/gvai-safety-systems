@@ -5,6 +5,17 @@ import os
 import threading
 
 
+def _close_descriptors_once(descriptors):
+    first_error = None
+    for fd in descriptors:
+        try:
+            os.close(fd)
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+    return first_error
+
+
 @dataclass(frozen=True)
 class CleanupEvidence:
     status: str
@@ -36,17 +47,21 @@ class OwnedContainment:
                 retained = os.dup(fd)
                 self._fds.append(retained)
                 os.set_inheritable(retained, False)
-        except Exception:
-            for retained in self._fds:
-                os.close(retained)
+        except BaseException as error:
+            descriptors, self._fds = self._fds, []
+            cleanup_error = _close_descriptors_once(descriptors)
+            if cleanup_error is not None:
+                raise error from cleanup_error
             raise
 
     def close(self) -> None:
         with self._lock:
             if not self._closed:
                 self._closed = True
-                for fd in self._fds:
-                    os.close(fd)
+                descriptors, self._fds = self._fds, []
+                error = _close_descriptors_once(descriptors)
+                if error is not None:
+                    raise error
 
     def stop(self) -> CleanupEvidence:
         """Request whole-cgroup kill and collect nonblocking kernel observations.

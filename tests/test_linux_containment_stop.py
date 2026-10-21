@@ -135,6 +135,57 @@ def test_partial_construction_closes_retained_handles(syscalls, monkeypatch):
     assert ("close", 110) in syscalls and ("close", 111) in syscalls
 
 
+def test_close_failure_still_closes_every_handle_once(syscalls, monkeypatch):
+    handle = owned()
+    original_close = module.os.close
+
+    def close(fd):
+        original_close(fd)
+        if fd == 110:
+            raise OSError("First close failed after releasing its descriptor.")
+
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(OSError, match="First close failed"):
+        handle.close()
+    assert [call for call in syscalls if call[0] == "close"] == [
+        ("close", fd) for fd in (110, 111, 112, 113)
+    ]
+    assert handle._fds == []
+    assert handle.stop().status == "uncertain"
+    handle.close()
+    assert [call for call in syscalls if call[0] == "close"] == [
+        ("close", fd) for fd in (110, 111, 112, 113)
+    ]
+
+
+def test_constructor_rollback_attempts_all_closes_and_preserves_original_error(
+    syscalls, monkeypatch,
+):
+    signal = OSError("Descriptor setup failed.")
+
+    def inherit(fd, flag):
+        if fd == 111:
+            raise signal
+
+    original_close = module.os.close
+
+    def close(fd):
+        original_close(fd)
+        if fd == 110:
+            raise OSError("Rollback close failed.")
+
+    monkeypatch.setattr(module.os, "set_inheritable", inherit)
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(OSError, match="Descriptor setup failed") as error:
+        owned()
+    assert error.value is signal
+    assert isinstance(error.value.__cause__, OSError)
+    assert str(error.value.__cause__) == "Rollback close failed."
+    assert [call for call in syscalls if call[0] == "close"] == [
+        ("close", 110), ("close", 111),
+    ]
+
+
 def test_missing_pidfd_interface_never_falls_back(syscalls, monkeypatch):
     monkeypatch.delattr(module.os, "P_PIDFD")
     result = owned().stop()

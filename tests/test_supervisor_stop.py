@@ -401,6 +401,76 @@ def test_closed_journal_and_unsafe_permissions_fail_closed(tmp_path):
         open_journal(tmp_path)
 
 
+def test_journal_close_failure_still_closes_all_handles_once(tmp_path, monkeypatch):
+    seed(tmp_path)
+    journal = open_journal(tmp_path)
+    lock_fd, directory_fd = journal._lock_fd, journal._dir
+    real_close = os.close
+    calls = []
+
+    def close(fd):
+        calls.append(fd)
+        real_close(fd)
+        if fd == lock_fd:
+            raise OSError("Lock close failed after release.")
+
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(OSError, match="Lock close failed"):
+        journal.close()
+    assert calls == [lock_fd, directory_fd]
+    assert journal._lock_fd is None and journal._dir is None
+    assert journal.read().uncertain
+    journal.close()
+    assert calls == [lock_fd, directory_fd]
+
+
+def test_journal_constructor_rollback_closes_all_handles_and_preserves_error(
+    tmp_path, monkeypatch,
+):
+    seed(tmp_path)
+    caller_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    real_close = os.close
+    duplicated = []
+    opened = []
+    calls = []
+    signal = OSError("Journal lock acquisition failed.")
+    real_dup = os.dup
+    real_open = os.open
+
+    def duplicate(fd):
+        result = real_dup(fd)
+        duplicated.append(result)
+        return result
+
+    def open_file(path, flags, *args, **kwargs):
+        result = real_open(path, flags, *args, **kwargs)
+        opened.append(result)
+        return result
+
+    def close(fd):
+        if fd in duplicated + opened:
+            calls.append(fd)
+            real_close(fd)
+            if fd == opened[0]:
+                raise OSError("Lock rollback close failed.")
+            return
+        real_close(fd)
+
+    monkeypatch.setattr(module.os, "dup", duplicate)
+    monkeypatch.setattr(module.os, "open", open_file)
+    monkeypatch.setattr(module.os, "close", close)
+    monkeypatch.setattr(module.fcntl, "flock", lambda *args: (_ for _ in ()).throw(signal))
+    try:
+        with pytest.raises(OSError, match="Journal lock acquisition failed") as error:
+            StopJournal(caller_fd)
+        assert error.value is signal
+        assert error.value.__cause__ is not None
+        assert str(error.value.__cause__) == "Lock rollback close failed."
+        assert calls == [opened[0], duplicated[0]]
+    finally:
+        real_close(caller_fd)
+
+
 def test_no_forward_or_recovery_api():
     for cls in (StopJournal, StopController, OwnedContainment):
         public = {name for name in vars(cls) if not name.startswith("_")}
@@ -416,12 +486,56 @@ def test_untrusted_target_or_ack_cannot_register(tmp_path, value):
     journal.close()
 
 
-def test_no_existing_runtime_or_publication_callers():
-    root = Path(__file__).resolve().parents[1]
-    new_modules = {"supervisor_stop.py", "linux_containment_stop.py"}
+def find_unapproved_containment_callers(root):
+    modules = (
+        "supervisor_stop",
+        "linux_containment_stop",
+        "linux_containment_identity",
+    )
+    callers = set()
     for directory in (root / "gvai", root / "scripts"):
         for path in directory.rglob("*.py"):
-            if path.name not in new_modules:
-                source = path.read_text(encoding="utf-8")
-                assert "supervisor_stop" not in source
-                assert "linux_containment_stop" not in source
+            relative = path.relative_to(root).as_posix()
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not any(module_name in line for module_name in modules):
+                    continue
+                legitimate_import = (
+                    relative in {
+                        "gvai/supervisor_stop.py",
+                        "gvai/linux_containment_identity.py",
+                    }
+                    and line.strip().startswith(
+                        "from gvai.linux_containment_stop import "
+                    )
+                )
+                if not legitimate_import:
+                    callers.add(relative)
+    return sorted(callers)
+
+
+def test_no_existing_runtime_or_publication_callers(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    assert find_unapproved_containment_callers(root) == []
+
+    synthetic_root = tmp_path / "source"
+    synthetic_gvai = synthetic_root / "gvai"
+    synthetic_gvai.mkdir(parents=True)
+    (synthetic_gvai / "supervisor_stop.py").write_text(
+        "from gvai.linux_containment_stop import OwnedContainment\n",
+        encoding="utf-8",
+    )
+    (synthetic_gvai / "linux_containment_stop.py").write_text(
+        "class OwnedContainment: pass\n",
+        encoding="utf-8",
+    )
+    (synthetic_gvai / "linux_containment_identity.py").write_text(
+        "from gvai.linux_containment_stop import OwnedContainment\n",
+        encoding="utf-8",
+    )
+    (synthetic_gvai / "runtime_publication.py").write_text(
+        "from gvai.supervisor_stop import StopController\n",
+        encoding="utf-8",
+    )
+    assert find_unapproved_containment_callers(synthetic_root) == [
+        "gvai/runtime_publication.py",
+    ]
