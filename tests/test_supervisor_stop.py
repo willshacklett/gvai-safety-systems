@@ -491,6 +491,7 @@ def find_unapproved_containment_callers(root):
         "supervisor_stop",
         "linux_containment_stop",
         "linux_containment_identity",
+        "systemd_worker_contract",
     )
     callers = set()
     for directory in (root / "gvai", root / "scripts"):
@@ -507,6 +508,14 @@ def find_unapproved_containment_callers(root):
                     and line.strip().startswith(
                         "from gvai.linux_containment_stop import "
                     )
+                )
+                legitimate_import = legitimate_import or (
+                    relative == "gvai/systemd_worker_contract.py"
+                    and line.strip() in {
+                        "from gvai.linux_containment_identity import ContainmentIdentity",
+                        "from gvai.linux_containment_stop import CleanupEvidence",
+                        "from gvai.supervisor_stop import StopJournal, StopState",
+                    }
                 )
                 if not legitimate_import:
                     callers.add(relative)
@@ -536,6 +545,16 @@ def test_no_existing_runtime_or_publication_callers(tmp_path):
         "from gvai.supervisor_stop import StopController\n",
         encoding="utf-8",
     )
+    (synthetic_gvai / "systemd_worker_contract.py").write_text(
+        "from gvai.linux_containment_identity import ContainmentIdentity\n"
+        "from gvai.supervisor_stop import StopJournal, StopState\n",
+        encoding="utf-8",
+    )
+    (synthetic_gvai / "runtime_worker.py").write_text(
+        "from gvai.systemd_worker_contract import SystemdWorkerContract\n",
+        encoding="utf-8",
+    )
     assert find_unapproved_containment_callers(synthetic_root) == [
         "gvai/runtime_publication.py",
+        "gvai/runtime_worker.py",
     ]

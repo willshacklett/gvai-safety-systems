@@ -418,7 +418,14 @@ def test_no_operational_api_or_existing_callers():
     for directory in (root / "gvai", root / "scripts"):
         for path in directory.rglob("*.py"):
             if path.name != "linux_containment_identity.py":
-                assert "linux_containment_identity" not in path.read_text(encoding="utf-8")
+                source = path.read_text(encoding="utf-8")
+                if path.name == "systemd_worker_contract.py":
+                    source = source.replace(
+                        "from gvai.linux_containment_identity import ContainmentIdentity\n",
+                        "",
+                        1,
+                    )
+                assert "linux_containment_identity" not in source
 
 
 @pytest.fixture
