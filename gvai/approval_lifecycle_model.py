@@ -44,6 +44,9 @@ class SyntheticRequest:
 class Attempt:
     request: SyntheticRequest
     phase: str
+    fence: int
+    dispatch_count: int = 0
+    output_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,7 @@ class ModelState:
     attempts: tuple[Attempt, ...] = ()
     stopped: bool = False
     uncertain: bool = False
+    fence: int = 0
 
 
 @dataclass(frozen=True)
@@ -136,8 +140,13 @@ def _challenge(request: SyntheticRequest) -> tuple[str, str, int, str]:
 
 
 def _cancel(state: ModelState) -> ModelState:
-    return replace(state, attempts=tuple(
-        replace(item, phase="cancel_required") if item.phase == "modeled_running" else item
+    return replace(state, fence=state.fence + 1, attempts=tuple(
+        replace(item, phase=(
+            "cancel_required" if item.phase in ("dispatch_pending", "modeled_running")
+            else "invalidated"
+        ))
+        if item.phase in ("reserved", "dispatch_pending", "modeled_running", "modeled_complete")
+        else item
         for item in state.attempts
     ))
 
@@ -149,6 +158,8 @@ def transition(
     now: int,
     request: SyntheticRequest | None = None,
     context: Context | None = None,
+    fence: int | None = None,
+    output_digest: str | None = None,
 ) -> ModelResult:
     """Apply one serialized scenario event; never redeem this result for execution.
 
@@ -158,6 +169,8 @@ def transition(
     """
     if type(state) is not ModelState:
         raise ValueError("A model state is required.")
+    if not _integer(state.fence):
+        return ModelResult(_cancel(replace(state, uncertain=True, fence=0)), "invalid_fence")
     if not _context(state.context) or not _integer(state.now):
         return ModelResult(_cancel(replace(state, uncertain=True)), "invalid_state")
     if not _integer(now) or now < state.now:
@@ -166,11 +179,13 @@ def transition(
                 state.context, shutdown_generation=state.context.shutdown_generation + 1,
             ))
         return ModelResult(_cancel(replace(state, uncertain=True)), "clock_uncertain")
-    state = replace(state, now=now, attempts=tuple(
-        replace(item, phase="cancel_required")
-        if item.phase == "modeled_running" and now >= item.request.expires_at else item
-        for item in state.attempts
-    ))
+    state = replace(state, now=now)
+    if any(
+        item.phase in ("reserved", "dispatch_pending", "modeled_running", "modeled_complete")
+        and now >= item.request.expires_at for item in state.attempts
+    ):
+        # Conservatively fence all unpublished attempts on an observed expiry.
+        state = _cancel(state)
     if event in ("verifier_unavailable", "store_unavailable", "audit_unavailable",
                  "crash", "cancellation_uncertain"):
         return ModelResult(_cancel(replace(state, uncertain=True)), event)
@@ -210,24 +225,52 @@ def transition(
         return ModelResult(_cancel(replace(state, context=context)), "context_changed")
     if event == "tick":
         return ModelResult(state, "time_observed")
+    if event == "cancel_ack":
+        # A scenario acknowledgement records termination only, never recovery.
+        if type(request) is SyntheticRequest and _integer(fence):
+            for index, item in enumerate(state.attempts):
+                if item.request == request and item.fence == fence and item.phase == "cancel_required":
+                    attempts = list(state.attempts)
+                    attempts[index] = replace(item, phase="modeled_cancelled")
+                    return ModelResult(replace(state, attempts=tuple(attempts)), "cancellation_recorded")
+        return ModelResult(state, "no_pending_cancellation")
     if state.stopped or state.uncertain:
         return ModelResult(state, "blocked")
-    if event not in ("attempt", "complete") or not _request(request, now):
+    if event not in ("attempt", "reserve", "dispatch", "dispatch_ack", "complete", "promote") or not _request(request, now):
         return ModelResult(state, "invalid_scenario")
     if request.context != state.context or _key(request) in state.revoked:
         return ModelResult(state, "context_or_revocation_mismatch")
-    if event == "attempt":
+    if event in ("attempt", "reserve"):
         if _key(request) in state.consumed or _challenge(request) in state.challenges:
             return ModelResult(state, "replay")
         state = replace(
             state, consumed=state.consumed | {_key(request)},
             challenges=state.challenges | {_challenge(request)},
-            attempts=state.attempts + (Attempt(request, "modeled_running"),),
+            attempts=state.attempts + (Attempt(request, "reserved", state.fence),),
         )
-        return ModelResult(state, "consumed_in_model_only")
+        return ModelResult(state, "reserved_in_model_only")
+    if not _integer(fence) or fence != state.fence:
+        return ModelResult(state, "stale_or_missing_fence")
     for index, item in enumerate(state.attempts):
-        if item.request == request and item.phase == "modeled_running":
+        if item.request == request and item.fence == fence:
+            updated = None
+            if event == "dispatch" and item.phase == "reserved" and item.dispatch_count == 0:
+                updated = replace(item, phase="dispatch_pending", dispatch_count=1)
+            elif event == "dispatch_ack" and item.phase == "dispatch_pending":
+                updated = replace(item, phase="modeled_running")
+            elif (
+                event == "complete" and item.phase == "modeled_running"
+                and type(output_digest) is str and re.fullmatch(r"[0-9a-f]{64}", output_digest)
+            ):
+                updated = replace(item, phase="modeled_complete", output_digest=output_digest)
+            elif (
+                event == "promote" and item.phase == "modeled_complete"
+                and type(output_digest) is str and output_digest == item.output_digest
+            ):
+                updated = replace(item, phase="modeled_promoted")
+            if updated is None:
+                return ModelResult(state, "invalid_stage_or_output")
             attempts = list(state.attempts)
-            attempts[index] = replace(item, phase="modeled_complete")
-            return ModelResult(replace(state, attempts=tuple(attempts)), "completed_in_model_only")
-    return ModelResult(state, "no_running_attempt")
+            attempts[index] = updated
+            return ModelResult(replace(state, attempts=tuple(attempts)), "stage_recorded_in_model_only")
+    return ModelResult(state, "no_matching_attempt")
