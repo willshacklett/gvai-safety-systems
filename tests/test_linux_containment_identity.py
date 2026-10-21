@@ -6,6 +6,7 @@ from pathlib import Path
 import socket
 import stat
 import subprocess
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -385,9 +386,232 @@ def test_libc_unavailability_cannot_produce_a_validated_object(kernel, monkeypat
 
 def test_no_operational_api_or_existing_callers():
     public = {name for name in vars(ValidatedContainmentDescriptors) if not name.startswith("_")}
-    assert public == {"identity", "close"}
+    assert public == {"identity", "close", "bind_stop"}
     root = Path(__file__).resolve().parents[1]
     for directory in (root / "gvai", root / "scripts"):
         for path in directory.rglob("*.py"):
             if path.name != "linux_containment_identity.py":
                 assert "linux_containment_identity" not in path.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def binding_kernel(kernel, monkeypatch):
+    kernel["objects"][13] = metadata(103), os.O_RDONLY
+    kernel.update(populated=False, exited=True, kill_error=False, adapter_calls=[])
+    real_duplicate = module._duplicate
+
+    def duplicate(fd):
+        kernel["adapter_calls"].append(("dup", fd))
+        return real_duplicate(fd)
+
+    def inherit(fd, flag):
+        assert fd in kernel["objects"] and flag is False
+
+    def write(fd, raw):
+        kernel["adapter_calls"].append(("kill", fd, raw))
+        assert kernel["objects"][fd][0].st_ino == 101
+        assert raw == b"1"
+        if kernel["kill_error"]:
+            raise OSError("Synthetic kill failure.")
+        return 1
+
+    def seek(fd, offset, whence):
+        assert kernel["objects"][fd][0].st_ino == 102
+        assert offset == 0 and whence == os.SEEK_SET
+        return 0
+
+    def read(fd, size):
+        kernel["adapter_calls"].append(("read", fd))
+        assert kernel["objects"][fd][0].st_ino == 102 and size == 4097
+        return b"populated 1\n" if kernel["populated"] else b"populated 0\n"
+
+    def wait(kind, fd, flags):
+        kernel["adapter_calls"].append(("wait", fd))
+        assert kind == os.P_PIDFD
+        assert kernel["objects"][fd][0].st_ino == 103
+        assert flags == os.WEXITED | os.WNOHANG
+        return SimpleNamespace(si_pid=42, si_code=os.CLD_EXITED) if kernel["exited"] else None
+
+    monkeypatch.setattr(os, "dup", duplicate)
+    monkeypatch.setattr(os, "set_inheritable", inherit)
+    monkeypatch.setattr(os, "write", write)
+    monkeypatch.setattr(os, "read", read)
+    monkeypatch.setattr(os, "lseek", seek)
+    monkeypatch.setattr(os, "waitid", wait)
+    return kernel
+
+
+def assert_only_originals(kernel):
+    assert set(kernel["objects"]) == {10, 11, 12, 13}
+
+
+def test_binding_constructs_without_cleanup_and_uses_retained_controls(binding_kernel):
+    value = validate()
+    for fd in (10, 11, 12):
+        binding_kernel["objects"][fd] = metadata(999, device=99), os.O_RDWR
+    binding = value.bind_stop(child_pidfds=(13,))
+    assert [call[1] for call in binding_kernel["adapter_calls"]] == [1002, 1003, 13]
+    assert all(call[0] == "dup" for call in binding_kernel["adapter_calls"])
+    value.close()
+    assert any(meta.st_ino == 100 for meta, _ in binding_kernel["objects"].values())
+    result = binding.stop()
+    assert result.status == "terminated"
+    assert result.kill_requested and result.empty and result.reaped
+    assert binding.stop().status == "terminated"
+    assert sum(call[0] == "wait" for call in binding_kernel["adapter_calls"]) == 1
+    binding.close()
+    binding.close()
+    assert binding.stop().status == "uncertain"
+    assert_only_originals(binding_kernel)
+
+
+def test_binding_close_preserves_validator_and_sibling(binding_kernel):
+    value = validate()
+    first = value.bind_stop(child_pidfds=(13,))
+    second = value.bind_stop(child_pidfds=(13,))
+    first.close()
+    assert value.identity == EXPECTED
+    assert second.stop().status == "terminated"
+    second.close()
+    value.close()
+    assert_only_originals(binding_kernel)
+
+
+@pytest.mark.parametrize("children", [(), [], (True,), (-1,), (13, 13), (1001,), (1002,), (1003,)])
+def test_bad_child_inputs_cannot_select_control_targets(binding_kernel, children):
+    value = validate()
+    before = set(binding_kernel["objects"])
+    with pytest.raises(ContainmentIdentityRejected):
+        value.bind_stop(child_pidfds=children)
+    assert set(binding_kernel["objects"]) == before
+    assert binding_kernel["adapter_calls"] == []
+    value.close()
+    assert_only_originals(binding_kernel)
+
+
+def test_closed_or_failed_validator_cannot_bind(binding_kernel):
+    value = validate()
+    value.close()
+    with pytest.raises(ContainmentIdentityRejected):
+        value.bind_stop(child_pidfds=(13,))
+    failed = ValidatedContainmentDescriptors.__new__(ValidatedContainmentDescriptors)
+    with pytest.raises(ContainmentIdentityRejected):
+        failed.__init__(directory_fd=10, kill_fd=11, events_fd=12,
+                        expected=ContainmentIdentity(50, 999))
+    with pytest.raises(ContainmentIdentityRejected):
+        failed.bind_stop(child_pidfds=(13,))
+    assert_only_originals(binding_kernel)
+
+
+@pytest.mark.parametrize("exception", [OSError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("point", ["directory", "first_control", "second_control", "child", "inherit"])
+def test_binding_construction_failures_release_only_owned_resources(
+    binding_kernel, monkeypatch, exception, point,
+):
+    value = validate()
+    before = set(binding_kernel["objects"])
+    signal = exception("Synthetic binding interruption.")
+    real_duplicate = module._duplicate
+    real_dup = os.dup
+    real_inherit = os.set_inheritable
+
+    def directory(fd):
+        raise signal
+
+    def dup(fd):
+        if (point == "first_control" and fd == 1002
+                or point == "second_control" and fd == 1003
+                or point == "child" and fd == 13):
+            raise signal
+        return real_dup(fd)
+
+    def inherit(fd, flag):
+        if point == "inherit":
+            raise signal
+        return real_inherit(fd, flag)
+
+    with monkeypatch.context() as patch:
+        if point == "directory":
+            patch.setattr(module, "_duplicate", directory)
+        else:
+            patch.setattr(os, "dup", dup)
+            patch.setattr(os, "set_inheritable", inherit)
+        with pytest.raises(exception) as error:
+            value.bind_stop(child_pidfds=(13,))
+        assert error.value is signal
+    assert set(binding_kernel["objects"]) == before
+    assert value.identity == EXPECTED
+    binding = value.bind_stop(child_pidfds=(13,))
+    binding.close()
+    value.close()
+    assert_only_originals(binding_kernel)
+
+
+@pytest.mark.parametrize("populated,exited,kill_error,status", [
+    (True, True, False, "pending"), (False, False, False, "pending"),
+    (True, False, False, "pending"), (False, True, True, "uncertain"),
+])
+def test_bound_adapter_keeps_restrictive_cleanup_semantics(
+    binding_kernel, populated, exited, kill_error, status,
+):
+    value = validate()
+    binding = value.bind_stop(child_pidfds=(13,))
+    binding_kernel.update(populated=populated, exited=exited, kill_error=kill_error)
+    assert binding.stop().status == status
+    binding.close()
+    value.close()
+    assert_only_originals(binding_kernel)
+
+
+def test_close_waits_for_binding_to_retain_all_controls(binding_kernel, monkeypatch):
+    value = validate()
+    entered = threading.Event()
+    proceed = threading.Event()
+    closed = threading.Event()
+    result = []
+    errors = []
+    duplicate = module._duplicate
+
+    def paused(fd):
+        if fd == 1001:
+            entered.set()
+            if not proceed.wait(5):
+                raise RuntimeError("Test release timed out.")
+        return duplicate(fd)
+
+    def bind():
+        try:
+            result.append(value.bind_stop(child_pidfds=(13,)))
+        except BaseException as error:
+            errors.append(error)
+
+    def close():
+        value.close()
+        closed.set()
+
+    monkeypatch.setattr(module, "_duplicate", paused)
+    creator = threading.Thread(target=bind)
+    closer = threading.Thread(target=close)
+    creator.start()
+    try:
+        assert entered.wait(5)
+        closer.start()
+        assert not closed.is_set()
+    finally:
+        proceed.set()
+        creator.join(5)
+        if closer.ident is not None:
+            closer.join(5)
+    assert not creator.is_alive() and not closer.is_alive()
+    assert not errors and len(result) == 1
+    assert result[0].stop().status == "terminated"
+    result[0].close()
+    assert_only_originals(binding_kernel)
+
+
+def test_binding_has_only_stop_and_close(binding_kernel):
+    value = validate()
+    binding = value.bind_stop(child_pidfds=(13,))
+    assert {name for name in vars(type(binding)) if not name.startswith("_")} == {"stop", "close"}
+    binding.close()
+    value.close()

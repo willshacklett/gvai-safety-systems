@@ -11,6 +11,8 @@ import stat
 import sys
 import threading
 
+from gvai.linux_containment_stop import CleanupEvidence, OwnedContainment
+
 
 _CGROUP2_SUPER_MAGIC = 0x63677270
 
@@ -83,7 +85,7 @@ def _same(left, right) -> bool:
 
 
 class ValidatedContainmentDescriptors:
-    """Retain validated descriptors without exposing a stop or handoff operation.
+    """Retain validated descriptors and provide an explicit stop-only binding.
 
     Construction is trusted-parent-only. No worker-supplied descriptors or
     identities may reach this interface. Validation is a point-in-time check.
@@ -156,6 +158,24 @@ class ValidatedContainmentDescriptors:
                 raise ContainmentIdentityRejected("Validated descriptors are closed.")
             return self._identity
 
+    def bind_stop(self, *, child_pidfds: tuple[int, ...]) -> _ValidatedStopBinding:
+        """Duplicate checked controls under the same lock as validator closure.
+
+        Child identity/membership remains a trusted-parent prerequisite.
+        Construction never invokes stop or registers with a controller.
+        """
+        with self._lock:
+            if self._closed:
+                raise ContainmentIdentityRejected("Validated descriptors are closed.")
+            if (
+                type(child_pidfds) is not tuple or not child_pidfds
+                or any(type(fd) is not int or fd < 0 for fd in child_pidfds)
+                or len(set(child_pidfds)) != len(child_pidfds)
+                or any(fd in self._fds for fd in child_pidfds)
+            ):
+                raise ContainmentIdentityRejected("Distinct parent-owned child pidfds required.")
+            return _ValidatedStopBinding(self._fds, child_pidfds)
+
     def _release(self) -> None:
         descriptors, self._fds = self._fds, []
         for fd in descriptors:
@@ -170,3 +190,56 @@ class ValidatedContainmentDescriptors:
             if not self._closed:
                 self._closed = True
                 self._release()
+
+
+class _ValidatedStopBinding:
+    """Own a directory pin and an existing adapter; no public raw-FD handoff."""
+
+    def __init__(self, validated, children):
+        self._lock = threading.Lock()
+        self._closed = False
+        self._directory = None
+        self._adapter = None
+        adapter = None
+        initialized = False
+        try:
+            self._directory = _duplicate(validated[0])
+            # Keep the instance reachable if the legacy constructor is interrupted.
+            adapter = OwnedContainment.__new__(OwnedContainment)
+            adapter.__init__(
+                kill_fd=validated[1], events_fd=validated[2], child_pidfds=children,
+            )
+            initialized = True
+            self._adapter = adapter
+        except BaseException as exc:
+            self._closed = True
+            if adapter is not None and (initialized or not isinstance(exc, Exception)):
+                # The adapter cleans ordinary constructor exceptions itself, but
+                # not BaseException cancellation. Close each retained FD once.
+                for fd in getattr(adapter, "_fds", ()):
+                    _close_once(fd)
+            if self._directory is not None:
+                _close_once(self._directory)
+            raise
+
+    def stop(self) -> CleanupEvidence:
+        with self._lock:
+            if self._closed:
+                return CleanupEvidence("uncertain")
+            return self._adapter.stop()
+
+    def close(self) -> None:
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                try:
+                    self._adapter.close()
+                finally:
+                    _close_once(self._directory)
+
+
+def _close_once(fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
