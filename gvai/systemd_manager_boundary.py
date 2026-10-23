@@ -116,8 +116,7 @@ class SystemdManagerBoundary:
         self._transport = transport
         self._authenticator = authenticator
         self._request_lock = threading.Lock()
-        self._consumed_requests: dict[UUID, set[UUID]] = {}
-        self._tracked_request_count = 0
+        self._consumed_requests: set[UUID] = set()
 
     def inventory(self, session: UUID, request: UUID) -> ManagerInventory:
         envelope = ManagerRequest(
@@ -171,7 +170,7 @@ class SystemdManagerBoundary:
         return response
 
     def _exchange(self, request: ManagerRequest) -> object:
-        self._consume_request_id(request.session, request.request)
+        self._consume_request_id(request.request)
         try:
             reply = self._transport.exchange(
                 request, timeout_seconds=MANAGER_REQUEST_TIMEOUT_SECONDS,
@@ -194,15 +193,10 @@ class SystemdManagerBoundary:
             raise ManagerBoundaryError("External manager authentication failed.")
         return reply.response
 
-    def _consume_request_id(self, session: UUID, request: UUID) -> None:
+    def _consume_request_id(self, request: UUID) -> None:
         with self._request_lock:
-            session_requests = self._consumed_requests.get(session)
-            if session_requests is not None and request in session_requests:
+            if request in self._consumed_requests:
                 raise ManagerBoundaryError("Manager request ID was already consumed.")
-            if self._tracked_request_count >= MAX_TRACKED_REQUESTS:
+            if len(self._consumed_requests) >= MAX_TRACKED_REQUESTS:
                 raise ManagerBoundaryError("Manager request tracking capacity exhausted.")
-            if session_requests is None:
-                session_requests = set()
-                self._consumed_requests[session] = session_requests
-            session_requests.add(request)
-            self._tracked_request_count += 1
+            self._consumed_requests.add(request)

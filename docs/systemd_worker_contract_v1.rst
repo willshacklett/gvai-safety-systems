@@ -48,18 +48,19 @@ The boundary fails closed on timeout, disconnect, missing external peer
 evidence, failed authentication, malformed or stale replies, invalid worker
 identities, and structurally contradictory observations.
 
-Each boundary instance tracks consumed request IDs per supervisor session.
-IDs are consumed atomically before transport dispatch and remain consumed after
-success, malformed replies, authentication failures, disconnects, and timeouts.
-Concurrent duplicate dispatch is rejected. The in-memory ledger is bounded to
-65,536 request IDs for the lifetime of the boundary instance; when full, all
-new requests fail closed. Entries are never evicted, and untrusted callers
-cannot reset the ledger through a request or response. This is local
-single-use enforcement only: it does not provide cryptographic authentication,
-durable replay resistance across process restarts, or protection against a
-second boundary instance using the same session. Cross-restart replay
-resistance requires persistent trusted state or a stronger authenticated
-protocol with independently verified freshness.
+Each boundary instance tracks consumed request IDs globally across its
+supervisor sessions. IDs are consumed atomically before transport dispatch and
+remain consumed after success, malformed replies, authentication failures,
+disconnects, and timeouts. Concurrent duplicate dispatch and reuse with a
+different session are rejected. The in-memory ledger is bounded to 65,536
+request IDs for the lifetime of the boundary instance; when full, all new
+requests fail closed. Entries are never evicted, and untrusted callers cannot
+reset the ledger through a request or response. This is local single-use
+enforcement only: it does not provide cryptographic authentication, durable
+replay resistance across process restarts, or protection against a second
+boundary instance. Cross-restart and cross-instance replay resistance require
+persistent trusted state or a stronger authenticated protocol with
+independently verified freshness.
 
 Authentication is a required separate verifier over external peer evidence and
 the exact request and response. No response field, signature blob, UUID, socket
@@ -105,6 +106,63 @@ Ubuntu 24.04's systemd facilities alone have NOT been shown to implement this
 entire contract, especially PID/user isolation and complete descendant reaping.
 No namespace is dropped to make the backend appear compatible. If maintained
 facilities cannot satisfy these requirements, the backend remains unavailable.
+
+Deterministic profile compiler
+------------------------------
+
+``gvai/systemd_worker_profile.py`` compiles a validated ``WorkerSpec``, an
+explicit ``VerifiedHostCapabilities`` record and trusted input-path
+configuration into immutable systemd-property and Bubblewrap-argument tuples.
+It performs no systemd, D-Bus, Bubblewrap or worker operation. Only systemd
+255 properties in its fixed allowlist are emitted. In particular, ``PrivatePIDs``
+is not a systemd 255 property and is never emitted; Bubblewrap's private PID
+namespace and init/reaper arrangement remain separate required mechanisms.
+
+Compilation fails closed unless the supplied host-capability record reports
+systemd 255, cgroup v2 with CPU/memory/PID controllers, all required namespace
+support and Bubblewrap options, read-only runtime mount sources, enforcing
+AppArmor with the fixed profile identity, no-spawn/no-sockets seccomp with the
+fixed policy identity, unprivileged and nested user-namespace support, a PID
+namespace reaper, descriptor isolation, an independent manager and a
+supervisor-loss cleanup mechanism. Worker UIDs and GIDs must be in trusted
+non-root ranges and absent from the supplied occupied-identity inventories.
+Input paths must be canonical descendants of the trusted input root. The
+compiler does not resolve paths, detect symlinks, allocate identities, or
+authenticate the capability record; those remain trusted configuration and
+runtime obligations.
+
+The plans are declarative intent only. They contain no ``ExecStart``, worker
+command, output path or publication authority. They always report
+``runtime_verified``, ``contained``, ``execution_authorized`` and
+``output_publication_authorized`` as false. Their runtime-obligation checklist
+requires independent verification of effective unit properties, namespaces,
+AppArmor, capabilities, seccomp, read-only mounts, bounded scratch, descriptors,
+cgroup identity and limits, PID reaping, STOP cleanup, manager authentication,
+and supervisor-loss termination before containment may be considered. In
+particular, passing a seccomp FD number or listing a property in this plan does
+not establish that the policy was loaded or took effect.
+
+The Bubblewrap argument tuple deliberately contains neither an input-source
+bind nor a ``--seccomp`` descriptor. A canonical input path is only a trusted
+logical selector; it is not filesystem-containment evidence. Before constructing
+a launch invocation, a separate trusted launcher must resolve the input beneath
+the fixed input root with race-resistant no-symlink resolution (for example,
+``openat2`` with appropriate resolution constraints), pin it, verify its
+descriptor identity, and prevent replacement between verification and mount.
+The launcher must independently obtain the fixed
+``gvai-worker-no-spawn-no-sockets-v1`` seccomp policy, verify its exact policy
+identity and descriptor provenance, and install it before untrusted execution.
+No worker-supplied path, descriptor, filename, or policy description can satisfy
+these requirements. The compiler exposes both as unresolved runtime obligations
+and has no API for declaring them satisfied; ``runnable`` and
+``all_runtime_obligations_satisfied`` remain false.
+
+This compiler does not establish actual systemd 255 property behavior, the
+Bubblewrap option/version semantics on a host, namespace availability, manager
+authenticity, cgroup membership, successful descendant reaping, or supervisor
+loss handling. Its host-capability inputs are assertions that must be produced
+by a separate trusted discovery/verification mechanism. The plan is not a
+runnable unit definition and must not be treated as execution approval.
 
 STOP, restart and output
 ------------------------

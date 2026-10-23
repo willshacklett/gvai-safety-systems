@@ -525,6 +525,11 @@ def find_unapproved_containment_callers(root):
                     relative == "gvai/systemd_manager_boundary.py"
                     and line.strip() == "from gvai.systemd_worker_contract import ("
                 )
+                legitimate_import = legitimate_import or (
+                    relative == "gvai/systemd_worker_profile.py"
+                    and line.strip()
+                    == "from gvai.systemd_worker_contract import WorkerSpec, _valid_worker_spec"
+                )
                 if not legitimate_import:
                     callers.add(relative)
     return sorted(callers)

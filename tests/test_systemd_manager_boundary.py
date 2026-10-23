@@ -264,15 +264,33 @@ def test_duplicate_request_is_rejected_while_first_dispatch_is_outstanding(setup
     assert len(calls) == 1 and not errors
 
 
-def test_request_id_is_single_use_per_session_not_globally(setup):
+def test_request_id_cannot_be_reused_across_sessions(setup):
     boundary, transport, _, _, session, request, spec = setup
     transport.response = observation(spec, session, request)
     assert boundary.cancel(spec, session, request)
 
     other_session = uuid4()
     transport.response = observation(spec, other_session, request)
-    assert boundary.cancel(spec, other_session, request)
+    with pytest.raises(ManagerBoundaryError, match="already consumed"):
+        boundary.cancel(spec, other_session, request)
+    assert len(transport.requests) == 1
+
+
+def test_delayed_response_for_timed_out_id_is_rejected_on_new_request(setup):
+    boundary, transport, authenticator, _, session, request, spec = setup
+    transport.error = TimeoutError("old request timed out")
+    with pytest.raises(ManagerBoundaryError, match="timed out"):
+        boundary.cancel(spec, session, request)
+
+    new_request = uuid4()
+    transport.error = None
+    transport.response = observation(spec, session, request)
+    auth_calls_before = len(authenticator.calls)
+    with pytest.raises(ManagerBoundaryError, match="correlation"):
+        boundary.cancel(spec, session, new_request)
+
     assert len(transport.requests) == 2
+    assert len(authenticator.calls) == auth_calls_before + 1
 
 
 def test_tracking_capacity_fails_closed_without_eviction_or_id_reuse(setup, monkeypatch):
