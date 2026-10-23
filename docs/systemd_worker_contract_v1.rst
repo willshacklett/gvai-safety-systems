@@ -34,6 +34,43 @@ result is explicitly non-authoritative: even a complete, correctly correlated
 record does not authenticate the manager, authorize execution or publication,
 or establish runtime isolation.
 
+The dormant ``gvai/systemd_manager_boundary.py`` module supplies a narrow
+``TrustedManager``-compatible adapter contract. Requests contain only inventory
+or cancellation operations, an explicit boot/session/request tuple, and (for
+cancellation only) the fixed service identity derived from a validated worker
+specification. Inventory requests are restricted to the fixed
+``gvai-worker-`` service namespace, and inventory responses have a fixed
+maximum size. A fixed request timeout is passed to the transport; the
+transport MUST enforce it and the fixed request/response byte limits before
+decoding data. Resource and identity integers are also bounded to unsigned
+64-bit values.
+The boundary fails closed on timeout, disconnect, missing external peer
+evidence, failed authentication, malformed or stale replies, invalid worker
+identities, and structurally contradictory observations.
+
+Each boundary instance tracks consumed request IDs per supervisor session.
+IDs are consumed atomically before transport dispatch and remain consumed after
+success, malformed replies, authentication failures, disconnects, and timeouts.
+Concurrent duplicate dispatch is rejected. The in-memory ledger is bounded to
+65,536 request IDs for the lifetime of the boundary instance; when full, all
+new requests fail closed. Entries are never evicted, and untrusted callers
+cannot reset the ledger through a request or response. This is local
+single-use enforcement only: it does not provide cryptographic authentication,
+durable replay resistance across process restarts, or protection against a
+second boundary instance using the same session. Cross-restart replay
+resistance requires persistent trusted state or a stronger authenticated
+protocol with independently verified freshness.
+
+Authentication is a required separate verifier over external peer evidence and
+the exact request and response. No response field, signature blob, UUID, socket
+path, process identifier or structural validation is treated as proof of
+manager identity. The verifier and its evidence source remain trusted external
+obligations; this offline interface provides neither. It also supplies no real
+transport, systemd client, worker launch, execution approval or output publisher.
+The manager is expected to remain outside worker containment. These tests do not
+establish an actual transport deadline, peer identity, kernel state, or manager
+placement.
+
 Reaping and compatible reuse
 ---------------------------
 
@@ -75,10 +112,11 @@ STOP, restart and output
 Registration always cancels; STOP cancels every known worker before journal IO.
 Manager failures do not skip other cancellations. Missing/uncertain journal state
 never initializes an admission generation. No cleanup-only result admits work.
-Manager calls are synchronous under the contract lock; this offline model makes
-no bounded-latency guarantee. A future transport must bound observation and
-cancellation requests and provide manager-side supervisor-loss cleanup. A hung
-adapter is not covered by Python exception handling or the fake-manager tests.
+Manager calls are synchronous under the contract lock. The boundary passes a
+fixed timeout to its transport, but only a compliant concrete transport can
+enforce a deadline; a hung or noncompliant adapter is not covered by the
+offline fake-transport tests. A future transport must enforce observation and
+cancellation deadlines and provide manager-side supervisor-loss cleanup.
 
 Every controller restart has a fresh session and requires a complete, correlated
 inventory of the fixed worker-service namespace and successful cleanup before

@@ -521,6 +521,10 @@ def find_unapproved_containment_callers(root):
                     relative == "gvai/systemd_observation_validator.py"
                     and line.strip() == "from gvai.systemd_worker_contract import ("
                 )
+                legitimate_import = legitimate_import or (
+                    relative == "gvai/systemd_manager_boundary.py"
+                    and line.strip() == "from gvai.systemd_worker_contract import ("
+                )
                 if not legitimate_import:
                     callers.add(relative)
     return sorted(callers)
@@ -556,6 +560,10 @@ def test_no_existing_runtime_or_publication_callers(tmp_path):
     )
     (synthetic_gvai / "runtime_worker.py").write_text(
         "from gvai.systemd_worker_contract import SystemdWorkerContract\n",
+        encoding="utf-8",
+    )
+    (synthetic_gvai / "systemd_manager_boundary.py").write_text(
+        "from gvai.systemd_worker_contract import (\n",
         encoding="utf-8",
     )
     assert find_unapproved_containment_callers(synthetic_root) == [
