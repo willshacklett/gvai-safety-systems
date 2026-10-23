@@ -517,6 +517,10 @@ def find_unapproved_containment_callers(root):
                         "from gvai.supervisor_stop import StopJournal, StopState",
                     }
                 )
+                legitimate_import = legitimate_import or (
+                    relative == "gvai/systemd_observation_validator.py"
+                    and line.strip() == "from gvai.systemd_worker_contract import ("
+                )
                 if not legitimate_import:
                     callers.add(relative)
     return sorted(callers)

@@ -29,6 +29,10 @@ and supervisor restarts. It is NOT authentication. A future adapter must obtain
 evidence from an authenticated, exclusively administered manager and verify
 effective kernel state, not merely configured unit properties. This module
 cannot discover a dishonest manager, hidden worker or forged in-process record.
+The offline observation validator shares the contract's structural checks. Its
+result is explicitly non-authoritative: even a complete, correctly correlated
+record does not authenticate the manager, authorize execution or publication,
+or establish runtime isolation.
 
 Reaping and compatible reuse
 ---------------------------

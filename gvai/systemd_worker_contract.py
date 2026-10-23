@@ -78,6 +78,28 @@ class WorkerSpec:
             raise ValueError("Fixed non-root worker specification required.")
 
 
+def _valid_worker_spec(spec: object) -> bool:
+    if type(spec) is not WorkerSpec or type(spec.identity) is not WorkerIdentity:
+        return False
+    identity = spec.identity
+    cgroup = identity.cgroup
+    limits = spec.limits
+    return (
+        type(identity.attempt) is UUID and identity.attempt.int != 0
+        and type(identity.boot) is UUID and identity.boot.int != 0
+        and type(cgroup) is ContainmentIdentity
+        and type(cgroup.device) is int and cgroup.device >= 0
+        and type(cgroup.inode) is int and cgroup.inode > 0
+        and type(spec.uid) is int and spec.uid > 0
+        and type(spec.gid) is int and spec.gid > 0
+        and type(limits) is ResourceLimits
+        and all(type(value) is int and value > 0 for value in (
+            limits.memory_bytes, limits.tasks,
+            limits.cpu_quota_percent, limits.scratch_bytes,
+        ))
+    )
+
+
 @dataclass(frozen=True)
 class ManagerObservation:
     session: UUID
@@ -166,7 +188,7 @@ class SystemdWorkerContract:
         self._lock = threading.Lock()
 
     def _remember(self, spec: WorkerSpec) -> None:
-        if type(spec) is not WorkerSpec or spec.identity.boot != self._boot:
+        if not _valid_worker_spec(spec) or spec.identity.boot != self._boot:
             raise ValueError("Worker specification or boot mismatch.")
         previous = self._workers.get(spec.identity.attempt)
         if previous is not None and previous != spec:
@@ -221,35 +243,16 @@ class SystemdWorkerContract:
             )
 
     def _observe(self, spec: WorkerSpec) -> CleanupEvidence:
+        from gvai.systemd_observation_validator import validate_observation
+
         request = uuid4()
         observation = self._manager.cancel(spec, self._session, request)
-        if (
-            type(observation) is not ManagerObservation
-            or type(observation.session) is not UUID or observation.session != self._session
-            or type(observation.request) is not UUID or observation.request != request
-            or type(observation.spec) is not WorkerSpec or observation.spec != spec
-            or type(observation.service) is not str
-            or observation.service != spec.identity.service
-            or type(observation.restrictions) is not frozenset
-            or observation.restrictions != REQUIRED_RESTRICTIONS
-            or type(observation.reaper) is not str or observation.reaper != "trusted-manager"
-            or any(type(value) is not bool for value in (
-                observation.kill_requested, observation.empty,
-                observation.descendants_reaped, observation.terminal,
-            ))
-        ):
-            raise ValueError("Unverified, stale or contradictory manager observation.")
-        if observation.terminal and not (
-            observation.kill_requested and observation.empty and observation.descendants_reaped
-        ):
-            raise ValueError("Terminal state lacks complete cleanup evidence.")
-        if observation.descendants_reaped and not observation.empty:
-            raise ValueError("Reaping completion contradicts live cgroup population.")
-        if not observation.kill_requested:
-            raise ValueError("Manager did not accept STOP.")
-        complete = observation.terminal and observation.empty and observation.descendants_reaped
+        validation = validate_observation(observation, spec, self._session, request)
+        if not validation.structurally_valid:
+            raise ValueError(validation.reason)
         return CleanupEvidence(
-            "terminated" if complete else "pending", True,
+            "terminated" if validation.cleanup_complete else "pending",
+            observation.kill_requested,
             observation.empty, observation.descendants_reaped,
         )
 
