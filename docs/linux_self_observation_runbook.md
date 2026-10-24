@@ -38,7 +38,7 @@ If any precondition cannot be established, do not run the command.
 From the repository root on the specifically approved Linux test host:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m gvai.linux_self_observation
+python3 linux_self_observation.py
 ```
 
 Do not add arguments, privilege escalation, `strace`, `tee`, redirection,
@@ -57,8 +57,10 @@ The report always has `state: "unverified"` and contains only self-observation:
 - Procfs status fields: real/effective/saved/filesystem UID and GID,
   `NoNewPrivs`, seccomp mode, and capability sets.
 - UID/GID maps and `setgroups`.
-- Effective AppArmor label, only if the kernel interface is available and
-  explicitly reports an enforcing label.
+- AppArmor self-label and reported mode (`ENFORCING`, `COMPLAIN`, or
+  `UNCONFINED`) when the kernel interface returns a recognized value. This
+  describes only the diagnostic process; it does not establish GVAI worker
+  protection. Missing or malformed values remain `UNVERIFIED`.
 - Inode/device pairs for the current process' namespace handles.
 - The kernel-reported cgroup path and, where safely resolvable below the fixed
   `/sys/fs/cgroup` descriptor, cgroup-v2 inode/device and whether the process
@@ -118,7 +120,9 @@ termination authority.
   A mismatch or inaccessible descendant is unverified; no fallback path is
   searched.
 - Descriptor enumeration races with descriptor changes, and target strings
-  do not prove retained open-file identity.
+  do not prove retained open-file identity. A disappearing or reused
+  descriptor invalidates the entire inventory; partial results are not
+  reported as a successful observation.
 - Proc status values for capabilities, seccomp, and `NoNewPrivs`, and the
   AppArmor current label, are self-observations. They do not prove policy
   provenance, enforcement correctness, or absence of earlier unconfined code.

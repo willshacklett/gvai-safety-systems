@@ -21,7 +21,7 @@ PROC_SUPER_MAGIC = 0x9FA0
 CGROUP2_SUPER_MAGIC = 0x63677270
 NSFS_MAGIC = 0x6E736673
 NAMESPACE_NAMES = ("cgroup", "ipc", "mnt", "net", "pid", "uts", "user")
-
+NAMESPACE_LINK_PATHS = frozenset(("ns", name) for name in NAMESPACE_NAMES)
 FIELD_PATHS = {
     "stat": ("stat",),
     "status": ("status",),
@@ -56,7 +56,7 @@ class SelfReader(Protocol):
 
     def id_maps(self) -> dict[str, object]: ...
 
-    def apparmor_label(self) -> str: ...
+    def apparmor_label(self) -> dict[str, str]: ...
 
     def namespaces(self) -> dict[str, dict[str, int]]: ...
 
@@ -141,6 +141,8 @@ def _open_beneath(
 ) -> int:
     if type(components) is not tuple or not components:
         raise ValueError("Fixed relative path components required.")
+    if follow_final_kernel_link and components not in NAMESPACE_LINK_PATHS:
+        raise ValueError("Only allowlisted namespace links may be followed.")
     current = os.dup(directory_fd)
     try:
         for index, component in enumerate(components):
@@ -152,8 +154,6 @@ def _open_beneath(
             ):
                 raise ValueError("Unsafe descriptor-relative path component.")
             final = index == len(components) - 1
-            if follow_final_kernel_link and not final:
-                raise ValueError("Only fixed final kernel links may be followed.")
             flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NONBLOCK", 0)
             if not (final and follow_final_kernel_link):
                 flags |= os.O_NOFOLLOW
@@ -239,6 +239,22 @@ def _parse_map(raw: bytes) -> tuple[tuple[int, int, int], ...]:
     if not rows:
         raise ValueError("Empty UID/GID map.")
     return tuple(rows)
+
+
+def _parse_apparmor_label(raw: bytes) -> dict[str, str]:
+    value = raw.decode("utf-8", errors="strict").strip()
+    if value == "unconfined":
+        return {"state": "UNCONFINED", "label": value}
+    for suffix, state in ((" (enforce)", "ENFORCING"), (" (complain)", "COMPLAIN")):
+        if value.endswith(suffix):
+            label = value[: -len(suffix)]
+            if (
+                not label or label == "unconfined" or len(label) > 4096
+                or any(character in label for character in ("\x00", "\n", "\r"))
+            ):
+                break
+            return {"state": state, "label": label}
+    raise ValueError("AppArmor label is missing or malformed.")
 
 
 def _parse_cgroup(raw: bytes) -> str:
@@ -372,17 +388,10 @@ class LinuxSelfReader:
             raise ValueError("Unknown setgroups status.")
         return result
 
-    def apparmor_label(self) -> str:
+    def apparmor_label(self) -> dict[str, str]:
         values = []
         for _ in range(2):
-            raw = self._field("apparmor").decode("utf-8", errors="strict").strip()
-            suffix = " (enforce)"
-            if not raw.endswith(suffix):
-                raise ValueError("AppArmor label is unavailable or not enforcing.")
-            label = raw[: -len(suffix)]
-            if not label or len(label) > 4096 or "\x00" in label:
-                raise ValueError("Malformed AppArmor label.")
-            values.append(label)
+            values.append(_parse_apparmor_label(self._field("apparmor")))
         if values[0] != values[1]:
             raise InterruptedError("AppArmor label changed.")
         return values[0]
@@ -469,6 +478,8 @@ class LinuxSelfReader:
                 ]
                 if len(flags) != 1 or not flags[0] or any(c not in "01234567" for c in flags[0]):
                     raise ValueError("Malformed descriptor flags.")
+                if _readlink_bounded(fd_dir, name) != target:
+                    raise InterruptedError("Descriptor was reused during observation.")
                 records.append({"number": int(name), "target": target, "flags_octal": flags[0]})
             return tuple(records)
         finally:
@@ -563,7 +574,18 @@ class SelfObservationHarness:
                     )
                 )
             if name == "apparmor":
-                return type(value) is str and 0 < len(value) <= 4096 and "\x00" not in value
+                return (
+                    type(value) is dict
+                    and set(value) == {"state", "label"}
+                    and value["state"] in ("ENFORCING", "UNCONFINED", "COMPLAIN")
+                    and type(value["label"]) is str
+                    and 0 < len(value["label"]) <= 4096
+                    and "\x00" not in value["label"]
+                    and (
+                        (value["state"] == "UNCONFINED" and value["label"] == "unconfined")
+                        or (value["state"] != "UNCONFINED" and value["label"] != "unconfined")
+                    )
+                )
             if name == "namespaces":
                 return (
                     type(value) is dict and set(value) == set(NAMESPACE_NAMES)
