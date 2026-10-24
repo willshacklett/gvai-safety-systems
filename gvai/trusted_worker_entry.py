@@ -17,6 +17,8 @@ from gvai.launcher_worker_contract import (
 from gvai.systemd_worker_profile import REQUIRED_NAMESPACES, WORKER_SECCOMP_POLICY_ID
 from gvai.systemd_worker_contract import WorkerSpec, _valid_worker_spec
 
+MAX_CHALLENGE_LIFETIME_NS = 5_000_000_000
+
 
 def _positive(value: object) -> bool:
     return type(value) is int and value > 0
@@ -335,17 +337,21 @@ class TrustedEntryExchange:
     def __init__(
         self, identity: EntryIdentity, verifier: VerifierIdentity,
         mapping_plan: tuple[MappingPlan, ...],
+        approved_request: EvidenceRequest,
         authenticator: EntryAuthenticator | None = None, *, lifetime_ns: int = 1_000_000_000,
         clock: Callable[[], int] = time.monotonic_ns,
     ):
         if (
             type(identity) is not EntryIdentity or type(verifier) is not VerifierIdentity
-            or not _positive(lifetime_ns) or not _valid_mapping_plan(mapping_plan)
+            or not _positive(lifetime_ns) or lifetime_ns > MAX_CHALLENGE_LIFETIME_NS
+            or not _valid_mapping_plan(mapping_plan)
+            or not _valid_request(approved_request, identity)
         ):
-            raise ValueError("Pinned entry, verifier identity and positive evidence lifetime required.")
+            raise ValueError("Pinned entry, verifier, approved request, mapping plan and bounded lifetime required.")
         self._identity = identity
         self._verifier = verifier
         self._mapping_plan = mapping_plan
+        self._approved_request = approved_request
         self._authenticator = authenticator
         self._lifetime_ns = lifetime_ns
         self._clock = clock
@@ -358,26 +364,27 @@ class TrustedEntryExchange:
 
     def issue(self, request: EvidenceRequest) -> EntryChallenge:
         now_ns = self._clock()
-        if type(now_ns) is not int or now_ns < 0 or not _valid_request(request, self._identity):
-            raise ValueError("Exact worker-entry request and trusted monotonic time required.")
+        if (
+            type(now_ns) is not int or now_ns < 0
+            or not _valid_request(request, self._identity)
+            or request != self._approved_request
+        ):
+            raise ValueError("Exact independently approved worker-entry request and trusted monotonic time required.")
         nonce = secrets.token_bytes(32)
         with self._lock:
             if self._stopped:
                 raise ValueError("STOP is latched; new entry challenges are forbidden.")
-            if self._last_request is not None and (
-                request.session != self._last_request.session
-                or request.revision < self._last_request.revision
-                or request.spec != self._last_request.spec
+            if (
+                request != self._approved_request
                 or now_ns < self._last_issued_at_ns
             ):
-                raise ValueError("Session, specification, revision or monotonic time changed.")
+                raise ValueError("Approved session, specification, revision or monotonic time changed.")
             self._epoch += 1
             challenge = EntryChallenge(
                 request, self._identity, self._verifier, nonce, self._epoch,
                 now_ns, now_ns + self._lifetime_ns, self._mapping_plan,
             )
             self._pending = challenge
-            self._last_request = request
             self._last_issued_at_ns = now_ns
             return challenge
 

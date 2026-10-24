@@ -17,7 +17,8 @@ from gvai.systemd_worker_contract import ResourceLimits, WorkerIdentity, WorkerS
 from gvai.systemd_worker_profile import REQUIRED_NAMESPACES, WORKER_SECCOMP_POLICY_ID
 from gvai.trusted_worker_entry import (
     ArtifactIdentity, EntryIdentity, EntryObservation, EntryResponse,
-    MappingEvidence, MappingPlan, MappingStage, ObjectPin, ObservationState, ProcessLifetime,
+    MAX_CHALLENGE_LIFETIME_NS, MappingEvidence, MappingPlan, MappingStage,
+    ObjectPin, ObservationState, ProcessLifetime,
     TrustedEntryExchange, VerifierIdentity,
 )
 
@@ -65,16 +66,17 @@ def setup(*, authenticator=True):
     verifier = VerifierIdentity(ArtifactIdentity(ObjectPin(8, 93), "b" * 64), "c" * 64)
     clock = Clock()
     auth = FixtureAuthenticator()
+    request = EvidenceRequest(
+        spec, UUID(int=3), 4, S.INPUT_AND_SECCOMP_VERIFIED, S.WORKER_CONFINEMENT_VERIFIED,
+    )
     exchange = TrustedEntryExchange(
         identity, verifier,
         (
             MappingPlan(MappingStage.INITIAL, ((0, 60001, 1),), ((0, 60001, 1),)),
             MappingPlan(MappingStage.FINAL, ((60001, 0, 1),), ((60001, 0, 1),)),
         ),
+        request,
         auth if authenticator else None, lifetime_ns=100, clock=clock,
-    )
-    request = EvidenceRequest(
-        spec, UUID(int=3), 4, S.INPUT_AND_SECCOMP_VERIFIED, S.WORKER_CONFINEMENT_VERIFIED,
     )
     return exchange, request, auth, clock
 
@@ -394,6 +396,48 @@ def test_wrong_request_cannot_issue_challenge(change):
         exchange.issue(change(request))
 
 
+@pytest.mark.parametrize("lifetime", [
+    0, -1, True, None, "5", 1.5,
+    MAX_CHALLENGE_LIFETIME_NS + 1, 1 << 63,
+])
+def test_challenge_lifetime_is_strictly_bounded(lifetime):
+    exchange, request, _, _ = setup()
+    with pytest.raises(ValueError):
+        TrustedEntryExchange(
+            exchange._identity, exchange._verifier, exchange._mapping_plan,
+            request, lifetime_ns=lifetime,
+        )
+
+
+@pytest.mark.parametrize("change", [
+    lambda request: replace(request, revision=5),
+    lambda request: replace(request, session=UUID(int=9)),
+    lambda request: replace(request, spec=replace(request.spec, uid=60002)),
+    lambda request: replace(request, spec=replace(request.spec, gid=60002)),
+    lambda request: replace(request, spec=replace(
+        request.spec, identity=replace(
+            request.spec.identity, cgroup=ContainmentIdentity(8, 92),
+        ),
+    )),
+    lambda request: replace(request, spec=replace(
+        request.spec, limits=replace(request.spec.limits, memory_bytes=128 * 1024**2),
+    )),
+    lambda request: replace(request, spec=replace(
+        request.spec, limits=replace(request.spec.limits, tasks=64),
+    )),
+    lambda request: replace(request, spec=replace(
+        request.spec, limits=replace(request.spec.limits, cpu_quota_percent=300),
+    )),
+    lambda request: replace(request, spec=replace(
+        request.spec, limits=replace(request.spec.limits, scratch_bytes=32 * 1024**2),
+    )),
+])
+def test_exchange_rejects_unapproved_spec_or_request_substitution(change):
+    exchange, request, _, _ = setup()
+    with pytest.raises(ValueError, match="approved"):
+        exchange.issue(change(request))
+
+
 def test_process_identity_requires_more_than_pid_and_service_is_fixed():
     with pytest.raises(ValueError):
         ProcessLifetime(123, 456, ObjectPin(9, 10), b"")
@@ -448,7 +492,7 @@ def test_authenticator_must_return_exact_boolean_true():
 def test_exchange_rejects_session_spec_or_revision_rebinding(change):
     exchange, request, _, _ = setup()
     exchange.issue(request)
-    with pytest.raises(ValueError, match="changed"):
+    with pytest.raises(ValueError, match="approved"):
         exchange.issue(change(request))
 
 
@@ -456,7 +500,7 @@ def test_issue_rejects_clock_rollback():
     exchange, request, _, clock = setup()
     exchange.issue(request)
     clock.now = 99
-    with pytest.raises(ValueError, match="changed"):
+    with pytest.raises(ValueError, match="Approved"):
         exchange.issue(request)
 
 
@@ -467,7 +511,7 @@ def test_new_challenge_during_authentication_invalidates_old_result():
     issued = []
 
     def supersede(value):
-        issued.append(exchange.issue(replace(request, revision=request.revision + 1)))
+        issued.append(exchange.issue(request))
         return value
 
     auth.transform = supersede

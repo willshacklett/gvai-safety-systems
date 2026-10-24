@@ -4,8 +4,8 @@
 
 Source-only, deny-only protocol model built from
 `308d496d25f945eed131eb0d99588913d9aeab51` on
-`feature/iron-switch-trusted-entry`. No production authenticator, process pinning,
-runtime collector, policy, transport, worker entry or launcher is implemented.
+`feature/iron-switch-trusted-entry`. No production authenticator, authenticated
+process pinning/runtime collector, policy, transport, worker entry or launcher is implemented.
 No kernel or AppArmor acceptance has occurred. **Stop for human review.**
 
 [The exchange](../gvai/trusted_worker_entry.py) is compatible with the
@@ -13,6 +13,10 @@ No kernel or AppArmor acceptance has occurred. **Stop for human review.**
 not a production `TrustedLifecycleVerifier` implementation. The lifecycle source,
 its unconditional worker-entry block, STOP ownership and publication boundaries
 remain unchanged.
+
+The separate [Linux collector foundation](../gvai/linux_worker_evidence.py)
+uses fixed process-field keys and parent-provided pinned descriptors. It does
+not install a lifecycle verifier or convert collection into acceptance.
 
 ## Identity and trust boundary
 
@@ -35,11 +39,15 @@ kernel lifetime handle, verify liveness and actual membership, prevent PID and
 inode reuse, and authenticate observations against independently provisioned
 trust roots. Pin tokens are correlation references, not worker-created handles.
 
-The supervisor alone constructs the exchange, expected identities, mapping
-plan, clock and authenticator. Do not expose these setters/construction paths to
-workers. An injected Python authenticator is part of the test/TCB boundary, not
-a cryptographic trust bootstrap. Same-process compromise or Python reflection
-is not contained by dataclass immutability.
+The supervisor alone constructs the exchange with an independently approved,
+complete lifecycle `EvidenceRequest`, expected identities, mapping plan, clock
+and authenticator. Every issued request must exactly equal that bound request;
+the caller and callback cannot choose or redefine its spec, UID/GID, resource
+limits, cgroup, session or revision. A new approved revision requires a new
+exchange. Do not expose these construction paths to workers. An injected Python
+authenticator or clock is part of a test/TCB seam, not a cryptographic trust
+bootstrap. Same-process compromise or Python reflection is not contained by
+dataclass immutability.
 
 ## Evidence body
 
@@ -81,6 +89,9 @@ not just trust check names or digests. Fixture consistency is never kernel truth
    `INPUT_AND_SECCOMP_VERIFIED -> WORKER_CONFINEMENT_VERIFIED`.
 2. The exchange generates a fresh 256-bit random nonce and incrementing epoch.
    A new challenge invalidates the previous outstanding challenge.
+   Configured lifetimes must be positive integers no greater than
+   `MAX_CHALLENGE_LIFETIME_NS` (5 seconds); booleans and larger values are
+   rejected.
 3. The request, expected identities, mapping intent, issue time and exclusive
    expiry are bound into the challenge. Session/spec changes, revision rollback
    and issue-clock reversal are rejected. Retries may use the same lifecycle
@@ -101,6 +112,9 @@ authenticated peer identity, full-message integrity, challenge binding, replay
 protection across reconnects/restarts and protected trust-root provisioning.
 This module defines no wire codec, signature scheme, socket or network service.
 No filename, socket path or claimed UUID is accepted as an authentication method.
+The 5-second ceiling bounds the validity window, not the number of issue
+attempts over the life of the exchange; state remains bounded to one pending
+challenge and a monotonic integer epoch.
 
 The exchange is process-local. Create a fresh exchange on restart, boot,
 process lifetime, launcher, mapping-plan or cgroup change; do not reuse old
@@ -117,6 +131,38 @@ are forbidden after STOP; outstanding and in-flight results become unusable.
 The external supervisor must notify both the lifecycle and this exchange.
 Either notification can happen first: the unchanged lifecycle's epoch checks
 and unconditional worker-entry gate still deny entry.
+
+## Linux collector foundation
+
+`KernelEvidenceCollector` accepts a `ProcessHandleContext` containing the
+parent-provided pidfd, process-directory FD, cgroup-directory FD, fixed request,
+expected namespace/map identities and exact FD inventory. The Linux reader
+duplicates these FDs, marks its copies non-inheritable, validates procfs and
+cgroup-v2 filesystem identities, and closes its retained duplicates explicitly.
+The reader chooses only enum-backed files (`stat`, `status`, maps, `setgroups`,
+`cgroup`, and `attr/current`), uses descriptor-relative, component-at-a-time
+`O_NOFOLLOW` traversal for ordinary files, follows only fixed proc namespace
+magic links, and limits content, FD count and target size. Namespace descriptors
+must be nsfs; cgroup descriptors must be cgroup v2. PID/start time are checked
+against pidfd information and process liveness is polled without waiting before
+and after collection. Changed/malformed FD inventories fail closed.
+
+It parses credentials, all five capability sets, NNP, seccomp mode, enforcing
+AppArmor label, current UID/GID maps, cgroup identity/membership, namespace
+identities and descriptors. The report remains `UNVERIFIED` even when facts
+match: supplied FDs are not themselves proof of independent provenance, and
+the collector does not authenticate the handle owner or policy bytes. Injected
+readers are marked `INJECTED_TEST_READER` and can never produce verified
+evidence. Fixed pseudo-file reads have byte caps and no observer wait loop;
+an injected synchronous test reader is trusted test code and is not forcibly
+cancelled if it blocks.
+
+The current-process interfaces do not prove the historical initial and final
+UID-map setup stages, setup-FD closure before worker entry, installed seccomp
+program bytes, or that no untrusted instruction ran before observation. Those
+require an independently trusted, bounded evidence collector/launcher protocol
+and authenticated source records. This foundation does not inspect the actual
+host in tests and is not a host-acceptance tool.
 
 No authenticator, clock callback or response interpretation runs under the
 exchange mutex. STOP does not wait for collection/authentication completion.
