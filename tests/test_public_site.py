@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import json
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
@@ -122,6 +123,7 @@ class PublicSiteTests(unittest.TestCase):
         self.assertIn("In development", self.page)
         self.assertIn("Experimental", self.page)
         self.assertIn("No live analysis", self.page)
+        self.assertIn('href="prototype-demo.html"', self.page)
 
     def test_public_page_has_no_legacy_domain_or_live_runtime(self) -> None:
         public_source = self.page + self.styles
@@ -236,6 +238,148 @@ class PublicSiteTests(unittest.TestCase):
             "before merging the deployment workflow pr", deployment_notes.lower()
         )
         self.assertIn("required-reviewer rule", deployment_notes)
+
+
+class PrototypeDemoTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.page = (REPOSITORY_ROOT / "prototype-demo.html").read_text(encoding="utf-8")
+        self.styles = (REPOSITORY_ROOT / "prototype-demo.css").read_text(encoding="utf-8")
+        self.script = (REPOSITORY_ROOT / "prototype-demo.js").read_text(encoding="utf-8")
+
+    def embedded_results(self) -> dict[str, object]:
+        match = re.search(
+            r'<script type="application/json" id="recorded-results">\s*(.*?)\s*</script>',
+            self.page,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "Demo must use its embedded static evidence snapshot.")
+        return json.loads(match.group(1))
+
+    def test_scenarios_match_the_recorded_acceptance_evidence(self) -> None:
+        source = json.loads(
+            (REPOSITORY_ROOT / "experiments/results/gv_v2_acceptance.json")
+            .read_text(encoding="utf-8")
+        )
+        shown = self.embedded_results()
+        self.assertEqual(shown["experiment"], source["experiment"])
+        self.assertEqual(shown["timestamp_utc"], source["timestamp_utc"])
+        self.assertEqual(shown["platform"], source["platform"])
+        self.assertEqual(shown["authoritative_files"], source["authoritative_files"])
+        self.assertEqual(shown["passed"], source["passed"])
+        expected_names = {
+            "safe_work",
+            "protected_file_attack",
+            "network_attack",
+            "process_attack",
+        }
+        self.assertEqual({item["action"] for item in shown["actions"]}, expected_names)
+        for actual in shown["actions"]:
+            original = next(
+                item for item in source["actions"] if item["action"] == actual["action"]
+            )
+            for field in (
+                "allowed",
+                "committed",
+                "halted",
+                "observed_effects",
+                "os_boundary_failure",
+            ):
+                self.assertEqual(actual[field], original[field], (actual["action"], field))
+        self.assertIn("result.txt", shown["authoritative_files"])
+
+    def test_demo_discloses_experimental_offline_nonservice_status(self) -> None:
+        for disclosure in (
+            "Offline prototype walkthrough",
+            "Experimental research",
+            "not a live service",
+            "No AI worker or model runs here",
+            "does not monitor threats",
+            "does not process customer data",
+            "no production safety guarantee",
+            "External authorization",
+            "not represented by this experiment",
+        ):
+            self.assertIn(disclosure.lower(), self.page.lower())
+
+    def test_scenario_controls_are_keyboard_accessible_and_home_linked(self) -> None:
+        parser = PublicPageParser()
+        parser.feed(self.page)
+        parser.finish()
+        self.assertEqual(parser.structure_errors, [])
+        self.assertIn('href="index.html"', self.page)
+        self.assertIn('role="group" aria-label="Recorded prototype scenarios"', self.page)
+        self.assertIn('aria-live="polite"', self.page)
+        self.assertIn('role="status"', self.page)
+        self.assertIn('class="skip-link" href="#main"', self.page)
+        self.assertIn(':focus-visible', self.styles)
+        self.assertIn('aria-controls="result-card"', self.page)
+        self.assertIn("<noscript>", self.page)
+        buttons = re.findall(r'<button\b[^>]*data-scenario="([^"]+)"', self.page)
+        self.assertEqual(
+            set(buttons),
+            {
+                "safe_work",
+                "protected_file_attack",
+                "network_attack",
+                "process_attack",
+                "commit_outcome",
+            },
+        )
+        self.assertEqual(self.page.count('type="button"'), 5)
+        self.assertEqual(self.page.count('aria-pressed="true"'), 1)
+
+    def test_demo_is_responsive_and_has_no_runtime_or_external_dependencies(self) -> None:
+        self.assertIn("@media (max-width: 760px)", self.styles)
+        self.assertIn("@media (max-width: 480px)", self.styles)
+        dependencies = re.findall(
+            r'<(?:script|link|img)\b[^>]*(?:src|href)="([^"]+)"',
+            self.page,
+            flags=re.IGNORECASE,
+        )
+        self.assertTrue(dependencies)
+        self.assertTrue(
+            all(not value.startswith(("http:", "https:", "//", "data:")) for value in dependencies),
+            dependencies,
+        )
+        forbidden_runtime = (
+            "fetch(",
+            "XMLHttpRequest",
+            "WebSocket",
+            "EventSource",
+            "sendBeacon",
+            "eval(",
+            "new Function",
+            "localStorage",
+        )
+        for forbidden in forbidden_runtime:
+            self.assertNotIn(forbidden.lower(), self.script.lower())
+        self.assertNotIn("<form", self.page.lower())
+        self.assertNotIn("<input", self.page.lower())
+        self.assertNotIn("https://", self.script.lower())
+
+    def test_demo_assets_are_explicitly_allowlisted_but_private_dashboard_is_not(self) -> None:
+        self.assertIn("prototype-demo.html", PUBLIC_FILES)
+        self.assertIn("prototype-demo.css", PUBLIC_FILES)
+        self.assertIn("prototype-demo.js", PUBLIC_FILES)
+        self.assertNotIn("dashboard/index.html", PUBLIC_FILES)
+        with TemporaryDirectory() as temporary:
+            output = prepare_site(Path(temporary) / "site")
+            published = {
+                path.relative_to(output).as_posix()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+        self.assertEqual(published, set(PUBLIC_FILES))
+
+    def test_demo_does_not_change_deployment_workflow_or_publish_on_feature_branches(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/deploy-public-site.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('push:\n    branches: ["main"]', workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertIn("needs: validate_build", workflow)
+        self.assertIn("path: dist/public-site", workflow)
 
 
 if __name__ == "__main__":

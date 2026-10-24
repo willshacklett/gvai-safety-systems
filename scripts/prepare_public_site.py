@@ -12,6 +12,9 @@ PUBLIC_FILES = (
     "assets/gvai-mark.svg",
     "assets/GvAI-MIT-LICENSE.txt",
     "examples/gv_geometry_map.png",
+    "prototype-demo.html",
+    "prototype-demo.css",
+    "prototype-demo.js",
 )
 
 
