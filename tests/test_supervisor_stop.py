@@ -526,13 +526,37 @@ def find_unapproved_containment_callers(root):
                     and line.strip() == "from gvai.systemd_worker_contract import ("
                 )
                 legitimate_import = legitimate_import or (
-                    relative == "gvai/systemd_worker_profile.py"
+                    relative in {
+                        "gvai/systemd_worker_profile.py",
+                        "gvai/launcher_worker_contract.py",
+                    }
                     and line.strip()
                     == "from gvai.systemd_worker_contract import WorkerSpec, _valid_worker_spec"
                 )
                 if not legitimate_import:
                     callers.add(relative)
     return sorted(callers)
+
+
+def test_lifecycle_import_exception_does_not_allow_containment_authority(tmp_path):
+    directory = tmp_path / "gvai"
+    directory.mkdir()
+    source = directory / "launcher_worker_contract.py"
+    source.write_text(
+        "from gvai.systemd_worker_contract import WorkerSpec, _valid_worker_spec\n",
+        encoding="utf-8",
+    )
+    assert find_unapproved_containment_callers(tmp_path) == []
+    for forbidden in (
+        "from gvai.supervisor_stop import StopController",
+        "from gvai.linux_containment_stop import OwnedContainment",
+        "from gvai.systemd_worker_contract import SystemdWorkerContract",
+        "from gvai.systemd_worker_contract import WorkerSpec, SystemdWorkerContract",
+    ):
+        source.write_text(forbidden + "\n", encoding="utf-8")
+        assert find_unapproved_containment_callers(tmp_path) == [
+            "gvai/launcher_worker_contract.py",
+        ]
 
 
 def test_no_existing_runtime_or_publication_callers(tmp_path):
