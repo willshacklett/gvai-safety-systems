@@ -164,6 +164,61 @@ loss handling. Its host-capability inputs are assertions that must be produced
 by a separate trusted discovery/verification mechanism. The plan is not a
 runnable unit definition and must not be treated as execution approval.
 
+Read-only Linux host preflight
+------------------------------
+
+``gvai/linux_host_preflight.py`` provides a bounded observation collector over
+fixed kernel/configuration paths and two fixed ``--version`` queries for
+systemd and Bubblewrap. It uses no shell, network, systemctl, D-Bus, service
+operation, sandbox launch, worker, or policy modification. Linux filesystem
+reads are path-allowlisted, opened nonblocking, bounded, and use
+descriptor-relative no-follow resolution. The opened descriptor is checked
+with ``fstat`` and must be a regular file before any content read. The selected
+procfs, sysfs, and cgroupfs text interfaces are expected to expose regular
+pseudo-files; unexpected FIFOs, sockets, character devices, block devices, or
+other special files remain unavailable observations and are never read. This
+type check is not content authentication. The version queries execute only
+the fixed systemd and Bubblewrap binaries with ``--version``; their binary
+provenance is still not authenticated.
+The fixed byte limits bound data accepted by the collector, but do not provide
+a universal wall-clock deadline for kernel-interface operations. Calls such as
+path traversal/open, ``fstat``, ``read`` on procfs/sysfs/cgroupfs/securityfs, and
+filesystem metadata operations execute synchronously in the caller. A kernel,
+filesystem, driver, or unusual pseudo-file behavior can delay these operations
+beyond any userspace deadline; this collector does not move them into a
+killable helper or claim a hard timeout. A signal or userspace timeout cannot
+prove that a blocked kernel operation has completed. If a required observation
+does not return, the preflight may remain blocked; it must not be interpreted as
+successful evidence or readiness.
+
+The fixed version-query subprocess has an output cap and a userspace deadline,
+but those controls also do not prove a universal bound on process cleanup or
+uninterruptible kernel waits. Its fixed command is not a worker-launch path and
+does not establish the executable's provenance. A timeout, query failure, or
+cleanup uncertainty is not evidence of host capability.
+
+The report keeps raw observations distinct from validated interpretation and
+unverified requirements. Each evidence item labels its source as a kernel
+interface, fixed executable query, or configuration assumption. Unavailable
+or permission-denied observations are ``UNVERIFIED``; malformed or contradictory
+observations fail. Even a syntactically valid AppArmor profile listing,
+seccomp action list, cgroup mount, UID/GID range file, version string, or
+executable stat does not establish that the worker will receive the property,
+policy, identity, or isolation described.
+
+In particular, host-side namespace handles do not prove namespace creation
+support; collector credentials do not prove worker capabilities or
+``NoNewPrivs``; a configured policy identifier does not authenticate policy
+contents or installation; path metadata does not prove read-only mounts or
+scratch quotas; and socket metadata does not prove manager separation or
+non-reachability. The fixed worker UID/GID allocation source and systemd 255
+property compatibility remain unverified until trusted, independently
+authenticated configuration and host-side checks are implemented. The report
+never converts observations into ``VerifiedHostCapabilities``, and its
+``ready_to_run``, execution, publication, and all-requirements-verified results
+are permanently false. Evidence age can be queried, but freshness does not
+upgrade its authority.
+
 STOP, restart and output
 ------------------------
 
