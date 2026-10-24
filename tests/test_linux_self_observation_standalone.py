@@ -348,6 +348,97 @@ def test_disappearing_descriptors_abort_entire_inventory(monkeypatch, race):
         assert calls == ["3", "3", "4"]
 
 
+def test_iterator_owned_descriptor_remains_open_while_entries_are_inspected(monkeypatch):
+    active = False
+
+    class Entries:
+        def __enter__(self):
+            nonlocal active
+            active = True
+
+            class Iterator:
+                def __init__(self):
+                    self.names = iter(("3", "9"))
+
+                def __iter__(self):
+                    return self
+
+                def __next__(self):
+                    nonlocal active
+                    try:
+                        name = next(self.names)
+                    except StopIteration:
+                        active = False
+                        raise
+                    return SimpleNamespace(name=name)
+
+            return Iterator()
+
+        def __exit__(self, exc_type, exc, traceback):
+            nonlocal active
+            active = False
+            return False
+
+    def readlink(fd, name):
+        assert active, "Descriptor inspection must finish before scandir closes."
+        return "pipe:[1]" if name == "3" else "anon_inode:[eventpoll]"
+
+    reader = _fake_descriptor_scan(
+        monkeypatch, (), readlink=readlink,
+    )
+    monkeypatch.setattr(diagnostic.os, "scandir", lambda fd: Entries())
+    records = diagnostic.LinuxSelfReader.descriptors(reader)
+    assert [record["number"] for record in records] == [3, 9]
+    assert active is False
+
+
+def test_unrelated_disappearing_descriptor_still_invalidates_partial_scan(monkeypatch):
+    active = False
+
+    class Entries:
+        def __enter__(self):
+            nonlocal active
+            active = True
+
+            class Iterator:
+                def __init__(self):
+                    self.names = iter(("3", "4"))
+
+                def __iter__(self):
+                    return self
+
+                def __next__(self):
+                    nonlocal active
+                    try:
+                        name = next(self.names)
+                    except StopIteration:
+                        active = False
+                        raise
+                    return SimpleNamespace(name=name)
+
+            return Iterator()
+
+        def __exit__(self, exc_type, exc, traceback):
+            nonlocal active
+            active = False
+            return False
+
+    def readlink(fd, name):
+        assert active
+        if name == "4":
+            raise OSError(errno.ENOENT, "unrelated descriptor disappeared")
+        return "pipe:[1]"
+
+    reader = _fake_descriptor_scan(
+        monkeypatch, (), readlink=readlink,
+    )
+    monkeypatch.setattr(diagnostic.os, "scandir", lambda fd: Entries())
+    with pytest.raises(OSError) as error:
+        diagnostic.LinuxSelfReader.descriptors(reader)
+    assert error.value.errno == errno.ENOENT
+    assert active is False
+
+
 def test_descriptor_reuse_between_target_and_fdinfo_is_unverified(monkeypatch):
     targets = iter(("pipe:[1]", "pipe:[2]"))
     reader = _fake_descriptor_scan(
@@ -362,6 +453,18 @@ def test_descriptor_reuse_or_inconsistent_repeated_inventory_is_unverified():
         FakeReader(sequences={"descriptors": [
             ({"number": 3, "target": "pipe:[1]", "flags_octal": "0100000"},),
             ({"number": 3, "target": "pipe:[2]", "flags_octal": "0100000"},),
+        ]}),
+    )
+    assert report.checks["descriptors"] == "UNVERIFIED"
+    assert "descriptors" not in report.facts
+    assert_non_authorizing(report)
+
+
+def test_inconsistent_descriptor_flags_between_inventory_reads_fail_closed():
+    report = diagnostic.SelfObservationHarness().collect(
+        FakeReader(sequences={"descriptors": [
+            ({"number": 3, "target": "pipe:[1]", "flags_octal": "0100000"},),
+            ({"number": 3, "target": "pipe:[1]", "flags_octal": "0200000"},),
         ]}),
     )
     assert report.checks["descriptors"] == "UNVERIFIED"

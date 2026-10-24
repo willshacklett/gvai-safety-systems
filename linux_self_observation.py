@@ -453,35 +453,35 @@ class LinuxSelfReader:
     def descriptors(self) -> tuple[dict[str, object], ...]:
         fd_dir = _open_beneath(self._self_fd, ("fd",))
         try:
-            names = []
+            names = set()
+            records = []
             with os.scandir(fd_dir) as entries:
                 for entry in entries:
-                    names.append(entry.name)
+                    name = entry.name
+                    if type(name) is not str or not name.isdecimal() or name in names:
+                        raise ValueError("Malformed FD inventory.")
+                    names.add(name)
                     if len(names) > MAX_FD_COUNT:
                         raise ValueError("FD inventory exceeds fixed count.")
-            if any(not item.isdecimal() for item in names) or len(set(names)) != len(names):
-                raise ValueError("Malformed FD inventory.")
-            records = []
-            for name in sorted(names, key=int):
-                target = _readlink_bounded(fd_dir, name)
-                info_fd = _open_beneath(self._self_fd, ("fdinfo", name))
-                try:
-                    if not stat.S_ISREG(os.fstat(info_fd).st_mode):
-                        raise OSError("FD info is not a regular procfs pseudo-file.")
-                    info = _read_bounded(info_fd, MAX_FDINFO_BYTES).decode("ascii", errors="strict")
-                finally:
-                    os.close(info_fd)
-                flags = [
-                    line.partition(":")[2].strip()
-                    for line in info.splitlines()
-                    if line.startswith("flags:")
-                ]
-                if len(flags) != 1 or not flags[0] or any(c not in "01234567" for c in flags[0]):
-                    raise ValueError("Malformed descriptor flags.")
-                if _readlink_bounded(fd_dir, name) != target:
-                    raise InterruptedError("Descriptor was reused during observation.")
-                records.append({"number": int(name), "target": target, "flags_octal": flags[0]})
-            return tuple(records)
+                    target = _readlink_bounded(fd_dir, name)
+                    info_fd = _open_beneath(self._self_fd, ("fdinfo", name))
+                    try:
+                        if not stat.S_ISREG(os.fstat(info_fd).st_mode):
+                            raise OSError("FD info is not a regular procfs pseudo-file.")
+                        info = _read_bounded(info_fd, MAX_FDINFO_BYTES).decode("ascii", errors="strict")
+                    finally:
+                        os.close(info_fd)
+                    flags = [
+                        line.partition(":")[2].strip()
+                        for line in info.splitlines()
+                        if line.startswith("flags:")
+                    ]
+                    if len(flags) != 1 or not flags[0] or any(c not in "01234567" for c in flags[0]):
+                        raise ValueError("Malformed descriptor flags.")
+                    if _readlink_bounded(fd_dir, name) != target:
+                        raise InterruptedError("Descriptor was reused during observation.")
+                    records.append({"number": int(name), "target": target, "flags_octal": flags[0]})
+                return tuple(sorted(records, key=lambda record: record["number"]))
         finally:
             os.close(fd_dir)
 
