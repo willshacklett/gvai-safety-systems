@@ -529,6 +529,7 @@ def find_unapproved_containment_callers(root):
                     relative in {
                         "gvai/systemd_worker_profile.py",
                         "gvai/launcher_worker_contract.py",
+                        "gvai/trusted_worker_entry.py",
                     }
                     and line.strip()
                     == "from gvai.systemd_worker_contract import WorkerSpec, _valid_worker_spec"
@@ -538,10 +539,11 @@ def find_unapproved_containment_callers(root):
     return sorted(callers)
 
 
-def test_lifecycle_import_exception_does_not_allow_containment_authority(tmp_path):
+@pytest.mark.parametrize("module", ["launcher_worker_contract", "trusted_worker_entry"])
+def test_lifecycle_import_exception_does_not_allow_containment_authority(tmp_path, module):
     directory = tmp_path / "gvai"
     directory.mkdir()
-    source = directory / "launcher_worker_contract.py"
+    source = directory / f"{module}.py"
     source.write_text(
         "from gvai.systemd_worker_contract import WorkerSpec, _valid_worker_spec\n",
         encoding="utf-8",
@@ -555,7 +557,7 @@ def test_lifecycle_import_exception_does_not_allow_containment_authority(tmp_pat
     ):
         source.write_text(forbidden + "\n", encoding="utf-8")
         assert find_unapproved_containment_callers(tmp_path) == [
-            "gvai/launcher_worker_contract.py",
+            f"gvai/{module}.py",
         ]
 
 
