@@ -7,6 +7,7 @@ import re
 from tempfile import TemporaryDirectory
 import unittest
 from urllib.parse import parse_qs, quote, urlsplit
+from xml.etree import ElementTree
 
 from scripts.prepare_public_site import PUBLIC_FILES, REPOSITORY_ROOT, prepare_site
 
@@ -122,6 +123,164 @@ class PublicSiteTests(unittest.TestCase):
         self.styles = (REPOSITORY_ROOT / "site.css").read_text(encoding="utf-8")
         self.parser = PublicPageParser()
         self.parser.feed(self.page)
+
+    def color_tokens(self) -> dict[str, str]:
+        root = re.search(r":root\s*\{([^}]+)\}", self.styles)
+        self.assertIsNotNone(root)
+        tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", root.group(1)))
+        for name, value in tokens.items():
+            if value.startswith("var("):
+                tokens[name] = tokens[value[4:-1]]
+        return tokens
+
+    def test_brand_tokens_match_actual_logo_and_shared_favicon(self) -> None:
+        logo = ElementTree.parse(REPOSITORY_ROOT / "assets/gvai-mark.svg")
+        colors = {
+            value.lower()
+            for element in logo.iter()
+            for value in element.attrib.values()
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", value)
+        }
+        tokens = self.color_tokens()
+        for name, expected in {
+            "--gv-blue": "#347cff",
+            "--gv-blue-mid": "#4382ff",
+            "--gv-blue-deep": "#1254e8",
+            "--carolina-blue": "#91baff",
+            "--logo-navy": "#102b5c",
+        }.items():
+            self.assertIn(expected, colors)
+            self.assertEqual(tokens[name], expected)
+        self.assertEqual(tokens["--forest"], "#173d32")
+        self.assertEqual(tokens["--forest-deep"], "#102e27")
+        self.assertEqual(tokens["--lime"], "#d8ee72")
+        for filename in ("index.html", "prototype-demo.html"):
+            self.assertIn(
+                '<link rel="icon" type="image/svg+xml" href="assets/gvai-mark.svg">',
+                (REPOSITORY_ROOT / filename).read_text(encoding="utf-8"),
+            )
+
+    def test_brand_text_and_focus_contrast_meet_wcag_aa(self) -> None:
+        tokens = self.color_tokens()
+
+        def luminance(value: str) -> float:
+            channels = [int(value[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+            linear = [
+                channel / 12.92 if channel <= 0.04045
+                else ((channel + 0.055) / 1.055) ** 2.4
+                for channel in channels
+            ]
+            return sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        light_surfaces = (
+            "--white", "--paper", "--surface-green", "--surface-platform",
+            "--accent-surface", "--lime",
+        )
+        pairs = [
+            (foreground, background, 4.5)
+            for foreground in ("--ink", "--muted", "--link", "--logo-navy")
+            for background in light_surfaces
+        ]
+        pairs += [
+            (foreground, background, 4.5)
+            for foreground in ("--white", "--text-on-dark", "--muted-on-dark", "--carolina-blue", "--lime")
+            for background in ("--forest", "--forest-deep", "--logo-navy", "--ink")
+        ]
+        pairs += [
+            ("--white", "--gv-blue-deep", 4.5),
+            ("--ink", "--lime-hover", 4.5),
+        ]
+        pairs += [("--focus", background, 3) for background in light_surfaces]
+        for foreground, background, minimum in pairs:
+            with self.subTest(foreground=foreground, background=background):
+                high, low = sorted(
+                    (luminance(tokens[foreground]), luminance(tokens[background])),
+                    reverse=True,
+                )
+                self.assertGreaterEqual((high + 0.05) / (low + 0.05), minimum)
+
+    def test_brand_accents_are_wired_without_color_only_selection(self) -> None:
+        demo_styles = (REPOSITORY_ROOT / "prototype-demo.css").read_text(encoding="utf-8")
+        for styles in (self.styles, demo_styles):
+            for reference in re.findall(r"var\((--[\w-]+)\)", styles):
+                self.assertIn(reference, self.color_tokens())
+            self.assertNotIn("--coral", styles)
+        for selector, declaration in (
+            (".header-inner nav a:active", "color: var(--link)"),
+            (".contact-actions .button", "background: var(--gv-blue-deep)"),
+            (".contact-email", "color: var(--link)"),
+            (".hero a:focus-visible", "outline-color: var(--carolina-blue)"),
+        ):
+            self.assertRegex(
+                self.styles,
+                re.escape(selector) + r"[^{}]*\{[^}]*" + re.escape(declaration),
+            )
+        self.assertRegex(
+            demo_styles,
+            r'\.scenario-button\[aria-pressed="true"\] strong\s*\{[^}]*text-decoration: underline',
+        )
+        self.assertIn("outline: 3px solid var(--focus)", demo_styles)
+        self.assertIn('background: var(--logo-navy)', demo_styles)
+
+    def test_carolina_heroes_preserve_grid_and_accessible_interaction_colors(self) -> None:
+        tokens = self.color_tokens()
+        self.assertEqual(tokens["--carolina-target"], "#56a0d3")
+        self.assertEqual(tokens["--hero-background"], "#315c7a")
+        demo_styles = (REPOSITORY_ROOT / "prototype-demo.css").read_text(encoding="utf-8")
+        for styles, selector in ((self.styles, ".hero"), (demo_styles, ".demo-hero")):
+            rule = re.search(re.escape(selector) + r"\s*\{([^}]+)\}", styles)
+            self.assertIsNotNone(rule)
+            self.assertIn("var(--hero-background)", rule.group(1))
+            self.assertIn("color: var(--white)", rule.group(1))
+            self.assertEqual(rule.group(1).count("rgba(255, 255, 255, 0.035)"), 2)
+            self.assertIn("background-size: 38px 38px", rule.group(1))
+        for selector in (".hero-lede", ".hero-disclosure", ".hero-index"):
+            self.assertRegex(
+                self.styles,
+                re.escape(selector) + r"\s*\{[^}]*color: var\(--hero-text\)",
+            )
+        self.assertRegex(
+            demo_styles, r"\.demo-lede\s*\{[^}]*color: var\(--hero-text\)"
+        )
+        self.assertRegex(
+            self.styles,
+            r"\.button-outline:hover\s*\{[^}]*background: rgba\(0, 0, 0, 0.12\)",
+        )
+        self.assertRegex(
+            self.styles,
+            r"\.button-outline:active\s*\{[^}]*background: rgba\(0, 0, 0, 0.2\)",
+        )
+
+    def test_carolina_hero_contrast_includes_grid_intersections_and_hover(self) -> None:
+        tokens = self.color_tokens()
+
+        def rgb(value: str) -> tuple[float, ...]:
+            return tuple(int(value[index:index + 2], 16) / 255 for index in (1, 3, 5))
+
+        def luminance(channels: tuple[float, ...]) -> float:
+            return sum(
+                (value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4) * weight
+                for value, weight in zip(channels, (0.2126, 0.7152, 0.0722))
+            )
+
+        def contrast(first: tuple[float, ...], second: tuple[float, ...]) -> float:
+            high, low = sorted((luminance(first), luminance(second)), reverse=True)
+            return (high + 0.05) / (low + 0.05)
+
+        self.assertLess(contrast(rgb(tokens["--white"]), rgb(tokens["--carolina-target"])), 3)
+        background = rgb(tokens["--hero-background"])
+        for lines in (0, 1, 2):
+            grid = tuple(value + (1 - value) * (1 - 0.965 ** lines) for value in background)
+            for foreground in ("--white", "--hero-text", "--lime"):
+                with self.subTest(lines=lines, foreground=foreground):
+                    self.assertGreaterEqual(contrast(rgb(tokens[foreground]), grid), 4.5)
+            with self.subTest(lines=lines, purpose="focus and secondary-button border"):
+                self.assertGreaterEqual(contrast(rgb(tokens["--carolina-blue"]), grid), 3)
+            for opacity in (0, 0.12, 0.2):
+                button = tuple(value * (1 - opacity) for value in grid)
+                with self.subTest(lines=lines, hover_opacity=opacity):
+                    self.assertGreaterEqual(contrast(rgb(tokens["--white"]), button), 4.5)
+                    self.assertGreaterEqual(contrast(rgb(tokens["--carolina-blue"]), button), 3)
 
     def test_brand_sections_and_status_disclosures_are_present(self) -> None:
         self.assertIn("GVAI Safety Systems", self.page)
