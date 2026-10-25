@@ -18,6 +18,30 @@ python -m http.server 8080 --bind 127.0.0.1 --directory dist/public-site
 
 Then open `http://127.0.0.1:8080/`. The builder requires an empty output directory and copies only the allowlisted public files; it does not publish the dashboard, API configuration, data directories, or repository contents generally.
 
+## Prototype-stage customer inquiries
+
+The homepage audience cards and contact section offer **Business - Request a Demonstration**
+and **Government - Request a Technical Briefing** actions. Both open the visitor's
+email application at `contact@gvaisafety.com`, with distinct percent-encoded subject
+lines. The address is also visible and copyable for visitors without a configured
+email application. The recorded demo links back to the homepage contact section.
+
+These are inquiries about experimental work, not an offer of production services,
+customer deployments, or operational safety guarantees. Visitors are instructed not
+to email classified, sensitive, or confidential operational information. Email is
+not a secure operational reporting channel.
+
+The website has no contact form, backend, external API, customer-data storage,
+analytics, tracking, or new network dependencies. Sending email is a separate
+visitor action handled by their email application and mail provider; the website
+does not submit or store the message. No worker, supervisor, deployment workflow,
+or static deployment allowlist changes are required.
+
+For review, check both inquiry subjects, keyboard focus, and button wrapping at
+320px, 375px, 680px, and desktop widths. Do not send a test email unless separately
+authorized. The contact changes alone do not activate hosting or satisfy the
+maintainer deployment gates below.
+
 ## Deployment boundary
 
 This pull request does not configure a hosting provider, GitHub Pages workflow, custom domain, CNAME, DNS, or Railway. For a future approved deployment, CI should run the same allowlisted builder from a reviewed GitHub commit and publish only `dist/public-site` as a static artifact. Hosting should remain replaceable. Do not connect the public page to the source API until tenant identity, resource ownership lookup, authorization, and independent enforcement are integrated and reviewed.

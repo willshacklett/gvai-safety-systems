@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
 import unittest
+from urllib.parse import parse_qs, quote, urlsplit
 
 from scripts.prepare_public_site import PUBLIC_FILES, REPOSITORY_ROOT, prepare_site
 
@@ -37,6 +38,10 @@ class PublicPageParser(HTMLParser):
         self.local_resources: list[str] = []
         self.local_anchors: list[str] = []
         self.external_links: list[str] = []
+        self.mail_links: list[dict[str, str]] = []
+        self.links: list[dict[str, str]] = []
+        self.embedded_resources: list[str] = []
+        self.tags: set[str] = set()
         self.has_script = False
         self.images_without_alt: list[str] = []
         self.audience_path_ids: list[str] = []
@@ -47,6 +52,10 @@ class PublicPageParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attributes = dict(attrs)
+        self.tags.add(tag)
+        for attribute in ("src", "srcset", "poster", "data"):
+            if attributes.get(attribute):
+                self.embedded_resources.append(attributes[attribute])
         if attributes.get("id"):
             self.ids.add(attributes["id"])
         if tag == "script":
@@ -63,7 +72,11 @@ class PublicPageParser(HTMLParser):
                 self.images_without_alt.append(source)
         if tag == "link" and attributes.get("rel") in {"stylesheet", "icon"}:
             self.local_resources.append(attributes.get("href", ""))
+            self.embedded_resources.append(attributes.get("href", ""))
         if tag == "a":
+            link = {key: value for key, value in attrs if value is not None}
+            link["text"] = ""
+            self.links.append(link)
             href = attributes.get("href", "")
             if self.navigation_depth and href.startswith("#"):
                 self.navigation_anchors.append(href[1:])
@@ -71,10 +84,16 @@ class PublicPageParser(HTMLParser):
                 self.local_anchors.append(href[1:])
             elif href.startswith("https://"):
                 self.external_links.append(href)
+            elif href.startswith("mailto:"):
+                self.mail_links.append(link)
             elif href:
                 self.local_resources.append(href)
         if tag not in VOID_ELEMENTS:
             self.open_elements.append(tag)
+
+    def handle_data(self, data: str) -> None:
+        if "a" in self.open_elements:
+            self.links[-1]["text"] += data
 
     def handle_endtag(self, tag: str) -> None:
         if tag in VOID_ELEMENTS:
@@ -156,6 +175,109 @@ class PublicSiteTests(unittest.TestCase):
         self.assertEqual(self.parser.structure_errors, [])
         self.assertEqual(self.parser.open_elements, [])
 
+    def test_contact_actions_have_correct_recipient_and_encoded_subjects(self) -> None:
+        expected_subjects = {
+            "Business - Request a Demonstration":
+                "Business Inquiry - Request a Demonstration",
+            "Government - Request a Technical Briefing":
+                "Government Inquiry - Request a Technical Briefing",
+        }
+        self.assertEqual(len(self.parser.mail_links), 5)
+        for link in self.parser.mail_links:
+            with self.subTest(href=link["href"]):
+                parsed = urlsplit(link["href"])
+                self.assertEqual(parsed.scheme, "mailto")
+                self.assertEqual(parsed.path, "contact@gvaisafety.com")
+                self.assertEqual(parsed.netloc, "")
+                self.assertEqual(parsed.fragment, "")
+                label = link["text"].strip()
+                if label == "contact@gvaisafety.com":
+                    self.assertEqual(parsed.query, "")
+                else:
+                    subject = expected_subjects[label]
+                    self.assertEqual(parse_qs(parsed.query), {"subject": [subject]})
+                    self.assertEqual(parsed.query, "subject=" + quote(subject, safe=""))
+        for label in expected_subjects:
+            self.assertEqual(
+                sum(link["text"].strip() == label for link in self.parser.mail_links),
+                2,
+                "Each audience card and the contact section must offer its inquiry.",
+            )
+
+    def test_contact_is_accessible_disclosed_and_reachable(self) -> None:
+        self.assertIn("contact", self.parser.navigation_anchors)
+        self.assertIn('id="contact" aria-labelledby="contact-title"', self.page)
+        self.assertIn("Prototype-stage inquiries only.", self.page)
+        self.assertIn(
+            "Production services, customer deployments, and operational safety "
+            "guarantees are not available.",
+            self.page,
+        )
+        self.assertIn(
+            "Do not email classified, sensitive, or confidential operational information.",
+            self.page,
+        )
+        self.assertIn("copy the address above", self.page)
+        self.assertIn("nothing is submitted by this website", self.page)
+        for link in self.parser.mail_links:
+            self.assertIn(link["text"].strip(), link["aria-label"])
+            self.assertIn("contact@gvaisafety.com", link["aria-label"])
+            self.assertNotIn("target", link)
+            descriptions = link["aria-describedby"].split()
+            self.assertIn("contact-safety", descriptions)
+            self.assertIn("contact-email-help", descriptions)
+            self.assertTrue(set(descriptions).issubset(self.parser.ids))
+            if "subject=" in link["href"]:
+                self.assertIn("contact-stage", descriptions)
+        demo = (REPOSITORY_ROOT / "prototype-demo.html").read_text(encoding="utf-8")
+        self.assertIn('href="index.html#contact">Contact</a>', demo)
+
+    def test_contact_buttons_have_mobile_wrapping_and_touch_targets(self) -> None:
+        self.assertIn('class="contact-actions"', self.page)
+        buttons = re.search(r"\.contact-actions \.button\s*\{([^}]+)\}", self.styles)
+        self.assertIsNotNone(buttons)
+        for declaration in (
+            "min-width: 0",
+            "min-height: 48px",
+            "white-space: normal",
+            "overflow-wrap: anywhere",
+        ):
+            self.assertIn(declaration, buttons.group(1))
+        desktop = re.search(r"\.contact-actions\s*\{([^}]+)\}", self.styles)
+        self.assertIsNotNone(desktop)
+        self.assertIn("repeat(2, minmax(0, 1fr))", desktop.group(1))
+        mobile = self.styles.split("@media (max-width: 680px)", 1)[1]
+        self.assertRegex(
+            mobile, r"\.contact-actions\s*\{\s*grid-template-columns: minmax\(0, 1fr\);"
+        )
+
+    def test_public_pages_have_only_local_embeds_and_no_submission_or_tracking(self) -> None:
+        for filename in ("index.html", "prototype-demo.html"):
+            with self.subTest(filename=filename):
+                parser = PublicPageParser()
+                page = (REPOSITORY_ROOT / filename).read_text(encoding="utf-8")
+                parser.feed(page)
+                self.assertFalse(
+                    parser.tags & {"form", "input", "textarea", "iframe", "object", "embed"}
+                )
+                for resource in parser.embedded_resources:
+                    self.assertFalse(urlsplit(resource).scheme, resource)
+                    self.assertFalse(urlsplit(resource).netloc, resource)
+                    self.assertTrue((REPOSITORY_ROOT / resource).is_file(), resource)
+                self.assertNotRegex(page.lower(), r"\son[a-z]+\s*=")
+                self.assertNotIn("ping=", page.lower())
+        for filename in ("site.css", "prototype-demo.css"):
+            styles = (REPOSITORY_ROOT / filename).read_text(encoding="utf-8")
+            self.assertNotIn("@import", styles.lower())
+            self.assertNotRegex(styles.lower(), r"url\s*\(")
+        script = (REPOSITORY_ROOT / "prototype-demo.js").read_text(encoding="utf-8")
+        for forbidden in (
+            "fetch", "xmlhttprequest", "websocket", "eventsource", "sendbeacon",
+            "localstorage", "sessionstorage", "indexeddb", "document.cookie",
+            "https://", "http://",
+        ):
+            self.assertNotIn(forbidden, script.lower())
+
     def test_html_validator_detects_misnested_and_unmatched_closing_tags(self) -> None:
         misnested = PublicPageParser()
         misnested.feed("<main><section></main></section>")
@@ -168,6 +290,19 @@ class PublicSiteTests(unittest.TestCase):
         self.assertTrue(any("Unmatched closing tag" in error for error in unmatched.structure_errors))
 
     def test_builder_publishes_only_the_explicit_allowlist(self) -> None:
+        self.assertEqual(
+            PUBLIC_FILES,
+            (
+                "index.html",
+                "site.css",
+                "assets/gvai-mark.svg",
+                "assets/GvAI-MIT-LICENSE.txt",
+                "examples/gv_geometry_map.png",
+                "prototype-demo.html",
+                "prototype-demo.css",
+                "prototype-demo.js",
+            ),
+        )
         with TemporaryDirectory() as temporary:
             output = prepare_site(Path(temporary) / "site")
             published = {
