@@ -18,6 +18,90 @@ python -m http.server 8080 --bind 127.0.0.1 --directory dist/public-site
 
 Then open `http://127.0.0.1:8080/`. The builder requires an empty output directory and copies only the allowlisted public files; it does not publish the dashboard, API configuration, data directories, or repository contents generally.
 
+## Shared brand palette
+
+Both pages use `assets/gvai-mark.svg` as the logo and favicon. Its actual colors
+are the ring `#347cff`, V gradient stops `#91baff`, `#4382ff`, `#1254e8`,
+background gradient stops `#102b5c`, `#07172f`, `#030916`, and white `#ffffff`.
+The artwork has not been modified. The SVG does not name a Carolina blue;
+the site's Carolina-blue token uses its existing light V stop, not an assumed
+external brand standard.
+
+The shared `site.css` root defines:
+
+| Tokens | Values / purpose |
+| --- | --- |
+| `--forest`, `--forest-deep` | `#173d32`, `#102e27`; retained safety-green backgrounds |
+| `--gv-blue`, `--gv-blue-mid` | `#347cff`, `#4382ff`; exact logo accents, not small text on white |
+| `--gv-blue-deep` | `#1254e8`; exact V stop, accessible link and contact-button blue |
+| `--carolina-blue` | `#91baff`; exact light V stop, accents and focus on dark backgrounds |
+| `--carolina-target` | `#56a0d3`; human-approved initial hero target, not a logo-extracted color |
+| `--hero-background`, `--hero-text` | `#315c7a`, `#e0ebe4`; accessible darker Carolina-derived hero and supporting text |
+| `--logo-navy` | `#102b5c`; exact logo background stop, selected demo and hover backgrounds |
+| `--link`, `--focus` | aliases of `--gv-blue-deep` on light backgrounds |
+| `--lime`, `--lime-hover` | `#d8ee72`, `#e5f69b`; retained primary CTA |
+| `--paper`, `--white` | `#f2f5f0`, `#ffffff`; retained light backgrounds |
+| `--accent-surface` | `#eaf2ff`; supporting blue tint, not an extracted logo color |
+| `--surface-green`, `--surface-platform` | `#e4ebe4`, `#e9ede2`; retained supporting surfaces |
+| `--ink`, `--muted`, `--rule` | `#17221d`, `#52635a`, `#d4ddd5`; text and decorative dividers |
+| `--text-on-dark`, `--muted-on-dark` | `#e0ebe4`, `#c3d3c9`; shared light text on dark surfaces |
+
+Public-site tests calculate WCAG contrast using sRGB relative luminance:
+normal text pairs must meet 4.5:1 and focus outlines on light surfaces 3:1.
+Light-blue focus on dark green exceeds 6:1. Ring blue on white is only 3.84:1,
+so small blue text uses the darker V stop instead. Decorative dividers are not
+control boundaries. Selected walkthrough controls retain `aria-pressed` and add
+an underline, so selection is not conveyed by color alone.
+
+### Carolina-blue hero refinement
+
+The homepage and recorded walkthrough now share the darker Carolina-derived
+`#315c7a` hero background and retain the two 3.5%-white grid layers at 38px.
+White text on the original `#56a0d3` target is only 2.85:1, failing AA even for
+large text. On the final background, white is 7.14:1 on solid areas and 6.02:1
+at the brightest grid intersections. At those intersections, supporting text
+is 4.92:1, lime text is 4.70:1, and light-blue focus/button borders are 3.06:1.
+Secondary-button hover and active fills use black at 12% and 20%, so they
+do not reduce text contrast. Primary lime buttons and all logo artwork remain
+unchanged. Safety-green tokens remain available for the retained brand identity;
+the footer stays dark green.
+
+The Phase 4B review artifact is built in `dist/carolina-preview`. In a Codespaces
+terminal, run `python -m http.server 8080 --bind 127.0.0.1 --directory dist/carolina-preview`
+from the worktree root, then open port 8080 in the **Ports** tab, keeping its
+visibility **Private**. Review `/` and `/prototype-demo.html`; hard-refresh if the
+browser has cached an earlier stylesheet. No public deployment is required.
+
+Typography, spacing, layout, breakpoints, content, mailto targets, demo logic,
+and the static asset allowlist are unchanged. Before approval, visually review
+both pages at 320px, 375px, 680px, and desktop widths, including keyboard focus,
+hover, and all five recorded scenarios. Automated contrast checks do not replace
+rendered-browser or mobile visual review.
+
+## Prototype-stage customer inquiries
+
+The homepage audience cards and contact section offer **Business - Request a Demonstration**
+and **Government - Request a Technical Briefing** actions. Both open the visitor's
+email application at `contact@gvaisafety.com`, with distinct percent-encoded subject
+lines. The address is also visible and copyable for visitors without a configured
+email application. The recorded demo links back to the homepage contact section.
+
+These are inquiries about experimental work, not an offer of production services,
+customer deployments, or operational safety guarantees. Visitors are instructed not
+to email classified, sensitive, or confidential operational information. Email is
+not a secure operational reporting channel.
+
+The website has no contact form, backend, external API, customer-data storage,
+analytics, tracking, or new network dependencies. Sending email is a separate
+visitor action handled by their email application and mail provider; the website
+does not submit or store the message. No worker, supervisor, deployment workflow,
+or static deployment allowlist changes are required.
+
+For review, check both inquiry subjects, keyboard focus, and button wrapping at
+320px, 375px, 680px, and desktop widths. Do not send a test email unless separately
+authorized. The contact changes alone do not activate hosting or satisfy the
+maintainer deployment gates below.
+
 ## Deployment boundary
 
 This pull request does not configure a hosting provider, GitHub Pages workflow, custom domain, CNAME, DNS, or Railway. For a future approved deployment, CI should run the same allowlisted builder from a reviewed GitHub commit and publish only `dist/public-site` as a static artifact. Hosting should remain replaceable. Do not connect the public page to the source API until tenant identity, resource ownership lookup, authorization, and independent enforcement are integrated and reviewed.

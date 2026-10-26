@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import json
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
 import unittest
+from urllib.parse import parse_qs, quote, urlsplit
+from xml.etree import ElementTree
 
 from scripts.prepare_public_site import PUBLIC_FILES, REPOSITORY_ROOT, prepare_site
 
@@ -36,6 +39,10 @@ class PublicPageParser(HTMLParser):
         self.local_resources: list[str] = []
         self.local_anchors: list[str] = []
         self.external_links: list[str] = []
+        self.mail_links: list[dict[str, str]] = []
+        self.links: list[dict[str, str]] = []
+        self.embedded_resources: list[str] = []
+        self.tags: set[str] = set()
         self.has_script = False
         self.images_without_alt: list[str] = []
         self.audience_path_ids: list[str] = []
@@ -46,6 +53,10 @@ class PublicPageParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attributes = dict(attrs)
+        self.tags.add(tag)
+        for attribute in ("src", "srcset", "poster", "data"):
+            if attributes.get(attribute):
+                self.embedded_resources.append(attributes[attribute])
         if attributes.get("id"):
             self.ids.add(attributes["id"])
         if tag == "script":
@@ -62,7 +73,11 @@ class PublicPageParser(HTMLParser):
                 self.images_without_alt.append(source)
         if tag == "link" and attributes.get("rel") in {"stylesheet", "icon"}:
             self.local_resources.append(attributes.get("href", ""))
+            self.embedded_resources.append(attributes.get("href", ""))
         if tag == "a":
+            link = {key: value for key, value in attrs if value is not None}
+            link["text"] = ""
+            self.links.append(link)
             href = attributes.get("href", "")
             if self.navigation_depth and href.startswith("#"):
                 self.navigation_anchors.append(href[1:])
@@ -70,10 +85,16 @@ class PublicPageParser(HTMLParser):
                 self.local_anchors.append(href[1:])
             elif href.startswith("https://"):
                 self.external_links.append(href)
+            elif href.startswith("mailto:"):
+                self.mail_links.append(link)
             elif href:
                 self.local_resources.append(href)
         if tag not in VOID_ELEMENTS:
             self.open_elements.append(tag)
+
+    def handle_data(self, data: str) -> None:
+        if "a" in self.open_elements:
+            self.links[-1]["text"] += data
 
     def handle_endtag(self, tag: str) -> None:
         if tag in VOID_ELEMENTS:
@@ -103,6 +124,164 @@ class PublicSiteTests(unittest.TestCase):
         self.parser = PublicPageParser()
         self.parser.feed(self.page)
 
+    def color_tokens(self) -> dict[str, str]:
+        root = re.search(r":root\s*\{([^}]+)\}", self.styles)
+        self.assertIsNotNone(root)
+        tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", root.group(1)))
+        for name, value in tokens.items():
+            if value.startswith("var("):
+                tokens[name] = tokens[value[4:-1]]
+        return tokens
+
+    def test_brand_tokens_match_actual_logo_and_shared_favicon(self) -> None:
+        logo = ElementTree.parse(REPOSITORY_ROOT / "assets/gvai-mark.svg")
+        colors = {
+            value.lower()
+            for element in logo.iter()
+            for value in element.attrib.values()
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", value)
+        }
+        tokens = self.color_tokens()
+        for name, expected in {
+            "--gv-blue": "#347cff",
+            "--gv-blue-mid": "#4382ff",
+            "--gv-blue-deep": "#1254e8",
+            "--carolina-blue": "#91baff",
+            "--logo-navy": "#102b5c",
+        }.items():
+            self.assertIn(expected, colors)
+            self.assertEqual(tokens[name], expected)
+        self.assertEqual(tokens["--forest"], "#173d32")
+        self.assertEqual(tokens["--forest-deep"], "#102e27")
+        self.assertEqual(tokens["--lime"], "#d8ee72")
+        for filename in ("index.html", "prototype-demo.html"):
+            self.assertIn(
+                '<link rel="icon" type="image/svg+xml" href="assets/gvai-mark.svg">',
+                (REPOSITORY_ROOT / filename).read_text(encoding="utf-8"),
+            )
+
+    def test_brand_text_and_focus_contrast_meet_wcag_aa(self) -> None:
+        tokens = self.color_tokens()
+
+        def luminance(value: str) -> float:
+            channels = [int(value[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+            linear = [
+                channel / 12.92 if channel <= 0.04045
+                else ((channel + 0.055) / 1.055) ** 2.4
+                for channel in channels
+            ]
+            return sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        light_surfaces = (
+            "--white", "--paper", "--surface-green", "--surface-platform",
+            "--accent-surface", "--lime",
+        )
+        pairs = [
+            (foreground, background, 4.5)
+            for foreground in ("--ink", "--muted", "--link", "--logo-navy")
+            for background in light_surfaces
+        ]
+        pairs += [
+            (foreground, background, 4.5)
+            for foreground in ("--white", "--text-on-dark", "--muted-on-dark", "--carolina-blue", "--lime")
+            for background in ("--forest", "--forest-deep", "--logo-navy", "--ink")
+        ]
+        pairs += [
+            ("--white", "--gv-blue-deep", 4.5),
+            ("--ink", "--lime-hover", 4.5),
+        ]
+        pairs += [("--focus", background, 3) for background in light_surfaces]
+        for foreground, background, minimum in pairs:
+            with self.subTest(foreground=foreground, background=background):
+                high, low = sorted(
+                    (luminance(tokens[foreground]), luminance(tokens[background])),
+                    reverse=True,
+                )
+                self.assertGreaterEqual((high + 0.05) / (low + 0.05), minimum)
+
+    def test_brand_accents_are_wired_without_color_only_selection(self) -> None:
+        demo_styles = (REPOSITORY_ROOT / "prototype-demo.css").read_text(encoding="utf-8")
+        for styles in (self.styles, demo_styles):
+            for reference in re.findall(r"var\((--[\w-]+)\)", styles):
+                self.assertIn(reference, self.color_tokens())
+            self.assertNotIn("--coral", styles)
+        for selector, declaration in (
+            (".header-inner nav a:active", "color: var(--link)"),
+            (".contact-actions .button", "background: var(--gv-blue-deep)"),
+            (".contact-email", "color: var(--link)"),
+            (".hero a:focus-visible", "outline-color: var(--carolina-blue)"),
+        ):
+            self.assertRegex(
+                self.styles,
+                re.escape(selector) + r"[^{}]*\{[^}]*" + re.escape(declaration),
+            )
+        self.assertRegex(
+            demo_styles,
+            r'\.scenario-button\[aria-pressed="true"\] strong\s*\{[^}]*text-decoration: underline',
+        )
+        self.assertIn("outline: 3px solid var(--focus)", demo_styles)
+        self.assertIn('background: var(--logo-navy)', demo_styles)
+
+    def test_carolina_heroes_preserve_grid_and_accessible_interaction_colors(self) -> None:
+        tokens = self.color_tokens()
+        self.assertEqual(tokens["--carolina-target"], "#56a0d3")
+        self.assertEqual(tokens["--hero-background"], "#315c7a")
+        demo_styles = (REPOSITORY_ROOT / "prototype-demo.css").read_text(encoding="utf-8")
+        for styles, selector in ((self.styles, ".hero"), (demo_styles, ".demo-hero")):
+            rule = re.search(re.escape(selector) + r"\s*\{([^}]+)\}", styles)
+            self.assertIsNotNone(rule)
+            self.assertIn("var(--hero-background)", rule.group(1))
+            self.assertIn("color: var(--white)", rule.group(1))
+            self.assertEqual(rule.group(1).count("rgba(255, 255, 255, 0.035)"), 2)
+            self.assertIn("background-size: 38px 38px", rule.group(1))
+        for selector in (".hero-lede", ".hero-disclosure", ".hero-index"):
+            self.assertRegex(
+                self.styles,
+                re.escape(selector) + r"\s*\{[^}]*color: var\(--hero-text\)",
+            )
+        self.assertRegex(
+            demo_styles, r"\.demo-lede\s*\{[^}]*color: var\(--hero-text\)"
+        )
+        self.assertRegex(
+            self.styles,
+            r"\.button-outline:hover\s*\{[^}]*background: rgba\(0, 0, 0, 0.12\)",
+        )
+        self.assertRegex(
+            self.styles,
+            r"\.button-outline:active\s*\{[^}]*background: rgba\(0, 0, 0, 0.2\)",
+        )
+
+    def test_carolina_hero_contrast_includes_grid_intersections_and_hover(self) -> None:
+        tokens = self.color_tokens()
+
+        def rgb(value: str) -> tuple[float, ...]:
+            return tuple(int(value[index:index + 2], 16) / 255 for index in (1, 3, 5))
+
+        def luminance(channels: tuple[float, ...]) -> float:
+            return sum(
+                (value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4) * weight
+                for value, weight in zip(channels, (0.2126, 0.7152, 0.0722))
+            )
+
+        def contrast(first: tuple[float, ...], second: tuple[float, ...]) -> float:
+            high, low = sorted((luminance(first), luminance(second)), reverse=True)
+            return (high + 0.05) / (low + 0.05)
+
+        self.assertLess(contrast(rgb(tokens["--white"]), rgb(tokens["--carolina-target"])), 3)
+        background = rgb(tokens["--hero-background"])
+        for lines in (0, 1, 2):
+            grid = tuple(value + (1 - value) * (1 - 0.965 ** lines) for value in background)
+            for foreground in ("--white", "--hero-text", "--lime"):
+                with self.subTest(lines=lines, foreground=foreground):
+                    self.assertGreaterEqual(contrast(rgb(tokens[foreground]), grid), 4.5)
+            with self.subTest(lines=lines, purpose="focus and secondary-button border"):
+                self.assertGreaterEqual(contrast(rgb(tokens["--carolina-blue"]), grid), 3)
+            for opacity in (0, 0.12, 0.2):
+                button = tuple(value * (1 - opacity) for value in grid)
+                with self.subTest(lines=lines, hover_opacity=opacity):
+                    self.assertGreaterEqual(contrast(rgb(tokens["--white"]), button), 4.5)
+                    self.assertGreaterEqual(contrast(rgb(tokens["--carolina-blue"]), button), 3)
+
     def test_brand_sections_and_status_disclosures_are_present(self) -> None:
         self.assertIn("GVAI Safety Systems", self.page)
         self.assertIn("Independent Oversight.<br>Human Control.", self.page)
@@ -122,6 +301,7 @@ class PublicSiteTests(unittest.TestCase):
         self.assertIn("In development", self.page)
         self.assertIn("Experimental", self.page)
         self.assertIn("No live analysis", self.page)
+        self.assertIn('href="prototype-demo.html"', self.page)
 
     def test_public_page_has_no_legacy_domain_or_live_runtime(self) -> None:
         public_source = self.page + self.styles
@@ -154,6 +334,109 @@ class PublicSiteTests(unittest.TestCase):
         self.assertEqual(self.parser.structure_errors, [])
         self.assertEqual(self.parser.open_elements, [])
 
+    def test_contact_actions_have_correct_recipient_and_encoded_subjects(self) -> None:
+        expected_subjects = {
+            "Business - Request a Demonstration":
+                "Business Inquiry - Request a Demonstration",
+            "Government - Request a Technical Briefing":
+                "Government Inquiry - Request a Technical Briefing",
+        }
+        self.assertEqual(len(self.parser.mail_links), 5)
+        for link in self.parser.mail_links:
+            with self.subTest(href=link["href"]):
+                parsed = urlsplit(link["href"])
+                self.assertEqual(parsed.scheme, "mailto")
+                self.assertEqual(parsed.path, "contact@gvaisafety.com")
+                self.assertEqual(parsed.netloc, "")
+                self.assertEqual(parsed.fragment, "")
+                label = link["text"].strip()
+                if label == "contact@gvaisafety.com":
+                    self.assertEqual(parsed.query, "")
+                else:
+                    subject = expected_subjects[label]
+                    self.assertEqual(parse_qs(parsed.query), {"subject": [subject]})
+                    self.assertEqual(parsed.query, "subject=" + quote(subject, safe=""))
+        for label in expected_subjects:
+            self.assertEqual(
+                sum(link["text"].strip() == label for link in self.parser.mail_links),
+                2,
+                "Each audience card and the contact section must offer its inquiry.",
+            )
+
+    def test_contact_is_accessible_disclosed_and_reachable(self) -> None:
+        self.assertIn("contact", self.parser.navigation_anchors)
+        self.assertIn('id="contact" aria-labelledby="contact-title"', self.page)
+        self.assertIn("Prototype-stage inquiries only.", self.page)
+        self.assertIn(
+            "Production services, customer deployments, and operational safety "
+            "guarantees are not available.",
+            self.page,
+        )
+        self.assertIn(
+            "Do not email classified, sensitive, or confidential operational information.",
+            self.page,
+        )
+        self.assertIn("copy the address above", self.page)
+        self.assertIn("nothing is submitted by this website", self.page)
+        for link in self.parser.mail_links:
+            self.assertIn(link["text"].strip(), link["aria-label"])
+            self.assertIn("contact@gvaisafety.com", link["aria-label"])
+            self.assertNotIn("target", link)
+            descriptions = link["aria-describedby"].split()
+            self.assertIn("contact-safety", descriptions)
+            self.assertIn("contact-email-help", descriptions)
+            self.assertTrue(set(descriptions).issubset(self.parser.ids))
+            if "subject=" in link["href"]:
+                self.assertIn("contact-stage", descriptions)
+        demo = (REPOSITORY_ROOT / "prototype-demo.html").read_text(encoding="utf-8")
+        self.assertIn('href="index.html#contact">Contact</a>', demo)
+
+    def test_contact_buttons_have_mobile_wrapping_and_touch_targets(self) -> None:
+        self.assertIn('class="contact-actions"', self.page)
+        buttons = re.search(r"\.contact-actions \.button\s*\{([^}]+)\}", self.styles)
+        self.assertIsNotNone(buttons)
+        for declaration in (
+            "min-width: 0",
+            "min-height: 48px",
+            "white-space: normal",
+            "overflow-wrap: anywhere",
+        ):
+            self.assertIn(declaration, buttons.group(1))
+        desktop = re.search(r"\.contact-actions\s*\{([^}]+)\}", self.styles)
+        self.assertIsNotNone(desktop)
+        self.assertIn("repeat(2, minmax(0, 1fr))", desktop.group(1))
+        mobile = self.styles.split("@media (max-width: 680px)", 1)[1]
+        self.assertRegex(
+            mobile, r"\.contact-actions\s*\{\s*grid-template-columns: minmax\(0, 1fr\);"
+        )
+
+    def test_public_pages_have_only_local_embeds_and_no_submission_or_tracking(self) -> None:
+        for filename in ("index.html", "prototype-demo.html"):
+            with self.subTest(filename=filename):
+                parser = PublicPageParser()
+                page = (REPOSITORY_ROOT / filename).read_text(encoding="utf-8")
+                parser.feed(page)
+                self.assertFalse(
+                    parser.tags & {"form", "input", "textarea", "iframe", "object", "embed"}
+                )
+                for resource in parser.embedded_resources:
+                    self.assertFalse(urlsplit(resource).scheme, resource)
+                    self.assertFalse(urlsplit(resource).netloc, resource)
+                    self.assertTrue((REPOSITORY_ROOT / resource).is_file(), resource)
+                self.assertNotRegex(page.lower(), r"\son[a-z]+\s*=")
+                self.assertNotIn("ping=", page.lower())
+        for filename in ("site.css", "prototype-demo.css"):
+            styles = (REPOSITORY_ROOT / filename).read_text(encoding="utf-8")
+            self.assertNotIn("@import", styles.lower())
+            self.assertNotRegex(styles.lower(), r"url\s*\(")
+        script = (REPOSITORY_ROOT / "prototype-demo.js").read_text(encoding="utf-8")
+        for forbidden in (
+            "fetch", "xmlhttprequest", "websocket", "eventsource", "sendbeacon",
+            "localstorage", "sessionstorage", "indexeddb", "document.cookie",
+            "https://", "http://",
+        ):
+            self.assertNotIn(forbidden, script.lower())
+
     def test_html_validator_detects_misnested_and_unmatched_closing_tags(self) -> None:
         misnested = PublicPageParser()
         misnested.feed("<main><section></main></section>")
@@ -166,6 +449,19 @@ class PublicSiteTests(unittest.TestCase):
         self.assertTrue(any("Unmatched closing tag" in error for error in unmatched.structure_errors))
 
     def test_builder_publishes_only_the_explicit_allowlist(self) -> None:
+        self.assertEqual(
+            PUBLIC_FILES,
+            (
+                "index.html",
+                "site.css",
+                "assets/gvai-mark.svg",
+                "assets/GvAI-MIT-LICENSE.txt",
+                "examples/gv_geometry_map.png",
+                "prototype-demo.html",
+                "prototype-demo.css",
+                "prototype-demo.js",
+            ),
+        )
         with TemporaryDirectory() as temporary:
             output = prepare_site(Path(temporary) / "site")
             published = {
@@ -236,6 +532,148 @@ class PublicSiteTests(unittest.TestCase):
             "before merging the deployment workflow pr", deployment_notes.lower()
         )
         self.assertIn("required-reviewer rule", deployment_notes)
+
+
+class PrototypeDemoTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.page = (REPOSITORY_ROOT / "prototype-demo.html").read_text(encoding="utf-8")
+        self.styles = (REPOSITORY_ROOT / "prototype-demo.css").read_text(encoding="utf-8")
+        self.script = (REPOSITORY_ROOT / "prototype-demo.js").read_text(encoding="utf-8")
+
+    def embedded_results(self) -> dict[str, object]:
+        match = re.search(
+            r'<script type="application/json" id="recorded-results">\s*(.*?)\s*</script>',
+            self.page,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "Demo must use its embedded static evidence snapshot.")
+        return json.loads(match.group(1))
+
+    def test_scenarios_match_the_recorded_acceptance_evidence(self) -> None:
+        source = json.loads(
+            (REPOSITORY_ROOT / "experiments/results/gv_v2_acceptance.json")
+            .read_text(encoding="utf-8")
+        )
+        shown = self.embedded_results()
+        self.assertEqual(shown["experiment"], source["experiment"])
+        self.assertEqual(shown["timestamp_utc"], source["timestamp_utc"])
+        self.assertEqual(shown["platform"], source["platform"])
+        self.assertEqual(shown["authoritative_files"], source["authoritative_files"])
+        self.assertEqual(shown["passed"], source["passed"])
+        expected_names = {
+            "safe_work",
+            "protected_file_attack",
+            "network_attack",
+            "process_attack",
+        }
+        self.assertEqual({item["action"] for item in shown["actions"]}, expected_names)
+        for actual in shown["actions"]:
+            original = next(
+                item for item in source["actions"] if item["action"] == actual["action"]
+            )
+            for field in (
+                "allowed",
+                "committed",
+                "halted",
+                "observed_effects",
+                "os_boundary_failure",
+            ):
+                self.assertEqual(actual[field], original[field], (actual["action"], field))
+        self.assertIn("result.txt", shown["authoritative_files"])
+
+    def test_demo_discloses_experimental_offline_nonservice_status(self) -> None:
+        for disclosure in (
+            "Offline prototype walkthrough",
+            "Experimental research",
+            "not a live service",
+            "No AI worker or model runs here",
+            "does not monitor threats",
+            "does not process customer data",
+            "no production safety guarantee",
+            "External authorization",
+            "not represented by this experiment",
+        ):
+            self.assertIn(disclosure.lower(), self.page.lower())
+
+    def test_scenario_controls_are_keyboard_accessible_and_home_linked(self) -> None:
+        parser = PublicPageParser()
+        parser.feed(self.page)
+        parser.finish()
+        self.assertEqual(parser.structure_errors, [])
+        self.assertIn('href="index.html"', self.page)
+        self.assertIn('role="group" aria-label="Recorded prototype scenarios"', self.page)
+        self.assertIn('aria-live="polite"', self.page)
+        self.assertIn('role="status"', self.page)
+        self.assertIn('class="skip-link" href="#main"', self.page)
+        self.assertIn(':focus-visible', self.styles)
+        self.assertIn('aria-controls="result-card"', self.page)
+        self.assertIn("<noscript>", self.page)
+        buttons = re.findall(r'<button\b[^>]*data-scenario="([^"]+)"', self.page)
+        self.assertEqual(
+            set(buttons),
+            {
+                "safe_work",
+                "protected_file_attack",
+                "network_attack",
+                "process_attack",
+                "commit_outcome",
+            },
+        )
+        self.assertEqual(self.page.count('type="button"'), 5)
+        self.assertEqual(self.page.count('aria-pressed="true"'), 1)
+
+    def test_demo_is_responsive_and_has_no_runtime_or_external_dependencies(self) -> None:
+        self.assertIn("@media (max-width: 760px)", self.styles)
+        self.assertIn("@media (max-width: 480px)", self.styles)
+        dependencies = re.findall(
+            r'<(?:script|link|img)\b[^>]*(?:src|href)="([^"]+)"',
+            self.page,
+            flags=re.IGNORECASE,
+        )
+        self.assertTrue(dependencies)
+        self.assertTrue(
+            all(not value.startswith(("http:", "https:", "//", "data:")) for value in dependencies),
+            dependencies,
+        )
+        forbidden_runtime = (
+            "fetch(",
+            "XMLHttpRequest",
+            "WebSocket",
+            "EventSource",
+            "sendBeacon",
+            "eval(",
+            "new Function",
+            "localStorage",
+        )
+        for forbidden in forbidden_runtime:
+            self.assertNotIn(forbidden.lower(), self.script.lower())
+        self.assertNotIn("<form", self.page.lower())
+        self.assertNotIn("<input", self.page.lower())
+        self.assertNotIn("https://", self.script.lower())
+
+    def test_demo_assets_are_explicitly_allowlisted_but_private_dashboard_is_not(self) -> None:
+        self.assertIn("prototype-demo.html", PUBLIC_FILES)
+        self.assertIn("prototype-demo.css", PUBLIC_FILES)
+        self.assertIn("prototype-demo.js", PUBLIC_FILES)
+        self.assertNotIn("dashboard/index.html", PUBLIC_FILES)
+        with TemporaryDirectory() as temporary:
+            output = prepare_site(Path(temporary) / "site")
+            published = {
+                path.relative_to(output).as_posix()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+        self.assertEqual(published, set(PUBLIC_FILES))
+
+    def test_demo_does_not_change_deployment_workflow_or_publish_on_feature_branches(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/deploy-public-site.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('push:\n    branches: ["main"]', workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertIn("needs: validate_build", workflow)
+        self.assertIn("path: dist/public-site", workflow)
 
 
 if __name__ == "__main__":
