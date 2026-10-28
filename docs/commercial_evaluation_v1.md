@@ -85,7 +85,7 @@ than inventing a numeric risk score. No action is executed or stopped.
 
 ## Future commercial stages
 
-1. **6C:** Authenticated HTTP API and server-side tenant/resource isolation.
+1. **6C:** [Trusted server-side customer identity and resource ownership foundation](commercial_identity_v1.md); authenticated HTTP routes remain deferred.
 2. **6D:** Secure API-key issuance, hashing, rotation, revocation, and rate limits.
 3. **6E:** Durable usage metering, monthly allowance, and quota enforcement.
 4. **6F:** Stripe $99/month subscriptions, signed webhook processing, and billing state.

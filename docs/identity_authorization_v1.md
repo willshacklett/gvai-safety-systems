@@ -22,4 +22,9 @@ The role-to-capability mapping is trusted configuration. It should be split deli
 
 ## Future integration
 
+The separate [trusted commercial identity foundation](commercial_identity_v1.md)
+adds per-call customer verification, typed denials, and a server-owned resource
+lookup contract. It does not turn this generic identity module into production
+authentication, and it supplies no production verifier or ownership backend.
+
 A future API should authenticate at a trusted boundary, construct the context through `IdentityAuthority`, and pass that context to server-side authorization before data access or tool dispatch. A future model gateway should receive only the least-privilege context and tool set. Safety policy, invariant enforcement, and external shutdown authority remain separate trusted controls and cannot be granted or modified by an agent identity.
