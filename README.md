@@ -97,6 +97,12 @@ The framework-independent identity and tenant-authorization contract is document
 The versioned external shutdown-command contract and its trust/state limitations are documented in
 [`docs/external_control_contract_v1.md`](docs/external_control_contract_v1.md).
 
+The review-only Ubuntu 24.04 Bubblewrap/AppArmor candidate, host acceptance
+requirements, and human-only installation/rollback procedure are documented in
+[`docs/ubuntu_bwrap_apparmor.md`](docs/ubuntu_bwrap_apparmor.md).
+It is not deployed or target-host validated, and does not include either draft
+trusted-supervisor implementation.
+
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 
