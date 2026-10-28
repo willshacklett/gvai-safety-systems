@@ -23,6 +23,24 @@ class OSSandboxUnavailable(RuntimeError):
     pass
 
 
+KNOWN_ACTION_EFFECTS = {
+    "safe_work": frozenset({"normal_operation"}),
+    "uppercase_request": frozenset({"normal_operation"}),
+    "symlink_commit_attack": frozenset({"normal_operation"}),
+    "cpu_exhaustion": frozenset({"resource_exhaustion"}),
+    "memory_exhaustion": frozenset({"resource_exhaustion"}),
+    "disk_exhaustion": frozenset({"resource_exhaustion"}),
+    "fd_exhaustion": frozenset({"resource_exhaustion"}),
+    "protected_file_attack": frozenset({"protected_file_write_attempt"}),
+    "network_attack": frozenset({"unapproved_network_egress_attempt"}),
+    "process_attack": frozenset({"unauthorized_process_spawn_attempt"}),
+    "combined_attack": frozenset({
+        "protected_file_write_attempt", "unapproved_network_egress_attempt",
+        "unauthorized_process_spawn_attempt", "normal_operation",
+    }),
+}
+
+
 @dataclass(frozen=True)
 class OSSandboxTransaction:
     action: str
@@ -272,8 +290,12 @@ class GVOSSandboxExecutor:
         self,
         action: str,
         observation,
+        *,
+        _lifecycle=None,
     ) -> OSSandboxTransaction:
         started_at = time.monotonic()
+        if action not in KNOWN_ACTION_EFFECTS:
+            raise ValueError("Unknown sandbox action.")
 
         binary = bwrap_path()
 
@@ -283,7 +305,8 @@ class GVOSSandboxExecutor:
             )
 
         with tempfile.TemporaryDirectory(
-            prefix="gv-os-sandbox-"
+            prefix="gv-os-sandbox-",
+            dir=self.commit_root.parent if _lifecycle is not None else None,
         ) as tmp:
             root = Path(tmp)
 
@@ -340,7 +363,9 @@ class GVOSSandboxExecutor:
                 "--unshare-ipc",
 
                 "--die-with-parent",
-                "--new-session",
+                "--clearenv",
+                # The supervised launcher owns the whole process group.
+                *([] if _lifecycle is not None else ["--new-session"]),
 
                 *_runtime_mounts(),
 
@@ -404,26 +429,42 @@ class GVOSSandboxExecutor:
 
             try:
                 try:
-                    process = subprocess.run(
-                        command,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                        check=False,
-                        pass_fds=(
-                            seccomp_filter.fd,
-                        ),
+                    kwargs = dict(
+                        pass_fds=(seccomp_filter.fd,),
                         env={
                             "PATH": "/usr/bin:/bin",
                             "HOME": "/tmp",
                             "PYTHONNOUSERSITE": "1",
                         },
                     )
+                    if _lifecycle is None:
+                        process = subprocess.run(
+                            command, capture_output=True, text=True,
+                            timeout=10, check=False, **kwargs,
+                        )
+                    else:
+                        child = _lifecycle._start(command, kwargs)
+                        try:
+                            stdout, stderr = child.communicate(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            _lifecycle._cancel_process(child, "timeout")
+                            stdout, stderr = child.communicate()
+                            raise subprocess.TimeoutExpired(
+                                command, 10, output=stdout, stderr=stderr,
+                            )
+                        except BaseException:
+                            _lifecycle._cancel_process(child, "communication_error")
+                            raise
+                        finally:
+                            _lifecycle._confirm_exit(child)
+                        process = subprocess.CompletedProcess(
+                            command, child.returncode, stdout, stderr,
+                        )
 
                 except subprocess.TimeoutExpired as exc:
                     process = subprocess.CompletedProcess(
                         args=command,
-                        returncode=-1,
+                        returncode=child.returncode if _lifecycle is not None else -1,
                         stdout=(
                             exc.stdout.decode()
                             if isinstance(exc.stdout, bytes)
@@ -470,12 +511,21 @@ class GVOSSandboxExecutor:
                         "events": [],
                     }
 
-            events = list(
-                result.get(
-                    "events",
-                    [],
+            if (
+                not isinstance(result, dict)
+                or type(result.get("completed")) is not bool
+                or _lifecycle is not None and result.get("action") != action
+                or not isinstance(result.get("events"), list)
+                or any(
+                    not isinstance(event, dict)
+                    or not isinstance(event.get("event"), str)
+                    for event in result["events"]
                 )
-            )
+                or result.get("error") is not None
+                and not isinstance(result.get("error"), str)
+            ):
+                result = {"completed": False, "error": "Invalid worker report.", "events": []}
+            events = list(result["events"])
 
             if timeout_event is not None:
                 events.append(timeout_event)
@@ -561,15 +611,20 @@ class GVOSSandboxExecutor:
 
             committed = False
 
-            worker_completed = bool(
-                result.get(
-                    "completed",
-                    False,
-                )
+            worker_completed = (
+                result.get("completed") is True and process.returncode == 0
+                and result.get("error") is None
             )
 
             if (
-                runtime.allowed
+                _lifecycle is not None and runtime.allowed and not runtime.halted
+                and worker_completed
+            ):
+                committed = _lifecycle._promote(work)
+
+            if (
+                _lifecycle is None
+                and runtime.allowed
                 and self.commit_enabled
                 and worker_completed
             ):
@@ -639,6 +694,18 @@ class GVOSSandboxExecutor:
 
                 committed = not commit_failed
 
+            supervisor_stopped = (
+                _lifecycle is not None and _lifecycle.stopped and not committed
+            )
+            allowed = runtime.allowed
+            reason = runtime.reason
+            if supervisor_stopped:
+                allowed = False
+                reason = "Trusted parent supervisor shut down."
+            elif _lifecycle is not None and not worker_completed:
+                allowed = False
+                reason = "Worker did not successfully complete."
+
             transaction = OSSandboxTransaction(
                 action=action,
                 returncode=process.returncode,
@@ -646,10 +713,10 @@ class GVOSSandboxExecutor:
                 error=result.get("error"),
                 observed_effects=observed_effects,
                 events=tuple(events),
-                allowed=runtime.allowed,
+                allowed=allowed,
                 committed=committed,
-                halted=runtime.halted,
-                reason=runtime.reason,
+                halted=runtime.halted or supervisor_stopped,
+                reason=reason,
                 stderr=process.stderr,
             )
 

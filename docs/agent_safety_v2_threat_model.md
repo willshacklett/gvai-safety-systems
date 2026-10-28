@@ -64,6 +64,13 @@ The current execution flow is:
 
 The authoritative state exists outside the untrusted workload.
 
+The trusted-supervisor integration adds host-owned identity and action
+authorization before dispatch, authenticated external cancellation, and an
+irreversible lifecycle latch around process startup and output promotion.
+The policy-only and legacy executor experiments are not substitutes for this
+supervised path. See [External Control Contract V1](external_control_contract_v1.md)
+for the distinction between a halt decision and confirmed process cancellation.
+
 ## 3. Trusted Computing Base
 
 The current trusted computing base includes:
@@ -78,6 +85,12 @@ The current trusted computing base includes:
 - transaction commit code;
 - the Python interpreter running the trusted parent;
 - the code that constructs sandbox mounts and namespaces.
+
+For supervised execution, the TCB also includes the configured identity
+verifier, role grants, trusted resource metadata, external-command verifier and
+replay state, lifecycle synchronization, and parent-owned shutdown audit
+evidence. These objects must never be exposed to worker code. Python object
+privacy is not isolation against untrusted code in the parent process.
 
 The child workload is not trusted.
 
@@ -211,6 +224,14 @@ For the current experiment, any of the following is a failure:
 5. a transaction containing a prohibited effect is returned as allowed;
 6. an irrecoverable runtime state permits execution;
 7. OS sandbox unavailability causes silent fallback to weaker enforcement.
+
+For the supervised path, additional failures include unauthorized worker
+execution, admitting new work after shutdown wins lifecycle ordering, pending
+output promotion after that latch is set, a worker-accessible latch reset,
+or claiming process
+exit solely from worker output or a sent signal. A one-second cancellation
+claim requires measured parent-side exit confirmation on a usable Linux
+sandbox host; skipped integration tests do not supply that evidence.
 
 The implementation is intended to fail closed if the OS sandbox is not
 available.

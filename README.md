@@ -97,6 +97,28 @@ The framework-independent identity and tenant-authorization contract is document
 The versioned external shutdown-command contract and its trust/state limitations are documented in
 [`docs/external_control_contract_v1.md`](docs/external_control_contract_v1.md).
 
+### Trusted supervisor
+
+The trusted-parent supervisor connects authorization to sandbox execution and
+authenticated shutdown. The worker receives neither policy objects nor control
+credentials. Shutdown is irreversible for that supervisor instance: restarting
+requires a new instance created by trusted host code, not a worker request.
+Legacy policy-only command APIs remain decisions, not proof of cancellation.
+
+Process-exit evidence must come from the parent, independently of worker JSON.
+Output promotion and shutdown are ordered so that a stopped supervisor cannot
+promote pending results. This remains a fixed-action research boundary, not an
+arbitrary-code runner, network control service, or production deployment.
+
+Run tests with skip reasons visible:
+
+    python -m pytest -ra
+
+The one-second shutdown acceptance criterion requires a supported Linux host
+with working Bubblewrap namespaces and libseccomp. Mocked lifecycle tests and
+skipped sandbox tests do **not** verify this timing requirement. A host that
+rejects sandbox setup must fail closed, without weakening isolation.
+
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 
