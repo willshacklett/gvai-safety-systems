@@ -230,6 +230,37 @@ This creates a distinction between:
 - an output being produced;
 - that output being trusted and committed.
 
+## Trusted Supervisor
+
+The trusted parent owns authorization, sandbox process handles, the shutdown
+latch, and output promotion. Workers still run only the existing fixed
+OS-sandbox actions; there is no arbitrary-code or command execution interface.
+Policy, verifier keys, and control state must never be passed to workers.
+The library entry point is `gvai.supervisor.GVTrustedSupervisor`, configured by
+trusted host code with an OS-sandbox executor, command verifier, and target ID.
+Its execution measurements must come from the trusted host, not the worker.
+Direct executor calls retain the legacy diagnostic probe mode by default;
+they are not a substitute for supervisor preauthorization.
+
+An authenticated external shutdown must go through the supervisor, not merely
+the policy's command-evaluation API. The supervisor latches shutdown, cancels
+the active sandbox, and independently confirms process exit. A worker's JSON
+completion claim is not exit evidence. Shutdown is irreversible for that
+supervisor instance, including when it is idle, and blocks subsequent starts
+and output promotion.
+
+Launch registration and output promotion are ordered against shutdown. Output
+already promoted before shutdown is not retroactively removed. Cancellation
+failure or missing sandbox enforcement is not permission to continue or use a
+weaker execution backend.
+
+The external command format and remaining deployment limitations are described
+in [External Control Contract V1](docs/external_control_contract_v1.md).
+The one-second shutdown acceptance criterion requires a real Linux host with
+working Bubblewrap namespaces and libseccomp. Mocked process tests and skipped
+OS tests do not verify this criterion. These library controls are not a deployed
+control endpoint or a production readiness claim.
+
 ## OS-Backed Boundary
 
 The current Linux experiment uses Bubblewrap and libseccomp.
