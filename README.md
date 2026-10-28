@@ -97,6 +97,11 @@ The framework-independent identity and tenant-authorization contract is document
 The versioned external shutdown-command contract and its trust/state limitations are documented in
 [`docs/external_control_contract_v1.md`](docs/external_control_contract_v1.md).
 
+The offline customer API-key lifecycle and its nonproduction trust/storage limits are documented in
+[`docs/commercial_api_keys_v1.md`](docs/commercial_api_keys_v1.md). It adapts to the
+existing [commercial authorization contract](docs/commercial_identity_v1.md),
+not a second authorization system or a live subscription API.
+
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 

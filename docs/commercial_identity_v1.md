@@ -103,9 +103,10 @@ Never let the thing behind the switch own the switch.
 
 ## Known limitations and HTTP prerequisites
 
-- Only test fixtures supply a verifier and ownership store, explicitly marked
-  test-only in `tests/test_commercial_identity.py`. Opaque fixture labels are
-  not real API keys. No production adapter is supplied.
+- Phase 6C fixtures supply a test-only verifier and ownership store in
+  `tests/test_commercial_identity.py`; their opaque labels are not real API
+  keys. Phase 6D adds a separate offline API-key verifier reference, documented
+  below. Neither phase supplies a production authentication or ownership backend.
 - There is no durable account, tenant membership, ownership, or revocation
   backend, distributed consistency guarantee, replay defense for customer
   requests, rate limit, quota, billing, or HTTP transport.
@@ -124,7 +125,16 @@ Never let the thing behind the switch own the switch.
   Explicitly connect authorization before evaluation or usage reads and test
   that denied requests never reach either operation. Obtain founder approval.
 
-## Future API-key requirements
+## API-key lifecycle foundation
+
+Phase 6D now supplies an offline, nonproduction `CustomerIdentityVerifier`
+adapter and process-local lifecycle reference in `gvai/commercial_api_keys.py`.
+See [Customer API-Key Foundation V1](commercial_api_keys_v1.md) for issuance,
+one-time presentation, keyed verifiers, expiry, revocation, rotation, and
+remaining production requirements. The Phase 6C authorization contract is
+unchanged; no production authentication or secure durable backend is supplied.
+
+## Production API-key requirements
 
 Future issuance must authenticate the customer through an independently trusted
 account flow, establish tenant membership server-side, and allow only bounded
@@ -135,4 +145,5 @@ applicable, rotation, overlap limits, immediate durable revocation, compromise
 response, and tenant/account disablement. Check revocation on every request
 across replicas and restarts, with explicit fail-closed cache semantics. Key
 management itself must not be authorized merely by these evaluation/usage
-capabilities. No issuance or revocation implementation is included here.
+capabilities. The Phase 6D reference implements only the documented offline
+subset; production key management remains unimplemented.
