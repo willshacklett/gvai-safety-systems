@@ -18,7 +18,14 @@ This policy applies to:
 - Sentinel runtime monitoring
 - Threshold classification logic
 - Example integrations
+- Offline commercial identity, authorization, and customer API-key lifecycle
 
 ## Safe Use
 GvAI Safety Systems is designed to **monitor and surface risk**, not to replace human judgment.
 Production deployments should always include appropriate oversight and safeguards.
+
+The [customer API-key foundation](docs/commercial_api_keys_v1.md) is nonproduction.
+It does not implement verified customer accounts, a secure production key store,
+durable revocation, trusted time, or an authenticated HTTP service. Never log
+API keys or reuse supervisor credentials for customer verification. Customer
+grants must never control independent supervisor STOP authority.
