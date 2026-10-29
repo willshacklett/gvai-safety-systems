@@ -3,8 +3,10 @@
 ## Status and scope
 
 Phase 6E is an offline, experimental, **nonproduction** accounting reference in
-`gvai/commercial_usage.py`. It provides no HTTP server, database, payments,
-subscription state, customer billing, evaluator invocation, or worker execution.
+`gvai/commercial_usage.py`. Phase 6H.1 adds an explicitly initialized,
+file-backed SQLite ledger for local testing; it is not activated by default and
+is not approved for customer or production traffic. There is no HTTP server,
+payments, subscription state, customer billing, or worker execution.
 The $99/month starter subscription is a business target, not a quota policy or
 an activated product. Founder approval is required before integration or launch.
 
@@ -101,12 +103,13 @@ summary, and no permission. No exception text or logging is emitted.
 
 ## Atomicity, retries, and clocks
 
-All callers must share one store object. A process-local lock covers time,
-policy/quota checks, duplicate detection, and publication. Updates copy the
-tenant's counts and reservation map and publish them together as one replacement
-ledger; a pre-publication exception leaves no partial charge/key. Concurrent
-new attempts cannot exceed allowance; duplicate attempts yield at most one new
-reservation grant. Terminal transitions are monotonic and have no decrement.
+For `InMemoryUsageStore`, all callers must share one store object. Its
+process-local lock covers time, policy/quota checks, duplicate detection, and
+publication. Updates copy the tenant's counts and reservation map and publish
+them together as one replacement ledger; a pre-publication exception leaves no
+partial charge/key. Concurrent new attempts cannot exceed allowance; duplicate
+attempts yield at most one new reservation grant. Terminal transitions are
+monotonic and have no decrement.
 
 If an error occurs before commit, retry can reserve normally. If commit succeeds
 but acknowledgement is lost, the operation returns an error and retry returns
@@ -124,6 +127,83 @@ and idempotency entries remain. Completion after rollover updates the original
 reservation, never the new month's usage. A forward jump can open a later
 month, so the clock remains independently trusted, not customer controlled.
 
+## Experimental SQLite usage ledger
+
+`SQLiteUsageStore` uses only Python's standard `sqlite3` module and is an
+explicit local opt-in. The existing `InMemoryUsageStore` remains the default
+and no service or HTTP configuration selects SQLite automatically. Create a
+new file exactly once with `SQLiteUsageStore.initialize(path, allowances)`;
+that operation refuses an existing file and creates schema version 1 plus the
+trusted allowance rows. Open an existing database with
+`SQLiteUsageStore(path, allowances)`. Normal construction refuses a missing,
+unversioned, unsupported, or policy-mismatched database; it never creates a
+replacement ledger. There is no customer-facing activation or production
+migration path.
+
+Every operation uses an explicit `BEGIN IMMEDIATE` write transaction and
+commits the reservation/terminal-state change and tenant clock watermark
+together. The schema stores server-provided tenant allowance policy, per-tenant
+clock watermarks, and reservation rows. A primary key on
+`(tenant_id, request_digest)` gives lifetime idempotency; request and resource
+IDs are stored only as the existing SHA-256 digests. Counts are derived from
+reservation rows, so charging and recording a new reservation are one insert.
+Before a new reservation can return `RESERVED`, the insert must affect exactly
+one row and a readback inside the transaction must match tenant, request digest,
+resource digest, period, and state. Completion and clock-watermark writes also
+require exact affected-row counts and readback. The grant is returned only after
+the transaction commits. The exact expected schema, including the absence of
+extra triggers/indexes, and the trusted policy map are checked at startup; schema
+and policy are rechecked inside each transaction.
+The SQLite database contains no raw API credential, credential verifier,
+telemetry, evaluation payload, or evaluation result. Each writer connection
+uses SQLite's full synchronous setting and a bounded busy timeout; SQLite
+serializes writers across separate store instances.
+
+The `allowances` mapping is trusted server configuration, validated and copied
+at initialization, and stored durably. Reopening requires an exact match; a
+policy change fails closed. No API for policy updates, refunds, deletion, or
+pruning is provided. Schema versions other than 1 are rejected; there is no
+migration runner yet. Use a local file on a local filesystem, not a shared
+network filesystem. Backups and restore procedures are not implemented or
+validated here. Creation/opening requires a POSIX-owned private parent
+directory, rejects symlink path components and changed file identity, and
+requires a singly linked regular database file with mode `0600`. Unsupported
+platforms and unsafe permissions fail closed; this is not a substitute for
+protecting the host or parent directory from its trusted owner.
+
+Startup runs `PRAGMA integrity_check` and `foreign_key_check`, and every
+transaction checks the exact application schema. These detect structural
+corruption and unexpected schema objects, not freshness or every malicious
+data rewrite. There is **no independent anti-rollback checkpoint**. **HIGH
+severity:** restoring a valid pre-reservation database snapshot remains
+**UNSAFE** and can grant the same request a second evaluation. A party able to
+write the database can alter usage rows while preserving valid schema and
+integrity. Do not serve from a
+restored, replaced, or otherwise unverified database; this implementation has
+no trusted reconciliation or recovery protocol.
+
+After reservation commit, a process crash leaves a durable `RESERVED` record
+and consumed unit. Repeating the request ID after restart returns `REPLAY` and
+never grants evaluation again. A trusted completion can transition that
+reservation after restart. A crash during evaluation leaves the outcome
+unknown; this store does not retry evaluation or recover a result. Completion
+and reservation acknowledgements can be lost, but retries observe durable
+state. Storage errors, corruption detected in the requested ledger state, and
+closed stores raise through the storage boundary and become
+`ACCOUNTING_ERROR`; no in-memory fallback is attempted.
+
+Durable usage alone does **not** make API-key verification/revocation, customer
+membership, resource ownership, or their authorization decision durable or
+transactional with reservation. `CommercialUsage` continues to derive tenant
+only from a fresh `CommercialAuthorizer` decision, but authorization happens
+before the SQLite transaction. Revocation or ownership changes can race the
+reservation/completion boundary until a separately reviewed shared durable
+identity/ownership transaction is designed. The local adapter is not a
+production authentication or authorization backend, has no durable
+transactional revocation, and is **not approved for customer traffic**. SQLite
+remains opt-in and experimental. It has no worker or supervisor STOP dependency;
+STOP authority and storage remain independent.
+
 ## Security findings and limitations
 
 - No tenant/quota claim, payment flag, STOP envelope, or internal identity grants
@@ -139,11 +219,13 @@ month, so the clock remains independently trusted, not customer controlled.
   running in the trusted process. Dependencies, clock, and configuration must
   remain outside customer/agent control. Direct use of the existing evaluator
   remains unmetered until a separately reviewed integration is built.
-- Restarts, a second store, stale restoration, or another process lose/bypass
-  this reference's accounting and clock watermark. No production quota guarantee
-  is claimed. Retaining lifetime keys prevents rollover replay but causes
-  unbounded memory growth; copy-on-write updates and summary scans are linear
-  in tenant history. This is not a scalable backend or abuse-rate limiter.
+- The in-memory reference loses accounting and its clock watermark on restart
+  or when callers use another store. The local SQLite option preserves them
+  across restarts and serializes local writers, but stale restoration, database
+  replacement, shared/network filesystems, and hosted multi-replica operation
+  are not protected or validated. Neither option provides a production quota
+  guarantee. Lifetime idempotency records are unbounded; this is not an abuse-
+  rate limiter or a hosted-scale backend.
 - Records contain only tenant accounting metadata, counts, period labels,
   request/resource digests, state, and clock watermark. Metadata still requires
   access control. Future logs, tracing, result caches, and HTTP errors need
@@ -151,15 +233,14 @@ month, so the clock remains independently trusted, not customer controlled.
 
 ## Durable accounting and billing prerequisites
 
-Before production, design a durable ledger with unique tenant/idempotency
-constraints, transactional quota checks/increments and terminal transitions,
-bounded counters, current reads, rollback-resistant time, durable replay
-retention, restart/replica consistency, safe backups, reconciliation of uncertain
-writes, tenant provisioning/deletion, and auditable trusted policy changes.
-Define request/result binding, retry retention, crash recovery, rate limits,
-capacity controls, and authorization-to-accounting race semantics. Evaluate
-database failure and distributed concurrency independently; this phase supplies
-no database adapter or generalized production storage protocol.
+Before production, extend/review beyond this experimental local SQLite adapter:
+provide hosted multi-replica consistency, safe backup and restore, operational
+reconciliation of uncertain writes, tenant provisioning/deletion, auditable
+trusted policy changes, retention, capacity controls, and an abuse-rate limiter.
+Define request/result binding and authorization-to-accounting race semantics.
+Evaluate database failure and distributed concurrency independently; this
+phase supplies no production backend, migration runner, or generalized
+multi-backend storage contract.
 
 Founder approval is needed for allowance, attempt-vs-success policy, abandoned
 attempt treatment, period rules, overage/denial behavior, and retention. Billing
