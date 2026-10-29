@@ -18,7 +18,7 @@ This policy applies to:
 - Sentinel runtime monitoring
 - Threshold classification logic
 - Example integrations
-- Offline commercial identity, authorization, and customer API-key lifecycle
+- Offline commercial identity, authorization, customer API-key lifecycle, and usage accounting
 
 ## Safe Use
 GvAI Safety Systems is designed to **monitor and surface risk**, not to replace human judgment.
@@ -29,3 +29,10 @@ It does not implement verified customer accounts, a secure production key store,
 durable revocation, trusted time, or an authenticated HTTP service. Never log
 API keys or reuse supervisor credentials for customer verification. Customer
 grants must never control independent supervisor STOP authority.
+
+The [usage and quota foundation](docs/commercial_usage_v1.md) is also nonproduction:
+one in-memory store cannot enforce durable or distributed quotas. Tenant identity
+must come from `CommercialAuthorizer`, and quota policy from trusted server
+configuration, never customer claims or payment flags. Accounting errors must
+deny evaluation; retries must never reuse a reservation as a fresh execution
+grant. Usage exhaustion or outages must not affect independent supervisor STOP.

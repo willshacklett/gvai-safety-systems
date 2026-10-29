@@ -102,6 +102,10 @@ The offline customer API-key lifecycle and its nonproduction trust/storage limit
 existing [commercial authorization contract](docs/commercial_identity_v1.md),
 not a second authorization system or a live subscription API.
 
+The offline, nonproduction [usage and quota foundation](docs/commercial_usage_v1.md)
+adds configurable tenant allowances, atomic monthly reservations, and conservative
+retry accounting. It provides no durable metering, live routes, or billing.
+
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 

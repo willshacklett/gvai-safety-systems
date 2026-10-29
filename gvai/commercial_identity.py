@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Protocol
 
@@ -74,6 +74,7 @@ class CommercialAuthorizationReason(str, Enum):
 @dataclass(frozen=True)
 class CommercialAuthorizationDecision:
     reason: CommercialAuthorizationReason
+    tenant_id: str | None = field(default=None, repr=False)
 
     @property
     def allowed(self) -> bool:
@@ -104,33 +105,33 @@ class CommercialAuthorizer:
         resource_id: str,
     ) -> CommercialAuthorizationDecision:
         try:
-            reason = self._authorize(credential, capability, resource_id)
+            reason, tenant_id = self._authorize(credential, capability, resource_id)
         except Exception:
-            reason = CommercialAuthorizationReason.AUTHORIZATION_FAILED
-        return CommercialAuthorizationDecision(reason)
+            reason, tenant_id = CommercialAuthorizationReason.AUTHORIZATION_FAILED, None
+        return CommercialAuthorizationDecision(reason, tenant_id)
 
     def _authorize(
         self,
         credential: object,
         capability: CommercialCapability,
         resource_id: str,
-    ) -> CommercialAuthorizationReason:
+    ) -> tuple[CommercialAuthorizationReason, str | None]:
         reasons = CommercialAuthorizationReason
         if credential is None:
-            return reasons.MISSING_IDENTITY
+            return reasons.MISSING_IDENTITY, None
         if type(credential) is not str or not 1 <= len(credential) <= 4096:
-            return reasons.INVALID_IDENTITY
+            return reasons.INVALID_IDENTITY, None
         if type(capability) is not CommercialCapability:
-            return reasons.UNSUPPORTED_CAPABILITY
+            return reasons.UNSUPPORTED_CAPABILITY, None
         if not _valid_identifier(resource_id):
-            return reasons.INVALID_RESOURCE
+            return reasons.INVALID_RESOURCE, None
 
         try:
             identity = self._verifier.verify(credential)
         except Exception:
-            return reasons.VERIFICATION_FAILED
+            return reasons.VERIFICATION_FAILED, None
         if type(identity) is not VerifiedCustomerIdentity:
-            return reasons.INVALID_IDENTITY
+            return reasons.INVALID_IDENTITY, None
         if (
             not _valid_identifier(identity.principal_id)
             or not _valid_customer_tenant(identity.tenant_id)
@@ -140,18 +141,18 @@ class CommercialAuthorizer:
             or identity.expires_at <= 0
             or type(identity.revoked) is not bool
         ):
-            return reasons.INVALID_IDENTITY
+            return reasons.INVALID_IDENTITY, None
         if identity.revoked:
-            return reasons.REVOKED_IDENTITY
+            return reasons.REVOKED_IDENTITY, None
         if capability not in identity.capabilities:
-            return reasons.CAPABILITY_NOT_GRANTED
+            return reasons.CAPABILITY_NOT_GRANTED, None
 
         try:
             resource = self._ownership.lookup(resource_id)
         except Exception:
-            return reasons.OWNERSHIP_LOOKUP_FAILED
+            return reasons.OWNERSHIP_LOOKUP_FAILED, None
         if resource is None:
-            return reasons.RESOURCE_NOT_FOUND
+            return reasons.RESOURCE_NOT_FOUND, None
         if (
             type(resource) is not CommercialResourceOwnership
             or not _valid_identifier(resource.resource_id)
@@ -159,22 +160,22 @@ class CommercialAuthorizer:
             or not _valid_customer_tenant(resource.tenant_id)
             or type(resource.kind) is not CommercialResourceKind
         ):
-            return reasons.INVALID_OWNERSHIP
+            return reasons.INVALID_OWNERSHIP, None
         if resource.tenant_id != identity.tenant_id:
-            return reasons.TENANT_MISMATCH
+            return reasons.TENANT_MISMATCH, None
         expected_kind = {
             CommercialCapability.EVALUATE: CommercialResourceKind.EVALUATION,
             CommercialCapability.READ_USAGE: CommercialResourceKind.USAGE,
         }[capability]
         if resource.kind is not expected_kind:
-            return reasons.RESOURCE_KIND_MISMATCH
+            return reasons.RESOURCE_KIND_MISMATCH, None
 
         now = self._clock()
         if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
-            return reasons.AUTHORIZATION_FAILED
+            return reasons.AUTHORIZATION_FAILED, None
         if now >= identity.expires_at:
-            return reasons.EXPIRED_IDENTITY
-        return reasons.AUTHORIZED
+            return reasons.EXPIRED_IDENTITY, None
+        return reasons.AUTHORIZED, identity.tenant_id
 
 
 def _valid_identifier(value: object) -> bool:
