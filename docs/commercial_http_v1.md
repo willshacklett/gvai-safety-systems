@@ -191,10 +191,12 @@ mapped to an authorization error or represented as a stop/enforcement action.
 - The handler cap and request deadline bound this prototype's local connection
   work; they are not production-grade rate limiting, per-client fairness,
   resource isolation, or a defense against host-level denial of service.
-- Process-local API-key revocation and quota state are non-durable. Restart,
-  multiple processes, or multiple hosts do not share these controls. The
-  service's existing reservation/replay semantics still apply within the
-  configured service object.
+- Current test/local wiring uses process-local API-key revocation and in-memory
+  quota state. An explicitly supplied SQLite usage store can preserve quota and
+  replay state across local restarts, but it does not persist authentication,
+  revocation, or ownership and is not a multi-host backend. The service's
+  reservation/replay semantics apply only within the configured store; no
+  in-memory fallback is allowed when an opt-in durable store fails.
 - No HTTP route invokes execution workers or supervisor controls. Existing
   evaluation of caller-reported effects remains advisory and does not invoke
   supervisor STOP.
