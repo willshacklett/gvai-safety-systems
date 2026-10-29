@@ -135,18 +135,19 @@ not treat replay as permission to run again or infer the prior evaluation
 result. These semantics preserve the existing usage contract and introduce no
 refund, result-recovery, or exactly-once behavior.
 
-## Production blockers and future HTTP adapter
+## Local HTTP adapter and production blockers
 
-This reference still depends on process-local API-key and usage stores, trusted
-injected clocks, and trusted server-side ownership data. It has no durable
-revocation, distributed quota atomicity, authenticated transport, TLS
-termination, rate limit, request-body limit, audit pipeline, result cache,
-customer management flow, payment state, or billing. In-memory restart or
+Phase 6G adds the local-only authenticated HTTP adapter documented in
+[`commercial_http_v1.md`](commercial_http_v1.md). It binds to `127.0.0.1`, adds
+bounded request parsing, and exposes evaluation only. This does not make the
+service suitable for remote, shared-host, paid, or customer traffic.
+
+The system still depends on process-local API-key and usage stores, trusted
+injected clocks, and trusted server-side ownership data. In-memory restart or
 replica boundaries can bypass quotas and revoke history. Clock rollback can
 still affect API-key validity. Allowance and attempt-accounting policy require
-founder approval; the $99/month price implies no unit count.
-
-Before a future authenticated HTTP adapter, separately review and implement:
+founder approval; the $99/month price implies no unit count. Before any remote,
+shared-host, paid, or customer use, separately review and implement:
 
 - Durable identity, ownership, API-key, revocation, and quota backends with
   current reads and explicit transaction/idempotency guarantees.
@@ -169,7 +170,8 @@ bounds copy work but cannot make arbitrary caller-owned mutable objects
 race-free; a future transport must parse into request-owned immutable or
 otherwise safely synchronized data before calling the service.
 
-No HTTP endpoint, customer billing, Stripe configuration, website change, DNS
-change, deployment, or host change is part of this phase. The public website,
-GitHub Pages, https://gvaisafety.com, contact@gvaisafety.com, and GvAI.io remain
+The Phase 6F library added no HTTP endpoint. Phase 6G adds only the local
+adapter; customer billing, Stripe configuration, website change, DNS change,
+deployment, and host change remain out of scope. The public website, GitHub
+Pages, https://gvaisafety.com, contact@gvaisafety.com, and GvAI.io remain
 unchanged.
