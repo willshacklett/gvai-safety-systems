@@ -145,6 +145,11 @@ def evaluate_request(request: object) -> EvaluationResult:
         )
 
 
+def validate_evaluation_request(request: object) -> None:
+    """Validate the strict v1 request schema without evaluating it."""
+    _validate_request(request)
+
+
 def _validate_request(
     request: object,
 ) -> tuple[str, dict[str, int | None], tuple[str, ...]]:

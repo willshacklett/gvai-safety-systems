@@ -18,7 +18,7 @@ This policy applies to:
 - Sentinel runtime monitoring
 - Threshold classification logic
 - Example integrations
-- Offline commercial identity, authorization, customer API-key lifecycle, and usage accounting
+- Offline commercial identity, authorization, customer API-key lifecycle, usage accounting, and evaluation orchestration
 
 ## Safe Use
 GvAI Safety Systems is designed to **monitor and surface risk**, not to replace human judgment.
@@ -36,3 +36,9 @@ must come from `CommercialAuthorizer`, and quota policy from trusted server
 configuration, never customer claims or payment flags. Accounting errors must
 deny evaluation; retries must never reuse a reservation as a fresh execution
 grant. Usage exhaustion or outages must not affect independent supervisor STOP.
+
+The [commercial evaluation service](docs/commercial_service_v1.md) composes those
+offline foundations without exposing worker execution or STOP. It returns only
+advisory evaluation output after successful accounting completion; reservation
+replays and accounting failures never grant evaluation again. This remains a
+nonproduction library with no authenticated HTTP adapter or durable backend.

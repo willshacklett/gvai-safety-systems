@@ -86,11 +86,12 @@ than inventing a numeric risk score. No action is executed or stopped.
 ## Future commercial stages
 
 1. **6C:** [Trusted server-side customer identity and resource ownership foundation](commercial_identity_v1.md); authenticated HTTP routes remain deferred.
-2. **6D:** Secure API-key issuance, hashing, rotation, revocation, and rate limits.
-3. **6E:** Durable usage metering, monthly allowance, and quota enforcement.
-4. **6F:** Stripe $99/month subscriptions, signed webhook processing, and billing state.
-5. **6G:** Self-service customer dashboard for keys, usage, and subscription management.
-6. **6H:** Independent security validation and a controlled pilot launch.
+2. **6D:** Offline API-key issuance, verification, rotation, and revocation foundation.
+3. **6E:** Offline in-memory usage metering, monthly allowance, and quota foundation.
+4. **6F:** [Offline commercial service orchestration](commercial_service_v1.md); production adapters remain deferred.
+5. **6G:** Durable usage, identity, ownership, and subscription state; signed payment-event processing requires separate approval.
+6. **6H:** Self-service customer dashboard for keys, usage, and subscription management.
+7. **6I:** Independent security validation and a controlled pilot launch.
 
 These are roadmap items, not implementations or launch approvals. The future
 API must keep customer identity and policy separate from internal identities
