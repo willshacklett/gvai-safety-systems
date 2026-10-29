@@ -21,11 +21,48 @@ from gvai.commercial_usage import (
     ReservationState,
     SQLiteUsageStore,
     UsageReason,
+    UsageResult,
 )
 
 
 def timestamp(year, month):
     return datetime(year, month, 1, tzinfo=timezone.utc).timestamp()
+
+
+class _SQLiteLedgerTestHarness:
+    """Test-only adapter for exercising ledger persistence without service grants."""
+
+    def __init__(self, authorizer, store):
+        self._authorizer = authorizer
+        self._store = store
+
+    def reserve(self, credential, resource_id, request_id):
+        return self._operate(credential, resource_id, request_id, "reserve")
+
+    def complete(self, credential, resource_id, request_id, *, succeeded):
+        if type(succeeded) is not bool:
+            return UsageResult(UsageReason.INVALID_INPUT)
+        operation = "completed" if succeeded else "failed"
+        return self._operate(credential, resource_id, request_id, operation)
+
+    def summary(self, credential, resource_id):
+        return self._operate(credential, resource_id, None, "summary")
+
+    def _operate(self, credential, resource_id, request_id, operation):
+        capability = (
+            CommercialCapability.READ_USAGE
+            if operation == "summary"
+            else CommercialCapability.EVALUATE
+        )
+        decision = self._authorizer.authorize(credential, capability, resource_id)
+        if decision.allowed is not True:
+            return UsageResult(UsageReason.UNAUTHORIZED)
+        try:
+            return self._store._apply(
+                decision.tenant_id, resource_id, request_id, operation
+            )
+        except Exception:
+            return UsageResult(UsageReason.ACCOUNTING_ERROR)
 
 
 class SQLiteUsageTests(unittest.TestCase):
@@ -64,7 +101,7 @@ class SQLiteUsageTests(unittest.TestCase):
         self.store = SQLiteUsageStore.initialize(
             self.database_path, self.allowances, clock=lambda: self.now
         )
-        self.usage = CommercialUsage(self.authorizer, self.store)
+        self.usage = _SQLiteLedgerTestHarness(self.authorizer, self.store)
 
     def tearDown(self):
         self.store.close()
@@ -75,7 +112,7 @@ class SQLiteUsageTests(unittest.TestCase):
         self.store = SQLiteUsageStore(
             self.database_path, self.allowances, clock=lambda: self.now
         )
-        self.usage = CommercialUsage(self.authorizer, self.store)
+        self.usage = _SQLiteLedgerTestHarness(self.authorizer, self.store)
 
     def reserve(self, request_id="request-1", tenant="tenant-a"):
         return self.usage.reserve(
@@ -123,7 +160,7 @@ class SQLiteUsageTests(unittest.TestCase):
             SQLiteUsageStore(self.database_path, self.allowances, clock=lambda: self.now)
             for _ in range(8)
         ]
-        usages = [CommercialUsage(self.authorizer, store) for store in stores]
+        usages = [_SQLiteLedgerTestHarness(self.authorizer, store) for store in stores]
         try:
             with ThreadPoolExecutor(max_workers=16) as pool:
                 results = list(
@@ -148,7 +185,7 @@ class SQLiteUsageTests(unittest.TestCase):
             SQLiteUsageStore(self.database_path, self.allowances, clock=lambda: self.now)
             for _ in range(8)
         ]
-        usages = [CommercialUsage(self.authorizer, store) for store in stores]
+        usages = [_SQLiteLedgerTestHarness(self.authorizer, store) for store in stores]
         try:
             with ThreadPoolExecutor(max_workers=16) as pool:
                 results = list(
@@ -376,15 +413,30 @@ class SQLiteUsageTests(unittest.TestCase):
             usage.reserve({"tenant_id": "tenant-a"}, "tenant-a-project", "forged").reason,
             UsageReason.UNAUTHORIZED,
         )
-        self.assertTrue(
-            usage.reserve(credential, "tenant-a-project", "authorized").may_evaluate
-        )
+        authorized = usage.reserve(credential, "tenant-a-project", "authorized")
+        self.assertEqual(authorized.reason, UsageReason.ACCOUNTING_ERROR)
+        self.assertFalse(authorized.may_evaluate)
         self.assertTrue(keys.revoke(issued.key_id))
         self.assertEqual(
             usage.reserve(credential, "tenant-a-project", "after-revoke").reason,
             UsageReason.UNAUTHORIZED,
         )
-        self.assertEqual(self.summary().summary.consumed, 1)
+        self.assertEqual(self.summary().summary.consumed, 0)
+
+    def test_commercial_usage_never_grants_from_local_sqlite(self):
+        usage = CommercialUsage(self.authorizer, self.store)
+        for _attempt in range(2):
+            result = usage.reserve("tenant-a", "tenant-a-project", "same-request")
+            self.assertEqual(result.reason, UsageReason.ACCOUNTING_ERROR)
+            self.assertFalse(result.may_evaluate)
+        connection = sqlite3.connect(str(self.database_path))
+        try:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM usage_reservations").fetchone()[0],
+                0,
+            )
+        finally:
+            connection.close()
 
     def test_ledger_persists_only_digests_not_raw_identifiers(self):
         self.reserve("opaque-request-id")

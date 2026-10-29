@@ -197,6 +197,9 @@ mapped to an authorization error or represented as a stop/enforcement action.
   revocation, or ownership and is not a multi-host backend. The service's
   reservation/replay semantics apply only within the configured store; no
   in-memory fallback is allowed when an opt-in durable store fails.
+- Phase 6H.2 keeps SQLite out of the supported evaluation path: the recovery
+  state is diagnostic only, and the `CommercialUsage` facade denies SQLite-
+  backed operations until an independent atomic reservation authority exists.
 - No HTTP route invokes execution workers or supervisor controls. Existing
   evaluation of caller-reported effects remains advisory and does not invoke
   supervisor STOP.
