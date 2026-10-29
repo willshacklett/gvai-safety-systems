@@ -315,6 +315,13 @@ class SQLiteUsageStore:
         with self._lock:
             self._closed = True
 
+    def verify_recovery_integrity(self) -> None:
+        """Recheck local structure only; this does not establish freshness."""
+        with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("Usage database is closed.")
+            self._verify_database()
+
     def _apply(
         self,
         tenant_id: str,
@@ -716,6 +723,8 @@ class CommercialUsage:
             decision = self._authorizer.authorize(credential, capability, resource_id)
             if decision.allowed is not True or not _valid_customer_tenant(decision.tenant_id):
                 return UsageResult(UsageReason.UNAUTHORIZED)
+            if isinstance(self._store, SQLiteUsageStore):
+                return UsageResult(UsageReason.ACCOUNTING_ERROR)
             return self._store._apply(decision.tenant_id, resource_id, request_id, operation)
         except Exception:
             return UsageResult(UsageReason.ACCOUNTING_ERROR)

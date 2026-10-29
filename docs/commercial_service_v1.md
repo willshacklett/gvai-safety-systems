@@ -165,6 +165,13 @@ remote, shared-host, paid, or customer use, separately review and implement:
 - Separate founder/security review before any routes, paid access, product
   claims, or launch.
 
+Phase 6H.2 adds an offline recovery-state contract only. The current schema has
+no authoritative projection cursor or production trusted-head provider; a
+test-only matching head cannot authorize evaluation. The supported
+`CommercialUsage` facade returns `accounting_failure` for SQLite-backed
+operations, so local SQLite remains storage-test infrastructure rather than an
+evaluation backend.
+
 The service accepts exact built-in `dict` and `list` inputs only. It copies at
 most the schema maximum plus one item per snapshot attempt and rejects observed
 size changes or inconsistent repeated snapshots before reservation. This

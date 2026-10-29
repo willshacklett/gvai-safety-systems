@@ -147,13 +147,15 @@ clock watermarks, and reservation rows. A primary key on
 `(tenant_id, request_digest)` gives lifetime idempotency; request and resource
 IDs are stored only as the existing SHA-256 digests. Counts are derived from
 reservation rows, so charging and recording a new reservation are one insert.
-Before a new reservation can return `RESERVED`, the insert must affect exactly
-one row and a readback inside the transaction must match tenant, request digest,
-resource digest, period, and state. Completion and clock-watermark writes also
-require exact affected-row counts and readback. The grant is returned only after
-the transaction commits. The exact expected schema, including the absence of
-extra triggers/indexes, and the trusted policy map are checked at startup; schema
-and policy are rechecked inside each transaction.
+The internal ledger primitive requires a new reservation insert to affect
+exactly one row and a readback inside the transaction to match tenant, request
+digest, resource digest, period, and state. Completion and clock-watermark writes
+also require exact affected-row counts and readback. This is storage integrity,
+not an evaluation grant: the supported `CommercialUsage` facade denies all
+SQLite-backed operations until an independent atomic reservation authority is
+reviewed. The exact expected schema, including the absence of extra
+triggers/indexes, and trusted policy map are checked at startup; schema and
+policy are rechecked inside each transaction.
 The SQLite database contains no raw API credential, credential verifier,
 telemetry, evaluation payload, or evaluation result. Each writer connection
 uses SQLite's full synchronous setting and a bounded busy timeout; SQLite
@@ -182,15 +184,42 @@ integrity. Do not serve from a
 restored, replaced, or otherwise unverified database; this implementation has
 no trusted reconciliation or recovery protocol.
 
-After reservation commit, a process crash leaves a durable `RESERVED` record
-and consumed unit. Repeating the request ID after restart returns `REPLAY` and
-never grants evaluation again. A trusted completion can transition that
-reservation after restart. A crash during evaluation leaves the outcome
-unknown; this store does not retry evaluation or recover a result. Completion
-and reservation acknowledgements can be lost, but retries observe durable
-state. Storage errors, corruption detected in the requested ledger state, and
-closed stores raise through the storage boundary and become
-`ACCOUNTING_ERROR`; no in-memory fallback is attempted.
+## Phase 6H.2 Recovery Gate
+
+`SQLiteRecoveryGate` has `UNVERIFIED`, `READY`, `REBUILD_REQUIRED`,
+`QUARANTINED`, and `DENIED` states and starts `UNVERIFIED`. It checks local
+schema, integrity, and policy, then requires an independently authenticated
+trusted-head provider and a projection sequence/hash reader with the expected
+authority identity. Missing authority denies; unavailable evidence denies;
+invalid or conflicting evidence quarantines; an older projection requires
+rebuild; a projection ahead of authority quarantines.
+
+The current SQLite schema contains no projection sequence/hash or authoritative
+reservation history. No reader or trusted authority implementation is supplied,
+and the gate does not infer a head from current reservation rows. Therefore an
+existing database without separately replayed projection evidence remains
+`REBUILD_REQUIRED`; schema validity alone can never produce `READY`. Test-only
+providers can exercise matching-head state transitions but are not independent
+authorities. Even diagnostic `READY` never enables a grant:
+`may_authorize_fresh_grant` is always false, and `CommercialUsage` returns
+`ACCOUNTING_ERROR` for operations backed by `SQLiteUsageStore`. The SQLite
+adapter remains non-customer-usable until a separately reviewed, independently
+controlled atomic reservation authority exists.
+
+**MEDIUM — Trusted-head authentication is only an unimplemented provider
+contract.** The `authenticated` field is an adapter assertion, not cryptographic
+proof; no production provider exists, and test providers are not trusted evidence.
+
+This state machine is not anti-rollback protection. Stale restoration remains
+**HIGH severity and unsafe**; it requires independent reconciliation. No journal,
+checkpoint, remote service, schema migration, or production provider is added.
+
+At the internal storage primitive, a process crash after commit leaves a durable
+reservation and retries observe replay. This persistence behavior is tested as
+ledger mechanics only. The supported `CommercialUsage` facade denies all
+SQLite-backed operations, so no SQLite `RESERVED` result can reach the
+evaluation service. Storage errors, incomplete recovery, and closed stores do
+not fall back to in-memory accounting.
 
 Durable usage alone does **not** make API-key verification/revocation, customer
 membership, resource ownership, or their authorization decision durable or
