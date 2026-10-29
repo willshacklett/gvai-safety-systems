@@ -75,8 +75,12 @@ Unexpected validation and clock exceptions produce `AUTHORIZATION_FAILED`.
 Expiry is exclusive: `now >= expires_at` denies, with no grace period. Time
 must be a finite nonnegative number from the trusted clock.
 
-The component emits no logs and returns no credential, identity, ownership
-record, or underlying exception text. Future adapters and middleware must also
+The component emits no logs and returns no credential, full identity, ownership
+record, or underlying exception text. Successful decisions include the resolved
+`tenant_id` for immediate server-side data binding; denied decisions use `None`.
+This field is excluded from repr, must not be copied from request claims, and
+does not make the decision a reusable permit or public response schema.
+Future adapters and middleware must also
 redact credential material, including from tracing and error reports. These
 typed reasons are internal diagnostics: future HTTP responses must avoid
 resource enumeration by mapping unknown and unauthorized resources to a
@@ -126,6 +130,12 @@ Never let the thing behind the switch own the switch.
   that denied requests never reach either operation. Obtain founder approval.
 
 ## API-key lifecycle foundation
+
+Phase 6E adds a separate offline [usage and quota reference](commercial_usage_v1.md).
+It uses the tenant from the same authorization decision, reauthorizes each
+operation, and adds no supervisor or quota-management capability. The original
+evaluator remains unchanged and is not automatically metered. Durable storage
+and production accounting remain unimplemented.
 
 Phase 6D now supplies an offline, nonproduction `CustomerIdentityVerifier`
 adapter and process-local lifecycle reference in `gvai/commercial_api_keys.py`.
