@@ -106,6 +106,11 @@ The offline, nonproduction [usage and quota foundation](docs/commercial_usage_v1
 adds configurable tenant allowances, atomic monthly reservations, and conservative
 retry accounting. It provides no durable metering, live routes, or billing.
 
+The offline [commercial evaluation service](docs/commercial_service_v1.md)
+connects the existing API-key authorization, quota reservation, and pure
+advisory evaluator. It does not execute work, invoke STOP, expose HTTP routes,
+or activate billing.
+
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 

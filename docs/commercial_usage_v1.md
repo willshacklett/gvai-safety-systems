@@ -168,12 +168,13 @@ deduplication/reconciliation, entitlement transitions, invoice semantics, and
 secret custody. Never infer payment or entitlement from request fields or this
 in-memory usage state. No payment-provider configuration is included.
 
-Next integration: validate the strict evaluation schema before reserving; use
-server-selected resources/capabilities and authenticated identity; reserve once;
-evaluate only on a fresh grant; record completion with trusted result status;
-deny every accounting error and every replay from starting new work. Do not
-expose completion, store management, STOP, policy mutation, or worker controls
-as customer operations. Authenticated routes and billing need separate approval.
+The offline Phase 6F [commercial evaluation service](commercial_service_v1.md)
+now composes this usage facade with strict prevalidation, the existing
+authorizer, and the pure evaluator. It reserves once, evaluates only on a fresh
+grant, records completion, and denies accounting errors and replays. The service
+does not expose completion, store management, STOP, policy mutation, or worker
+controls as customer operations. Authenticated routes and billing need separate
+approval.
 
 ## Offline validation and exclusions
 

@@ -137,6 +137,11 @@ operation, and adds no supervisor or quota-management capability. The original
 evaluator remains unchanged and is not automatically metered. Durable storage
 and production accounting remain unimplemented.
 
+Phase 6F adds an offline [commercial evaluation service](commercial_service_v1.md)
+that composes the API-key verifier, this authorizer through the usage facade,
+and the unchanged pure evaluator. It does not add another authorization path,
+worker execution, STOP access, HTTP routes, or billing.
+
 Phase 6D now supplies an offline, nonproduction `CustomerIdentityVerifier`
 adapter and process-local lifecycle reference in `gvai/commercial_api_keys.py`.
 See [Customer API-Key Foundation V1](commercial_api_keys_v1.md) for issuance,
