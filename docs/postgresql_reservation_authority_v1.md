@@ -83,8 +83,8 @@ runtime table access or replace the future reservation routine's checks.
 The head trigger checks row continuity, not that the event hash was correctly
 computed from canonical V1 bytes, cryptographically signed, or appended by a
 transaction that also performed the approved credential, idempotency, and
-quota checks. Those checks must be implemented and tested in the future
-reservation transaction; no adapter currently provides them. Owners,
+quota checks. The isolated adapter prototype below implements this transaction
+path but has not been validated against PostgreSQL. Owners,
 superusers, privileged administrators, trigger-disabling operations, and stale
 backup restores remain outside these database-level protections.
 
@@ -135,11 +135,11 @@ provisioning.
 
 ## Required reservation transaction
 
-An eventual adapter must use one transaction on the authoritative PostgreSQL
-primary, with current reads and no cache or external authorization result.
-`READ COMMITTED` with explicit row locks is the proposed initial design; the
-adapter must validate its exact SQL and driver behavior in PostgreSQL before
-relying on it.
+An adapter must use one transaction on the authoritative PostgreSQL primary,
+with current reads and no cache or external authorization result. `READ
+COMMITTED` with explicit row locks is the proposed initial design; the adapter
+must validate its exact SQL and driver behavior in PostgreSQL before relying on
+it.
 
 Use a documented, consistent lock order:
 
@@ -171,6 +171,42 @@ Use a documented, consistent lock order:
    or reconcile with the same idempotency key only. A committed retry is
    `REPLAY`, never a second reservation. Do not fall back to SQLite or
    process-local quota.
+
+## Restricted routine and isolated adapter
+
+`gvai/postgresql_reservation_authority.py` implements the V1 transaction path
+using the existing customer API-key verifier format and canonical request/event
+types. It calls only `gvai_authority.reserve_v1`; it does not directly read or
+mutate protected tables. The adapter computes the existing keyed API-key
+verifier from the supplied credential, and the routine compares that candidate
+to the current stored verifier while deriving tenant and principal from locked
+database records. The raw credential and evaluation input are not sent to or
+stored by PostgreSQL. The adapter is not registered with `CommercialUsage`,
+`CommercialEvaluationService`, or the HTTP API. Its receipts are explicitly
+`UNAUTHENTICATED`, and authenticated-head reads fail closed because no
+production signer or verifier is configured. These results cannot authorize
+evaluation.
+
+`migrations/postgresql/002_restricted_reservation_routine_v1.sql` adds the
+`SECURITY DEFINER` routine under the non-superuser authority schema owner. It
+pins `search_path` to trusted schemas with `pg_temp` last, verifies current
+credential status, expiry, capability, membership, resource ownership, policy,
+and the pinned authority identity, then serializes idempotency/quota/head work
+inside the caller's single transaction. It computes the V1 request and event
+hashes with `pgcrypto`, which must be installed in `gvai_authority`; the
+credential verifier comparison uses a fixed 32-byte loop. Apply migration 001
+first, then migration 002 as the non-superuser owner of `gvai_authority`. The
+migration role needs the database privilege required to install the trusted
+`pgcrypto` extension.
+
+Neither migration grants runtime table writes or routine execution. Deployment
+must provision a separate restricted role with only schema `USAGE` and
+`EXECUTE` on the exact `reserve_v1` signature; do not grant it `SELECT`,
+`INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, or membership in the
+migration role. The adapter tests use a routine-aware DB-API fake and static
+migration assertions. They do not prove PostgreSQL SQL validity, role
+privileges, isolation behavior, trigger enforcement, or concurrent quota
+safety.
 
 Authorization and ownership checks precede replay, so a now-revoked credential
 or reassigned resource does not reveal a prior event. Lock ordering, deadlock
