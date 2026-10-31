@@ -111,17 +111,27 @@ signing-key IDs, and evidence version. Local mismatches and `TEST_ONLY` evidence
 are rejected before callback invocation. Do not construct this context from
 customer claims.
 
-For production, the verifier must cryptographically authenticate the exact
-canonical envelope bytes with a pinned authority trust root and approved
-signing-key set, validate algorithm/key usage and rotation windows, and verify
-the event hash chain. `AuthorityEvidenceVerifier` is only an interface; no
-implementation or production key is supplied. An injected callback returning
-literal `True` is a trust decision delegated to that callback, not proof that
-the callback or its cryptography is trustworthy. `authenticated=True`,
-signature-shaped bytes, matching hashes, and test evidence do not establish
-cryptographic authenticity. Tests use a fixed-key HMAC fixture solely to show
-that changes to the canonical envelope invalidate that test signature; this is
-not a production signer or verifier.
+`Ed25519ReceiptVerifier` verifies the exact canonical envelope bytes against
+explicitly pinned raw Ed25519 public keys, bound to one pinned authority
+identity. It snapshots caller-supplied pins and revoked IDs into immutable
+collections and disallows trust-field reassignment after construction. It
+rejects unknown or revoked key IDs, malformed signatures, and a different
+authority identity. Use it through `verify_authenticated_receipt`,
+which checks the trusted expected context, supported purpose/version, status,
+and `AUTHENTICATED` evidence before calling the verifier. A valid signature
+establishes receipt authenticity only; it is not authorization to evaluate or
+execute again, and a `REPLAY` remains a replay.
+
+This isolated verifier does not provide production key custody, signing,
+protected trust-configuration loading, key-rotation operations, authority-head
+verification, or event-chain/recovery validation. `AuthorityEvidenceVerifier`
+remains an interface for those broader operations. An injected callback
+returning literal `True` is a trust decision delegated to that callback, not
+proof that the callback or its cryptography is trustworthy.
+`authenticated=True`, signature-shaped bytes, matching hashes, and test-only
+evidence do not establish cryptographic authenticity. Unit tests generate
+ephemeral Ed25519 private keys in memory; they are not production signers or
+custody guidance.
 
 Signing-key rotation must have an overlap/revocation process and preserve
 verification of old event signatures. Authority identity/epoch rotation is a
