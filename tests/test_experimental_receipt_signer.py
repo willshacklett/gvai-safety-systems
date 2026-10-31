@@ -216,6 +216,16 @@ class ExperimentalTrustedReceiptSignerTests(unittest.TestCase):
         with self.assertRaises(ReceiptSigningError):
             self.signer.sign_reservation(self.context)
 
+    def test_inconsistent_idempotency_evidence_fails_closed(self):
+        mismatched_idempotency = replace(
+            self.evidence.idempotency, request_digest="d" * 64
+        )
+        self.provider.evidence = replace(
+            self.evidence, idempotency=mismatched_idempotency
+        )
+        with self.assertRaises(ReceiptSigningError):
+            self.signer.sign_reservation(self.context)
+
         self.provider.evidence = self.evidence
         self.provider.fail_evidence = True
         with self.assertRaises(ReceiptSigningError):
@@ -244,6 +254,21 @@ class ExperimentalTrustedReceiptSignerTests(unittest.TestCase):
         self.provider.evidence = self._evidence(ReservationStatus.RESERVED, event=mismatched_event)
         with self.assertRaises(ReceiptSigningError):
             self.signer.sign_reservation(self.context)
+
+        self.provider.evidence = self.evidence
+        for request in (
+            CanonicalReservationRequest.from_bounded_input(
+                "different-request", "resource-1", b"bounded evaluation input"
+            ),
+            CanonicalReservationRequest.from_bounded_input(
+                "request-1", "different-resource", b"bounded evaluation input"
+            ),
+        ):
+            with self.subTest(request=request):
+                with self.assertRaises(ReceiptSigningError):
+                    self.signer.sign_reservation(
+                        ReceiptSigningContext(request, _TENANT_DIGEST, _PRINCIPAL_DIGEST)
+                    )
 
         mismatched_event = replace(
             self.event,
@@ -275,6 +300,17 @@ class ExperimentalTrustedReceiptSignerTests(unittest.TestCase):
         )
         with self.assertRaises(ReceiptSigningError):
             self.signer.sign_reservation(self.context)
+
+    def test_test_only_checkpoint_mode_is_disabled_by_default(self):
+        signer = ExperimentalTrustedReceiptSigner(
+            authority=_AUTHORITY,
+            evidence_provider=self.provider,
+            signing_key=self.receipt_key,
+            checkpoint_verifier=self.checkpoint_verifier,
+            trusted_signing_key_ids=frozenset({self.receipt_key.key_id}),
+        )
+        with self.assertRaises(ReceiptSigningError):
+            signer.sign_reservation(self.context)
 
     def test_ambiguous_commit_unknown_signer_and_revoked_signer_fail_closed(self):
         self.provider.evidence = self._evidence(
