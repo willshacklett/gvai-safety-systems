@@ -146,6 +146,7 @@ def healthy_inventory(preflight, monkeypatch):
         "/usr/lib/os-release": b'ID=ubuntu\nVERSION_ID="24.04"\n',
         "/proc/1/comm": b"systemd\n",
         "/proc/meminfo": b"MemAvailable: 3145728 kB\n",
+        "/proc/sys/kernel/apparmor_restrict_unprivileged_userns": b"1\n",
     }
     commands = {"systemd": "systemd 255\n", "apparmor": "", "firewall": "Status: active\n", "listeners": ""}
     monkeypatch.setattr(preflight.os, "geteuid", lambda: 0)
@@ -156,6 +157,7 @@ def healthy_inventory(preflight, monkeypatch):
     monkeypatch.setattr(preflight, "protected_snapshot", lambda _profiles: baseline.copy())
     monkeypatch.setattr(preflight, "load_baseline", lambda _path: baseline.copy())
     monkeypatch.setattr(preflight.shutil, "disk_usage", lambda _path: SimpleNamespace(free=6 * 1024**3))
+    monkeypatch.setattr(preflight.shutil, "which", lambda name, **_kwargs: "/usr/bin/" + name)
     monkeypatch.setattr(preflight, "account_check", lambda _name: True)
     monkeypatch.setattr(preflight.pwd, "getpwnam", lambda name: SimpleNamespace(
         pw_uid=1001 if name == "gvai-api" else 1002,
@@ -231,3 +233,136 @@ def test_unexpected_top_level_failure_is_redacted(preflight, monkeypatch, capsys
     assert json.loads(capsys.readouterr().out) == {
         "error": "host_preflight_unavailable", "deployment_authorized": False,
     }
+
+
+def test_lab_inventory_preserves_policy_without_inventing_test_profiles(healthy_inventory, monkeypatch):
+    module, files, _, _ = healthy_inventory
+    files["/etc/hostname"] = b"gvai-safety-lab-01\n"
+    monkeypatch.setattr(Path, "read_text", lambda _path: "ubuntu-existing-profile (enforce)\n")
+    report = module.collect(target=module.LAB_TARGET, baseline="/lab-reviewed")
+    assert report["automated_checks_pass"] is True
+    assert report["target"] == module.LAB_TARGET
+    assert "protected_profiles_enforcing" not in report["checks"]
+    assert report["checks"]["restricted_unprivileged_userns"] is True
+    assert report["checks"]["protected_baseline_matches"] is True
+    assert report["deployment_authorized"] is False
+    assert "cloud_firewall_review" in report["manual_gates_required"]
+    test_report = module.collect(baseline="/test-reviewed")
+    assert test_report["checks"]["protected_profiles_enforcing"] is False
+    assert test_report["checks"]["target_hostname"] is False
+
+
+@pytest.mark.parametrize("condition", ["hostname", "userns", "missing_userns", "firewall", "baseline", "profiles"])
+def test_lab_uncertain_host_boundaries_remain_no_go(healthy_inventory, monkeypatch, condition):
+    module, files, commands, baseline = healthy_inventory
+    files["/etc/hostname"] = b"gvai-safety-lab-01\n"
+    if condition == "hostname":
+        files["/etc/hostname"] = b"gvai-safety-test-01\n"
+    elif condition == "userns":
+        files["/proc/sys/kernel/apparmor_restrict_unprivileged_userns"] = b"0\n"
+    elif condition == "missing_userns":
+        del files["/proc/sys/kernel/apparmor_restrict_unprivileged_userns"]
+    elif condition == "firewall":
+        commands["firewall"] = "Status: inactive\n"
+    elif condition == "baseline":
+        monkeypatch.setattr(module, "load_baseline", lambda _path: {**baseline, "loaded_profiles_sha256": "b" * 64})
+    elif condition == "profiles":
+        def unavailable(_path):
+            raise OSError("private policy details")
+        monkeypatch.setattr(Path, "read_text", unavailable)
+    report = module.collect(target=module.LAB_TARGET, baseline="/lab-reviewed")
+    assert report["automated_checks_pass"] is False
+    assert report["deployment_authorized"] is False
+    assert "private policy details" not in json.dumps(report)
+
+
+def test_lab_missing_packages_are_inventory_evidence_not_discovery_blockers(healthy_inventory, monkeypatch):
+    module, files, commands, _ = healthy_inventory
+    files["/etc/hostname"] = b"gvai-safety-lab-01\n"
+    monkeypatch.setattr(module.shutil, "which", lambda _name, **_kwargs: None)
+    report = module.collect(target=module.LAB_TARGET, baseline="/lab-reviewed")
+    assert report["automated_checks_pass"] is True
+    assert report["evidence"]["packages_available"] == {"nginx": False, "psql": False, "openssl": False}
+    commands["listeners"] = "\n".join(
+        f"LISTEN 0 128 127.0.0.1:{port} 0.0.0.0:*" for port in (5432, 8080, 8443)
+    )
+    report = module.collect(target=module.LAB_TARGET, prepared=True, baseline="/lab-reviewed")
+    assert report["checks"]["staging_packages_available"] is False
+    assert report["automated_checks_pass"] is False
+
+
+def test_target_selection_is_explicit_and_defaults_to_test01(preflight, monkeypatch, capsys):
+    calls = []
+    def collect(**kwargs):
+        calls.append(kwargs)
+        return {"automated_checks_pass": False, "deployment_authorized": False}
+    monkeypatch.setattr(preflight, "collect", collect)
+    assert preflight.main([]) == 1
+    assert preflight.main(["--target", preflight.LAB_TARGET, "--baseline", "/lab-reviewed"]) == 1
+    assert calls[0]["target"] == preflight.TARGET
+    assert calls[1]["target"] == preflight.LAB_TARGET
+    with pytest.raises(SystemExit) as error:
+        preflight.main(["--target", "unapproved"])
+    assert error.value.code == 2
+    capsys.readouterr()
+
+
+def test_collect_rejects_unapproved_target(preflight):
+    with pytest.raises(ValueError, match="Unsupported target"):
+        preflight.collect(target="unapproved")
+
+
+def test_lab_prepared_success_still_requires_manual_gates(healthy_inventory, monkeypatch):
+    module, files, commands, _ = healthy_inventory
+    files["/etc/hostname"] = b"gvai-safety-lab-01\n"
+    commands["listeners"] = "\n".join(
+        f"LISTEN 0 128 127.0.0.1:{port} 0.0.0.0:*" for port in (5432, 8080, 8443)
+    )
+    monkeypatch.setattr(module.grp, "getgrnam", lambda _name: SimpleNamespace(gr_gid=1002))
+    monkeypatch.setattr(module, "path_check", lambda *_args, **_kwargs: True)
+    report = module.collect(target=module.LAB_TARGET, prepared=True, baseline="/lab-reviewed")
+    assert report["phase"] == "prepared"
+    assert report["automated_checks_pass"] is True
+    assert report["deployment_authorized"] is False
+    assert "operator_custody_and_acl_review" in report["manual_gates_required"]
+    assert "private_mtls_and_failure_drills" in report["manual_gates_required"]
+    assert module.collect(target=module.LAB_TARGET, prepared=True)["automated_checks_pass"] is False
+
+
+@pytest.mark.parametrize("resource,delta,expected", [
+    ("disk", -1, False), ("disk", 0, True),
+    ("memory", -1, False), ("memory", 0, True),
+])
+def test_lab_exact_resource_headroom_boundaries(healthy_inventory, monkeypatch, resource, delta, expected):
+    module, files, _, _ = healthy_inventory
+    files["/etc/hostname"] = b"gvai-safety-lab-01\n"
+    if resource == "disk":
+        monkeypatch.setattr(module.shutil, "disk_usage", lambda _path: SimpleNamespace(free=5 * 1024**3 + delta))
+    else:
+        files["/proc/meminfo"] = f"MemAvailable: {2 * 1024**2 + delta} kB\n".encode()
+    report = module.collect(target=module.LAB_TARGET, baseline="/lab-reviewed")
+    assert report["checks"][resource + "_headroom"] is expected
+    assert report["automated_checks_pass"] is expected
+
+
+def test_package_observations_use_only_system_search_path(healthy_inventory, monkeypatch):
+    module, *_ = healthy_inventory
+    calls = []
+    def which(name, *, path):
+        calls.append((name, path))
+        return "/usr/bin/" + name
+    monkeypatch.setattr(module.shutil, "which", which)
+    module.collect()
+    assert calls == [
+        (name, "/usr/sbin:/usr/bin:/sbin:/bin") for name in ("nginx", "psql", "openssl")
+    ]
+
+
+def test_absent_experiment_units_are_fingerprinted_without_reading_files(preflight, monkeypatch):
+    monkeypatch.setattr(preflight, "required_command", lambda _name:
+        "LoadState=not-found\nActiveState=inactive\nSubState=dead\nMainPID=0\nFragmentPath=\nDropInPaths=\n")
+    def unexpected_read(_path):
+        pytest.fail("Absent units must not invent files.")
+    monkeypatch.setattr(preflight, "read_regular", unexpected_read)
+    assert len(preflight.unit_fingerprint("worker")) == 64
+    assert preflight.unit_fingerprint("worker") == preflight.unit_fingerprint("bwrap")

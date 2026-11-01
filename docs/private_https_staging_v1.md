@@ -5,6 +5,11 @@ and active sandbox/outage/rollback gates, see
 [on-host staging readiness](onhost_staging_readiness_v1.md). No host connection
 is authorized by either document.
 
+For Lab-01's fresh package installation, preserved Test-01 boundaries and first
+durable hosted evaluation, use the
+[Lab-01 runbook](lab01_commercial_staging_v1.md). It retains this loopback-only
+topology; public HTTPS is not activated.
+
 ## Approval and product boundary
 
 These are **prepared, uninstalled** test-server configurations. This task does
