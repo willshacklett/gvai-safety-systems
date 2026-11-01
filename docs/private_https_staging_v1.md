@@ -1,5 +1,10 @@
 # Private HTTPS staging V1
 
+For the approval-gated Ubuntu test-host preflight, experiment-policy baseline
+and active sandbox/outage/rollback gates, see
+[on-host staging readiness](onhost_staging_readiness_v1.md). No host connection
+is authorized by either document.
+
 ## Approval and product boundary
 
 These are **prepared, uninstalled** test-server configurations. This task does
