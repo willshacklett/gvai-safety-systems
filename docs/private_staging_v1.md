@@ -1,5 +1,9 @@
 # Private staging application V1
 
+Prepared (not installed) private mTLS ingress, restricted service units and an
+approval-gated rollout/rollback runbook are in
+[private HTTPS staging V1](private_https_staging_v1.md).
+
 ## Boundary
 
 This is a runnable, invite-only **advisory** application, not a deployment or
