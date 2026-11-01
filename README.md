@@ -1,5 +1,10 @@
 # GVAI Safety Systems
 
+The loopback-only advisory [private staging application](docs/private_staging_v1.md)
+assembles the PostgreSQL pilot backend with separate operator provisioning,
+authenticated usage, bounded connections and redacted diagnostics. It is not
+a public deployment or controlled-execution service.
+
 **[Read the GV Agent Safety V2 Technical Brief](docs/GV_Agent_Safety_V2_Technical_Brief.pdf)**  
 **[Watch the GV Agent Safety V2 Demo](docs/GV_Agent_Safety_V2_Demo.mp4)**
 

@@ -19,6 +19,7 @@ from gvai.commercial_usage import UsageReason
 from gvai.evaluation import evaluate_request
 from gvai.postgresql_advisory import PostgreSQLAdvisoryUsage, PostgreSQLCustomerStore
 from gvai.postgresql_reservation_authority import PostgreSQLReservationAuthority
+from gvai.private_staging import PrivateStagingApplication, StagingConfig, StagingUnavailable, main
 
 
 pytestmark = pytest.mark.skipif(
@@ -137,6 +138,336 @@ def evaluate(pilot, request_id="request-1", telemetry=None, service=None, projec
 
 def counts(pilot):
     return pilot.usage().summary(pilot.credential, pilot.project)
+
+
+@pytest.fixture
+def private_application(pilot):
+    config = StagingConfig(
+        os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"], pilot.secret, AUTHORITY,
+        port=0, max_connections=2,
+    )
+    app = PrivateStagingApplication(config)
+    app.start()
+    try:
+        yield app
+    finally:
+        app.stop()
+
+
+def staging_http(app, method, path, credential=None, payload=None):
+    connection = HTTPConnection("127.0.0.1", app.server.server_port, timeout=5)
+    headers = {"Content-Type": "application/json"}
+    if credential is not None:
+        headers["Authorization"] = "Bearer " + credential
+    try:
+        connection.request(method, path, body=None if payload is None else json.dumps(payload), headers=headers)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+def staging_payload(pilot, request_id="staging-request"):
+    return {
+        "version": "v1", "resource_id": pilot.project, "request_id": request_id,
+        "telemetry": TELEMETRY, "reported_effects": [],
+    }
+
+
+def test_real_private_application_evaluation_usage_restart_and_retries(pilot, private_application):
+    app = private_application
+    assert app.server.server_address[0] == "127.0.0.1"
+    assert staging_http(app, "GET", "/readyz")[0] == 200
+    status, body = staging_http(app, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot))
+    assert status == 200
+    assert body["evaluation"]["advisory_only"] is True
+    assert body["evaluation"]["enforcement_applied"] is False
+    path = "/v1/usage/" + pilot.project
+    status, body = staging_http(app, "GET", path, pilot.credential)
+    assert status == 200
+    assert body["usage"] == {
+        "allowance": 3, "consumed": 1, "reserved": 0, "completed": 1, "failed": 0, "remaining": 2,
+    }
+    assert staging_http(app, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot))[1]["error"]["code"] == "replay"
+    changed = staging_payload(pilot)
+    changed["telemetry"] = {**TELEMETRY, "token_delta": 101}
+    assert staging_http(app, "POST", "/v1/evaluations", pilot.credential, changed)[1]["error"]["code"] == "conflict"
+    app.stop()
+    restarted = PrivateStagingApplication(StagingConfig(
+        os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"], pilot.secret, AUTHORITY, port=0,
+    ))
+    restarted.start()
+    try:
+        assert staging_http(restarted, "GET", path, pilot.credential)[1]["usage"]["consumed"] == 1
+        assert staging_http(restarted, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot))[0] == 409
+    finally:
+        restarted.stop()
+
+
+def test_real_private_usage_denies_other_tenant_revoked_expired_and_missing_keys(pilot, private_application):
+    app = private_application
+    now = int(time.time())
+    suffix = secrets.token_hex(6)
+    pilot.store.provision_pilot(
+        tenant_id="other-" + suffix, principal_id="other-" + suffix, resource_id="other-" + suffix,
+        allowance=3, starts_at=now - 60, expires_at=now + 3600,
+    )
+    assert staging_http(app, "GET", "/v1/usage/other-" + suffix, pilot.credential)[0] == 403
+    path = "/v1/usage/" + pilot.project
+    assert staging_http(app, "GET", path)[0] == 401
+    assert staging_http(app, "GET", path, "invalid")[0] == 403
+    historical_keys = CustomerApiKeys(
+        pilot.store, verifier_secret=pilot.secret, clock=lambda: now - 120,
+    )
+    expired = historical_keys.issue(
+        tenant_id=pilot.tenant, principal_id=pilot.principal,
+        capabilities=frozenset(CommercialCapability), expires_at=now - 60,
+    )
+    assert staging_http(app, "GET", path, expired.take_secret())[0] == 403
+    evaluate_only = pilot.keys.issue(
+        tenant_id=pilot.tenant, principal_id=pilot.principal,
+        capabilities=frozenset({CommercialCapability.EVALUATE}), expires_at=now + 3600,
+    )
+    assert staging_http(app, "GET", path, evaluate_only.take_secret())[0] == 403
+    assert pilot.keys.revoke(pilot.key_id)
+    assert staging_http(app, "GET", path, pilot.credential)[0] == 403
+
+
+def test_real_operator_suspension_is_independent_of_keys(pilot, private_application):
+    app = private_application
+    second = pilot.keys.issue(
+        tenant_id=pilot.tenant, principal_id=pilot.principal,
+        capabilities=frozenset(CommercialCapability), expires_at=int(time.time()) + 3600,
+    ).take_secret()
+    assert pilot.store.suspend_tenant(pilot.tenant)
+    assert pilot.store.suspend_tenant(pilot.tenant)
+    for credential in (pilot.credential, second):
+        assert staging_http(app, "POST", "/v1/evaluations", credential, staging_payload(pilot))[0] == 403
+        assert staging_http(app, "GET", "/v1/usage/" + pilot.project, credential)[0] == 403
+    with pilot.database.owner() as connection:
+        assert connection.execute(
+            "SELECT status FROM gvai_authority.customer_credentials WHERE key_id=%s",
+            (pilot.key_id,),
+        ).fetchone() == ("active",)
+        assert connection.execute(
+            "SELECT consumed FROM gvai_authority.advisory_pilots pilot "
+            "JOIN gvai_authority.tenants tenant USING(tenant_ref) WHERE tenant.tenant_id=%s",
+            (pilot.tenant,),
+        ).fetchone() == (0,)
+
+
+def test_real_private_capacity_exhaustion_never_consumes_usage(pilot, private_application):
+    app = private_application
+    first, second = app.connections(), app.connections()
+    try:
+        assert staging_http(app, "GET", "/readyz")[0] == 503
+        assert staging_http(app, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot))[0] == 503
+    finally:
+        first.close()
+        second.close()
+    assert counts(pilot).consumed == 0
+    assert staging_http(app, "GET", "/readyz")[0] == 200
+    with app.connections() as connection, connection.cursor() as cursor:
+        for setting, expected in (
+            ("statement_timeout", "5s"), ("lock_timeout", "3s"),
+            ("idle_in_transaction_session_timeout", "5s"),
+        ):
+            cursor.execute("SELECT current_setting(%s)", (setting,))
+            assert cursor.fetchone() == (expected,)
+
+
+def test_real_private_http_concurrent_final_unit_cannot_overspend(pilot, private_application):
+    app = private_application
+    for index in range(2):
+        assert staging_http(
+            app, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot, "pre-" + str(index)),
+        )[0] == 200
+    with ThreadPoolExecutor(8) as executor:
+        responses = list(executor.map(
+            lambda index: staging_http(
+                app, "POST", "/v1/evaluations", pilot.credential,
+                staging_payload(pilot, "last-" + str(index)),
+            ),
+            range(8),
+        ))
+    assert sum(status == 200 for status, _ in responses) == 1
+    assert all(status in (200, 429, 503) for status, _ in responses)
+    assert counts(pilot).consumed == 3
+    assert counts(pilot).completed == 3
+
+
+def test_real_private_stop_before_start_fences_reservations_and_reopening(pilot):
+    app = PrivateStagingApplication(StagingConfig(
+        os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"], pilot.secret, AUTHORITY, port=0,
+    ))
+    app.stop()
+    assert app.ready() is False
+    with pytest.raises(ValueError):
+        app.start()
+    result = CommercialEvaluationService(app.usage).evaluate(
+        pilot.credential, pilot.project, "stopped-request", TELEMETRY, [],
+    )
+    assert result.reason is ServiceReason.ACCOUNTING_FAILURE
+    assert counts(pilot).consumed == 0
+
+
+@pytest.mark.parametrize("grant,revoke", [
+    ("GRANT SELECT ON gvai_authority.advisory_pilots TO advisory_runtime",
+     "REVOKE SELECT ON gvai_authority.advisory_pilots FROM advisory_runtime"),
+    ("GRANT SELECT(allowance) ON gvai_authority.advisory_pilots TO advisory_runtime",
+     "REVOKE SELECT(allowance) ON gvai_authority.advisory_pilots FROM advisory_runtime"),
+    ("GRANT EXECUTE ON FUNCTION gvai_authority.advisory_customer_v1(text,bytea,text,text) TO advisory_runtime",
+     "REVOKE EXECUTE ON FUNCTION gvai_authority.advisory_customer_v1(text,bytea,text,text) FROM advisory_runtime"),
+])
+def test_real_private_startup_rejects_excess_runtime_privileges(pilot, grant, revoke):
+    with pilot.database.owner() as connection:
+        connection.execute(grant)
+    try:
+        with pytest.raises(StagingUnavailable):
+            PrivateStagingApplication(StagingConfig(
+                os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"], pilot.secret, AUTHORITY, port=0,
+            ))
+    finally:
+        with pilot.database.owner() as connection:
+            connection.execute(revoke)
+
+
+def test_real_private_startup_rejects_schema_owner_runtime(pilot):
+    with pytest.raises(StagingUnavailable):
+        PrivateStagingApplication(StagingConfig(
+            os.environ["GVAI_TEST_POSTGRES_OWNER_DSN"], pilot.secret, AUTHORITY, port=0,
+        ))
+
+
+def test_real_private_readiness_and_evaluation_deny_revoked_database_access(pilot, private_application):
+    app = private_application
+    signature = "gvai_authority.reserve_advisory_v1(text,bytea,text,bigint,text,text,text,text)"
+    with pilot.database.owner() as connection:
+        connection.execute("REVOKE EXECUTE ON FUNCTION " + signature + " FROM advisory_runtime")
+    try:
+        assert staging_http(app, "GET", "/healthz")[0] == 200
+        status, body = staging_http(app, "GET", "/readyz")
+        assert (status, body) == (503, {
+            "status": "unavailable", "advisory_only": True, "enforcement_applied": False,
+        })
+        assert staging_http(app, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot))[0] == 503
+        assert counts(pilot).consumed == 0
+    finally:
+        with pilot.database.owner() as connection:
+            connection.execute("GRANT EXECUTE ON FUNCTION " + signature + " TO advisory_runtime")
+
+
+def test_real_database_connection_refusal_is_redacted_and_prevents_evaluation(pilot, private_application, caplog):
+    from psycopg import sql
+
+    app = private_application
+    with pilot.database.owner() as connection:
+        database_name = connection.info.dbname
+        connection.execute(sql.SQL("REVOKE CONNECT ON DATABASE {} FROM PUBLIC").format(sql.Identifier(database_name)))
+    try:
+        assert staging_http(app, "GET", "/readyz")[0] == 503
+        assert staging_http(app, "GET", "/v1/usage/" + pilot.project, pilot.credential)[0] == 503
+        assert staging_http(app, "POST", "/v1/evaluations", pilot.credential, staging_payload(pilot))[0] == 503
+        assert os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"] not in caplog.text
+        assert pilot.credential not in caplog.text
+    finally:
+        with pilot.database.owner() as connection:
+            connection.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO PUBLIC").format(sql.Identifier(database_name)))
+    assert counts(pilot).consumed == 0
+
+
+def test_real_private_customer_cannot_provision_or_change_entitlement(pilot, private_application):
+    app = private_application
+    for path in ("/v1/provision", "/v1/keys", "/v1/suspend"):
+        assert staging_http(app, "POST", path, pilot.credential, {"tenant": pilot.tenant, "allowance": 100000})[0] == 404
+    modified = {**staging_payload(pilot), "tenant_id": pilot.tenant, "allowance": 100000}
+    assert staging_http(app, "POST", "/v1/evaluations", pilot.credential, modified)[0] == 400
+    assert counts(pilot).allowance == 3
+    assert counts(pilot).consumed == 0
+
+
+def test_real_operator_cli_provisions_secure_handoff_and_customer_runtime_cannot(pilot, tmp_path, capsys):
+    path = tmp_path / "operator.json"
+    path.write_text(json.dumps({
+        "mode": "private-staging-operator",
+        "operator_database_dsn": os.environ["GVAI_TEST_POSTGRES_OWNER_DSN"],
+        "verifier_secret_hex": pilot.secret.hex(), "pilot_units": 2, "pilot_seconds": 3600,
+    }))
+    path.chmod(0o600)
+    output = tmp_path / "handoff.json"
+    arguments = ["--config", str(path), "provision", "--key-output", str(output)]
+    assert main(arguments) == 0
+    record = json.loads(output.read_text())
+    assert output.stat().st_mode & 0o777 == 0o600
+    captured = capsys.readouterr()
+    assert record["credential"] not in captured.out + captured.err
+    assert os.environ["GVAI_TEST_POSTGRES_OWNER_DSN"] not in captured.out + captured.err
+    result = pilot.usage().summary(record["credential"], record["resource_id"])
+    assert result.allowance == 2 and result.consumed == 0
+    before = output.read_bytes()
+    assert main(arguments) == 1
+    assert output.read_bytes() == before
+    assert main(["--config", str(path), "suspend", "--tenant", record["tenant_id"]]) == 0
+    assert pilot.usage().summary(record["credential"], record["resource_id"]) is None
+    assert main(["--config", str(path), "revoke", "--key-id", record["key_id"]]) == 0
+    path.write_text(path.read_text().replace(
+        os.environ["GVAI_TEST_POSTGRES_OWNER_DSN"], os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"],
+    ))
+    assert main(["--config", str(path), "provision", "--key-output", str(tmp_path / "denied.json")]) == 1
+    assert not (tmp_path / "denied.json").exists()
+
+
+def test_real_private_cli_sigterm_closes_listener_without_secret_logs(pilot, tmp_path):
+    import socket
+    import subprocess
+    import sys
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    path = tmp_path / "runtime.json"
+    path.write_text(json.dumps({
+        "mode": "private-staging",
+        "database_dsn": os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"],
+        "verifier_secret_hex": pilot.secret.hex(),
+        "authority": {
+            "authority_id": AUTHORITY.authority_id, "epoch": AUTHORITY.epoch,
+            "trust_domain": AUTHORITY.trust_domain,
+        }, "port": port, "max_connections": 2,
+    }))
+    path.chmod(0o600)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "gvai.private_staging", "--config", str(path), "serve"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        ready = False
+        while time.monotonic() < deadline and process.poll() is None:
+            connection = HTTPConnection("127.0.0.1", port, timeout=1)
+            try:
+                connection.request("GET", "/readyz")
+                response = connection.getresponse()
+                ready = response.status == 200
+                response.read()
+                if ready:
+                    break
+            except OSError:
+                time.sleep(0.05)
+            finally:
+                connection.close()
+        assert ready
+        process.terminate()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0
+        for secret in (pilot.credential, pilot.secret.hex(), os.environ["GVAI_TEST_POSTGRES_RUNTIME_DSN"]):
+            assert secret not in stdout + stderr
+        with socket.socket() as sock:
+            assert sock.connect_ex(("127.0.0.1", port)) != 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.communicate(timeout=10)
 
 
 def test_real_database_state_survives_application_restart(pilot):
