@@ -139,6 +139,47 @@ separate operation and cannot reset uniqueness or quota. Keep authority
 signing keys, API-credential verifier keys, and supervisor STOP keys in separate
 trust and rotation domains.
 
+## Experimental signer boundary
+
+`ExperimentalTrustedReceiptSigner` is an isolated signing boundary, not a
+reservation authority or service. It has no reservation, quota-write, database
+connection, API-registration, or supervisor STOP interface. It accepts only a
+committed `ReservationResult` with an unauthenticated receipt, trusted expected
+context, an injected signing capability, a read-only committed-evidence
+provider, and an independent authority-head verifier. The provider must read
+the event and head after commit in one consistent snapshot, use a read-only
+database identity, and enforce its bounded timeout. The signer checks the
+stored event hash, all expected tenant/principal/request/resource/policy
+bindings, authority identity, result status and purpose, and requires the
+authenticated head's sequence and hash to match the event before signing the
+exact V1 canonical envelope. Provider, verifier, or signing failures return no
+receipt.
+
+The provider and head-verifier interfaces are trust boundaries, not proofs of
+their implementations. The current PostgreSQL reservation migration does not
+install a read-only signer provider, persist a signed head, or protect against
+restoration to an older valid database snapshot. A previously valid signed head
+does not establish freshness without an independently protected monotonic
+checkpoint or equivalent rollback control. The database row and current
+sequence/hash comparison in this experimental boundary do not provide that
+guarantee.
+
+`RESERVED` versus `REPLAY` is supplied by the trusted committed reservation
+result and expected context; the current schema does not persist that outcome
+as event evidence. The signer binds that status into the signed envelope but
+cannot independently reconstruct it from an event row. Exact repeated signing
+of the same event/status/context is deterministic under Ed25519; there is no
+durable signer idempotency ledger. A signed receipt, including `RESERVED`, is
+authenticity evidence only and does not authorize an evaluation. A signed
+`REPLAY` remains a replay and must never trigger a second evaluation.
+
+No production private key, key generation, signing service, key custody,
+protected trust configuration, authenticated head implementation, or service
+registration is supplied. Tests generate ephemeral keys in memory only. This
+foundation is experimental and must remain unactivated pending separate review
+of signer custody, outcome provenance, freshness/rollback protection, and
+recovery.
+
 ## SQLite projection and recovery
 
 SQLite is a rebuildable projection, never the authority. A future projection
