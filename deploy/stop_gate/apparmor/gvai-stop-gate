@@ -1,0 +1,26 @@
+# NOT LOADED. Draft profile; must be syntax-checked with apparmor_parser -Q on the host and
+# run in complain mode first. Paths follow gvai-stop-gate.service.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile gvai-stop-gate /opt/gvai/venv/bin/python* flags=(attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/python>
+  deny capability,
+  deny network inet,
+  deny network inet6,
+  network unix stream,
+  deny ptrace,
+  deny signal,
+  /opt/gvai/** r,
+  /etc/gvai-stop-gate/ r,
+  /etc/gvai-stop-gate/gate.json r,
+  /var/lib/gvai-stop-gate/ rw,
+  /var/lib/gvai-stop-gate/** rwk,
+  /run/gvai-stop-gate/* rw,
+  /run/gvai-protected-backend/notice.sock rw,
+  deny /etc/gvai-backend/** rwklx,
+  deny /etc/gvai-runtime/** rwklx,
+  deny /etc/gvai-operator/** rwklx,
+  deny /var/lib/gvai-operator/** rwklx,
+}

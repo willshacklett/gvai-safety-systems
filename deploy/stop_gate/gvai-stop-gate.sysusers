@@ -1,0 +1,5 @@
+# Separate non-login identities. None shares a group with gvai-api, gvai-proxy or gvai-operator.
+g gvai-gate -
+u gvai-gate - "GVAI STOP gate" /nonexistent /usr/sbin/nologin
+g gvai-backend -
+u gvai-backend - "GVAI protected backend" /nonexistent /usr/sbin/nologin

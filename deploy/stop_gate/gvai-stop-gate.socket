@@ -1,0 +1,22 @@
+[Unit]
+Description=GVAI STOP gate sockets
+PartOf=gvai-stop-gate.service
+
+[Socket]
+# service: the API user may ask for permits and read status; it cannot submit commands here.
+ListenStream=/run/gvai-stop-gate/service.sock
+FileDescriptorName=service
+SocketUser=gvai-api
+SocketGroup=gvai-api
+SocketMode=0600
+# control: accepts signed STOP/ARM commands; only the operator identity may connect.
+ListenStream=/run/gvai-stop-gate/control.sock
+FileDescriptorName=control
+SocketUser=gvai-operator
+SocketGroup=gvai-operator
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
