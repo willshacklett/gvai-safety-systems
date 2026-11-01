@@ -36,12 +36,16 @@ def signed(key, key_id, seq, kind, latch_id=LATCH):
 class Deployment:
     """Gate and backend as real child processes (simulated separation only)."""
 
-    def __init__(self, token_ttl=5.0, notice_max_age=3.0, with_gate=True, with_backend=True):
+    def __init__(self, token_ttl=5.0, notice_max_age=3.0, with_gate=True, with_backend=True,
+                 interrupt_deadline=1.0):
+        self.interrupt_deadline = interrupt_deadline
         self.dir = tempfile.mkdtemp(prefix="gg")
         self.stop_key, self.arm_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
         self.token_ttl, self.notice_max_age = token_ttl, notice_max_age
         self.gate_sock = os.path.join(self.dir, "g.sock")
+        self.control_sock = os.path.join(self.dir, "gc.sock")
         self.backend_sock = os.path.join(self.dir, "b.sock")
+        self.notice_sock = os.path.join(self.dir, "bn.sock")
         self.state = os.path.join(self.dir, "state")
         self.procs, self.gate_proc, self.gate_pub = [], None, None
         self.clients = []
@@ -62,10 +66,11 @@ class Deployment:
     def start_gate(self):
         cfg = {
             "state_dir": self.state, "latch_id": LATCH, "socket": self.gate_sock,
-            "backend_socket": self.backend_sock, "heartbeat_interval": 0.1,
+            "control_socket": self.control_sock,
+            "backend_notice_socket": self.notice_sock, "heartbeat_interval": 0.1,
             "stop_keys": {"stop-k1": pub(self.stop_key).hex()},
             "arm_keys": {"arm-k1": pub(self.arm_key).hex()},
-            "operations": ["echo", "charge"], "token_ttl": self.token_ttl,
+            "operations": ["echo", "charge", "slow", "stubborn"], "token_ttl": self.token_ttl,
         }
         self.gate_proc, info = self._spawn(eg.gate_process_main, cfg)
         self.gate_pub = info["gate_public_key"]
@@ -73,13 +78,22 @@ class Deployment:
     def kill_gate(self):
         self.gate_proc.kill()
         self.gate_proc.join(5)
-        if os.path.exists(self.gate_sock):
-            os.unlink(self.gate_sock)
+        for path in (self.gate_sock, self.control_sock):
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def kill_backend(self):
+        self.backend_proc.kill()
+        self.backend_proc.join(5)
+        for path in (self.backend_sock, self.notice_sock):
+            if os.path.exists(path):
+                os.unlink(path)
 
     def start_backend(self):
         cfg = {
             "gate_public_key": self.gate_pub, "latch_id": LATCH,
-            "socket": self.backend_sock, "notice_max_age": self.notice_max_age,
+            "socket": self.backend_sock, "notice_socket": self.notice_sock,
+            "notice_max_age": self.notice_max_age, "interrupt_deadline": self.interrupt_deadline,
         }
         self.backend_proc, _ = self._spawn(eg.backend_process_main, cfg)
 
@@ -88,8 +102,18 @@ class Deployment:
         self.clients.append(c)
         return c
 
+    def control(self):
+        c = eg.GateClient(self.control_sock)
+        self.clients.append(c)
+        return c
+
     def backend(self):
         c = eg.BackendClient(self.backend_sock)
+        self.clients.append(c)
+        return c
+
+    def notice_channel(self):
+        c = eg.BackendClient(self.notice_sock)
         self.clients.append(c)
         return c
 
@@ -97,12 +121,12 @@ class Deployment:
         return eg.GatedService(self.gate(), self.backend())
 
     def arm(self, seq):
-        r = self.gate().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
         assert r["ok"], r
         time.sleep(0.05)
 
     def stop(self, seq):
-        r = self.gate().submit_command(signed(self.stop_key, "stop-k1", seq, "stop"))
+        r = self.control().submit_command(signed(self.stop_key, "stop-k1", seq, "stop"))
         assert r["ok"], r
 
     def close(self):
@@ -211,7 +235,7 @@ def test_expired_token_denied():
 
 def test_compromised_service_cannot_arm_or_stop_with_own_keys(dep):
     attacker = Ed25519PrivateKey.generate()
-    g = dep.gate()
+    g = dep.control()
     for kid in ("arm-k1", "stop-k1", "attacker"):
         r = g.submit_command(signed(attacker, kid, 1, "arm"))
         assert (r["ok"], r["reason"]) == (False, "authentication_failed")
@@ -223,7 +247,7 @@ def test_compromised_service_cannot_arm_or_stop_with_own_keys(dep):
 
 
 def test_stop_key_cannot_arm_and_arm_key_cannot_stop(dep):
-    g = dep.gate()
+    g = dep.control()
     assert not g.submit_command(signed(dep.stop_key, "stop-k1", 1, "arm"))["ok"]
     assert not g.submit_command(signed(dep.stop_key, "arm-k1", 1, "arm"))["ok"]
     dep.arm(1)
@@ -233,11 +257,11 @@ def test_stop_key_cannot_arm_and_arm_key_cannot_stop(dep):
 
 def test_replayed_commands_rejected_after_restart(dep):
     arm1 = signed(dep.arm_key, "arm-k1", 1, "arm")
-    assert dep.gate().submit_command(arm1)["ok"]
+    assert dep.control().submit_command(arm1)["ok"]
     dep.stop(2)
     dep.kill_gate()
     dep.start_gate()
-    g = dep.gate()
+    g = dep.control()
     assert g.submit_command(arm1)["reason"] == "stale_or_replayed"
     assert not dep.service().call("echo", {})["ok"]
 
@@ -259,7 +283,8 @@ def test_forged_notice_cannot_reopen_backend(dep):
         "counter": 10**6, "status": "armed", "allowed": True, "sequence": 99, "digest": "0" * 64,
     }
     notice["signature"] = atk.sign(b"x").hex()
-    assert dep.backend().send_notice(notice)["reason"] == "notice_authentication_failed"
+    assert dep.notice_channel().send_notice(notice)["reason"] == "notice_authentication_failed"
+    assert dep.backend().send_notice(notice)["reason"] == "request_not_permitted"
     assert not dep.service().call("echo", {"x": 1})["ok"]
 
 
@@ -268,9 +293,8 @@ def test_gate_restart_preserves_state_and_key(dep):
     pub_before = dep.gate_pub
     dep.kill_gate()
     # gate down: new permits impossible
-    assert dep.gate_sock and not os.path.exists(dep.gate_sock)
-    with pytest.raises(Exception):
-        eg.GateClient(dep.gate_sock)
+    assert not os.path.exists(dep.gate_sock)
+    assert eg.GateClient(dep.gate_sock).status()["reason"] == "communication_failure"
     dep.start_gate()
     assert dep.gate_pub == pub_before
     time.sleep(0.4)
@@ -297,7 +321,7 @@ def test_anchor_rollback_between_restarts_faults(dep):
     time.sleep(0.4)
     assert dep.gate().status()["status"] == "fault"
     assert not dep.service().call("echo", {"x": 1})["ok"]
-    assert not dep.gate().submit_command(signed(dep.arm_key, "arm-k1", 1, "arm"))["ok"]
+    assert not dep.control().submit_command(signed(dep.arm_key, "arm-k1", 1, "arm"))["ok"]
 
 
 def test_store_rollback_between_restarts_faults(dep):
@@ -417,7 +441,7 @@ def test_concurrent_conflicting_arm_commands_single_winner(dep):
     dep.stop(2)
     res = []
     cmd = signed(dep.arm_key, "arm-k1", 3, "arm")
-    ts = [threading.Thread(target=lambda: res.append(dep.gate().submit_command(cmd))) for _ in range(8)]
+    ts = [threading.Thread(target=lambda: res.append(dep.control().submit_command(cmd))) for _ in range(8)]
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert sum(r["ok"] for r in res) == 1
@@ -441,7 +465,7 @@ def cores(tmp_path):
         frozenset({"echo"}), clock=lambda: now[0],
     )
     backend = eg.BackendCore(
-        gate.gate_public_key, LATCH, {"echo": lambda a: a},
+        gate.gate_public_key, LATCH, {"echo": lambda a, c: a},
         notice_max_age=3.0, clock=lambda: now[0], monotonic=lambda: mono[0],
     )
     return gate, backend, stop, arm, now, mono

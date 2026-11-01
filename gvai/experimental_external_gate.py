@@ -1,18 +1,20 @@
-"""Experimental external STOP gate + protected backend (simulation).
+"""Experimental external STOP gate + protected backend (simulation / host-ready).
 
-Three roles, separated by *process* boundaries in the tests:
+Three roles, separated by *process* boundaries:
 
 * Gate (supervisor): owns the STOP latch, the trusted anchor/store files, and
   the gate signing key. Issues short-lived, single-use, operation-bound permit
   tokens only while armed, and pushes signed head notices to the backend.
 * Backend: the protected resource. Executes an operation only with a valid
-  gate token, and denies everything if it has not recently heard from the gate.
+  gate token, cancels in-flight operations when the gate stops or goes silent,
+  and denies everything if it has not recently heard from the gate.
 * Commercial service: holds NO signing keys and NO anchor access. It can only
   ask the gate for permits and present them to the backend.
 
-SIMULATED separation: the processes share a UID, kernel and filesystem, so this
-is NOT OS-enforced isolation and gives no host-level protection. See
-docs/external_stop_gate_v1.md.
+Process separation inside tests is SIMULATED (same UID). Only a deployment that
+runs the roles under distinct OS identities, verified by the host acceptance
+probes, provides OS-enforced isolation. See docs/external_stop_gate_v1.md and
+docs/stop_gate_host_readiness_v1.md.
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ import hashlib
 import json
 import os
 import secrets
+import socket
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from multiprocessing.connection import Connection
 from typing import Callable, Mapping, Optional
 
 from gvai.experimental_stop_latch import (
@@ -42,6 +46,13 @@ _NOTICE_DOMAIN = b"GVAI-GATE-NOTICE-V1\n"
 MAX_MESSAGE_BYTES = 65536
 DEFAULT_TOKEN_TTL = 5.0
 DEFAULT_NOTICE_MAX_AGE = 3.0
+DEFAULT_INTERRUPT_DEADLINE = 1.0
+
+# Request types each listener may carry (least privilege per socket).
+SERVICE_GATE_REQUESTS = frozenset({"authorize", "status"})
+CONTROL_GATE_REQUESTS = frozenset({"command", "status"})
+SERVICE_BACKEND_REQUESTS = frozenset({"execute", "audit"})
+NOTICE_BACKEND_REQUESTS = frozenset({"notice"})
 
 
 def _canon(obj: Mapping[str, object]) -> bytes:
@@ -58,7 +69,7 @@ def args_digest(args: Mapping[str, object]) -> str:
 
 
 class FileTrustedAnchor:
-    """Gate-owned monotonic anchor file. Same-UID in tests: not independent."""
+    """Gate-owned monotonic anchor file. Independence comes only from OS ownership."""
 
     def __init__(self, path: str) -> None:
         self._path = path
@@ -232,6 +243,7 @@ class GateCore:
         if not decision.allowed:
             return {"ok": False, "reason": decision.reason}
         head = self._latch.head
+        now = self._clock()
         body = {
             "latch_id": self.latch_id,
             "key_id": self.gate_key_id,
@@ -240,17 +252,20 @@ class GateCore:
             "sequence": head.sequence,
             "digest": head.digest,
             "nonce": secrets.token_hex(16),
-            "expires_at": self._clock() + self._ttl,
+            "issued_at": now,
+            "expires_at": now + self._ttl,
         }
         body["signature"] = self._priv.sign(_PERMIT_DOMAIN + _canon(body)).hex()
         return {"ok": True, "token": body}
 
-    def handle(self, message: object) -> dict:
-        """Dispatch one request. Never raises; unknown input is denied."""
+    def handle(self, message: object, allowed: Optional[frozenset] = None) -> dict:
+        """Dispatch one request. Never raises; unknown or unpermitted input is denied."""
         try:
             if not isinstance(message, dict):
                 return {"ok": False, "reason": "malformed_request"}
             kind = message.get("type")
+            if allowed is not None and kind not in allowed:
+                return {"ok": False, "reason": "request_not_permitted"}
             if kind == "command":
                 out = self.handle_command(message.get("envelope"))
                 if out["ok"]:
@@ -269,17 +284,32 @@ class GateCore:
 # -------------------------------------------------------------- backend core
 
 
+@dataclass
+class _ActiveOp:
+    sequence: int
+    cancel: threading.Event = field(default_factory=threading.Event)
+    cancelled_at: Optional[float] = None
+
+
 class BackendCore:
-    """Protected resource logic. Holds only the gate PUBLIC key."""
+    """Protected resource logic. Holds only the gate PUBLIC key.
+
+    Operations are ``fn(args, cancel_event)``. They should poll ``cancel_event``;
+    on STOP, gate silence, or epoch change the event is set. An operation that
+    ignores it past ``interrupt_deadline`` is abandoned and ``hard_kill`` is
+    invoked (the service entrypoint makes that terminate the backend process).
+    """
 
     def __init__(
         self,
         gate_public_key: bytes,
         latch_id: str,
-        operations: Mapping[str, Callable[[Mapping[str, object]], object]],
+        operations: Mapping[str, Callable[[Mapping[str, object], threading.Event], object]],
         notice_max_age: float = DEFAULT_NOTICE_MAX_AGE,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
+        interrupt_deadline: float = DEFAULT_INTERRUPT_DEADLINE,
+        hard_kill: Optional[Callable[[str], None]] = None,
     ) -> None:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import (
             Ed25519PublicKey,
@@ -292,6 +322,9 @@ class BackendCore:
         self._max_age = notice_max_age
         self._clock = clock
         self._mono = monotonic
+        self._deadline = interrupt_deadline
+        self._hard_kill = hard_kill or (lambda reason: None)
+        self.hard_kills: list = []
         self._lock = threading.Lock()
         self._seq = -1
         self._allowed = False
@@ -300,6 +333,11 @@ class BackendCore:
         self._counter = -1
         self._old_boots: set = set()
         self._nonces: dict = {}
+        self._active: list = []
+        # Permits minted before this backend started are refused: the nonce
+        # memory is volatile, so a restart must not reopen used permits.
+        self._started_at = clock()
+        self._watchdog_stop = threading.Event()
         self.executed: list = []
 
     def _verify(self, domain: bytes, body: Mapping[str, object]) -> bool:
@@ -313,6 +351,33 @@ class BackendCore:
         except Exception:
             return False
         return body.get("key_id") == self._key_id and body.get("latch_id") == self._latch_id
+
+    def _cancel_active_locked(self, keep_sequence: Optional[int] = None) -> None:
+        now = self._mono()
+        for op in self._active:
+            if keep_sequence is not None and op.sequence == keep_sequence:
+                continue
+            if not op.cancel.is_set():
+                op.cancelled_at = now
+                op.cancel.set()
+
+    def start_watchdog(self, interval: float = 0.05) -> None:
+        """Cancel in-flight work if gate notices stop arriving."""
+
+        def loop() -> None:
+            while not self._watchdog_stop.wait(interval):
+                with self._lock:
+                    stale = (
+                        self._notice_at is None
+                        or self._mono() - self._notice_at > self._max_age
+                    )
+                    if stale:
+                        self._cancel_active_locked()
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def stop_watchdog(self) -> None:
+        self._watchdog_stop.set()
 
     def apply_notice(self, notice: object) -> dict:
         try:
@@ -340,6 +405,10 @@ class BackendCore:
                 self._seq = seq
                 self._allowed = notice["allowed"] and notice["status"] == "armed"
                 self._notice_at = self._mono()
+                if self._allowed:
+                    self._cancel_active_locked(keep_sequence=seq)
+                else:
+                    self._cancel_active_locked()
             return {"ok": True}
         except Exception:
             return {"ok": False, "reason": "internal_error"}
@@ -360,7 +429,13 @@ class BackendCore:
             if token.get("operation") != operation or token.get("args_digest") != args_digest(args):
                 return {"ok": False, "reason": "token_mismatch"}
             seq, exp, nonce = token.get("sequence"), token.get("expires_at"), token.get("nonce")
-            if type(seq) is not int or type(nonce) is not str or type(exp) not in (int, float):
+            issued = token.get("issued_at")
+            if (
+                type(seq) is not int
+                or type(nonce) is not str
+                or type(exp) not in (int, float)
+                or type(issued) not in (int, float)
+            ):
                 return {"ok": False, "reason": "token_malformed"}
             with self._lock:
                 now = self._clock()
@@ -372,22 +447,59 @@ class BackendCore:
                     return {"ok": False, "reason": "gate_not_armed"}
                 if seq != self._seq:
                     return {"ok": False, "reason": "token_epoch_mismatch"}
+                if issued < self._started_at:
+                    return {"ok": False, "reason": "token_predates_backend_start"}
                 if exp < now:
                     return {"ok": False, "reason": "token_expired"}
                 self._nonces = {n: e for n, e in self._nonces.items() if e >= now}
                 if nonce in self._nonces:
                     return {"ok": False, "reason": "token_replayed"}
                 self._nonces[nonce] = exp
-                result = self._ops[operation](args)
-                self.executed.append((operation, dict(args)))
-            return {"ok": True, "result": result}
+                active = _ActiveOp(sequence=seq)
+                self._active.append(active)
+            return self._run(operation, args, active)
         except Exception:
             return {"ok": False, "reason": "internal_error"}
 
-    def handle(self, message: object) -> dict:
+    def _run(self, operation: str, args: dict, active: _ActiveOp) -> dict:
+        box: dict = {}
+        done = threading.Event()
+
+        def work() -> None:
+            try:
+                box["result"] = self._ops[operation](dict(args), active.cancel)
+            except Exception:
+                box["error"] = True
+            finally:
+                done.set()
+
+        threading.Thread(target=work, daemon=True).start()
+        try:
+            while not done.wait(0.005):
+                with self._lock:
+                    started = active.cancelled_at
+                if started is not None and self._mono() - started > self._deadline:
+                    self.hard_kills.append(operation)
+                    self._hard_kill("uncooperative_operation")
+                    return {"ok": False, "reason": "interrupted_uncooperative"}
+            if active.cancel.is_set():
+                return {"ok": False, "reason": "interrupted_by_stop"}
+            if "error" in box:
+                return {"ok": False, "reason": "operation_failed"}
+            with self._lock:
+                self.executed.append((operation, dict(args)))
+            return {"ok": True, "result": box["result"]}
+        finally:
+            with self._lock:
+                if active in self._active:
+                    self._active.remove(active)
+
+    def handle(self, message: object, allowed: Optional[frozenset] = None) -> dict:
         if not isinstance(message, dict):
             return {"ok": False, "reason": "malformed_request"}
         kind = message.get("type")
+        if allowed is not None and kind not in allowed:
+            return {"ok": False, "reason": "request_not_permitted"}
         if kind == "notice":
             return self.apply_notice(message)
         if kind == "execute":
@@ -399,6 +511,40 @@ class BackendCore:
 
 
 # ------------------------------------------------------- process / transport
+
+
+class FdListener:
+    """Accept loop over an inherited (systemd socket-activation) listening fd."""
+
+    def __init__(self, fd: int) -> None:
+        self._sock = socket.socket(fileno=fd)
+
+    def accept(self) -> Connection:
+        peer, _ = self._sock.accept()
+        return Connection(peer.detach())
+
+
+def systemd_listeners() -> dict:
+    """Named listening fds passed by systemd (LISTEN_FDS/LISTEN_FDNAMES)."""
+    if os.environ.get("LISTEN_PID") != str(os.getpid()):
+        return {}
+    count = int(os.environ.get("LISTEN_FDS", "0"))
+    names = os.environ.get("LISTEN_FDNAMES", "").split(":")
+    out = {}
+    for i in range(count):
+        name = names[i] if i < len(names) and names[i] else f"fd{i}"
+        out[name] = FdListener(3 + i)
+    for var in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):
+        os.environ.pop(var, None)
+    return out
+
+
+def path_listener(path: str):
+    from multiprocessing.connection import Listener
+
+    listener = Listener(path, family="AF_UNIX")
+    os.chmod(path, 0o600)
+    return listener
 
 
 def _serve(listener, handler, stop_event) -> None:
@@ -426,30 +572,22 @@ def _serve(listener, handler, stop_event) -> None:
         threading.Thread(target=conn_loop, args=(conn,), daemon=True).start()
 
 
-def gate_process_main(config: dict, ready_conn) -> None:
-    from multiprocessing.connection import Listener
+def serve_many(listeners_and_handlers, stop_event) -> None:
+    """Serve several listeners; return when the stop event is set."""
+    for listener, handler in listeners_and_handlers:
+        threading.Thread(
+            target=_serve, args=(listener, handler, stop_event), daemon=True
+        ).start()
+    stop_event.wait()
 
-    gate = GateCore(
-        config["state_dir"],
-        config["latch_id"],
-        {k: bytes.fromhex(v) for k, v in config["stop_keys"].items()},
-        {k: bytes.fromhex(v) for k, v in config["arm_keys"].items()},
-        frozenset(config["operations"]),
-        token_ttl=config.get("token_ttl", DEFAULT_TOKEN_TTL),
-        forbidden_public_keys=[bytes.fromhex(v) for v in config.get("forbidden", [])],
-    )
-    listener = Listener(config["socket"], family="AF_UNIX")
-    os.chmod(config["socket"], 0o600)
-    stop = threading.Event()
-    ready_conn.send_bytes(json.dumps({"gate_public_key": gate.gate_public_key.hex()}).encode())
-    backend_socket = config.get("backend_socket")
-    interval = config.get("heartbeat_interval", 0.2)
 
+def run_gate(gate: GateCore, service_listener, control_listener, backend_notice_path,
+             heartbeat_interval: float, stop: threading.Event) -> None:
     def push(notice=None):
-        if not backend_socket:
+        if not backend_notice_path:
             return
         try:
-            conn = BackendClient(backend_socket, timeout=1.0)
+            conn = BackendClient(backend_notice_path, timeout=1.0)
             conn.send_notice(notice or gate.notice())
             conn.close()
         except Exception:
@@ -458,59 +596,120 @@ def gate_process_main(config: dict, ready_conn) -> None:
     def heartbeat():
         while not stop.is_set():
             push()
-            stop.wait(interval)
+            stop.wait(heartbeat_interval)
 
     threading.Thread(target=heartbeat, daemon=True).start()
 
-    def handler(message):
-        reply = gate.handle(message)
+    def service_handler(message):
+        return gate.handle(message, SERVICE_GATE_REQUESTS)
+
+    def control_handler(message):
+        reply = gate.handle(message, CONTROL_GATE_REQUESTS)
         if reply.get("ok") and "notice" in reply:
             push(reply["notice"])
         return reply
 
-    _serve(listener, handler, stop)
+    serve_many([(service_listener, service_handler), (control_listener, control_handler)], stop)
+
+
+def gate_from_config(config: Mapping[str, object]) -> GateCore:
+    return GateCore(
+        config["state_dir"],
+        config["latch_id"],
+        {k: bytes.fromhex(v) for k, v in config["stop_keys"].items()},
+        {k: bytes.fromhex(v) for k, v in config["arm_keys"].items()},
+        frozenset(config["operations"]),
+        token_ttl=config.get("token_ttl", DEFAULT_TOKEN_TTL),
+        forbidden_public_keys=[bytes.fromhex(v) for v in config.get("forbidden", [])],
+    )
+
+
+def gate_process_main(config: dict, ready_conn) -> None:
+    gate = gate_from_config(config)
+    service = path_listener(config["socket"])
+    control = path_listener(config["control_socket"])
+    ready_conn.send_bytes(json.dumps({"gate_public_key": gate.gate_public_key.hex()}).encode())
+    run_gate(gate, service, control, config.get("backend_notice_socket"),
+             config.get("heartbeat_interval", 0.2), threading.Event())
+
+
+def simulation_operations() -> dict:
+    """Test-only operations; the cooperative and stubborn ones model long work."""
+
+    def slow(args, cancel):
+        end = time.monotonic() + float(args.get("seconds", 5))
+        while time.monotonic() < end:
+            if cancel.wait(0.005):
+                return {"cancelled": True}
+        return {"done": True}
+
+    def stubborn(args, cancel):
+        time.sleep(float(args.get("seconds", 3)))
+        return {"done": True}
+
+    return {
+        "echo": lambda a, c: dict(a),
+        "charge": lambda a, c: {"charged": a.get("amount", 0)},
+        "slow": slow,
+        "stubborn": stubborn,
+    }
 
 
 def backend_process_main(config: dict, ready_conn) -> None:
-    from multiprocessing.connection import Listener
-
-    ops = {
-        "echo": lambda a: dict(a),
-        "charge": lambda a: {"charged": a.get("amount", 0)},
-    }
     core = BackendCore(
         bytes.fromhex(config["gate_public_key"]),
         config["latch_id"],
-        ops,
+        simulation_operations(),
         notice_max_age=config.get("notice_max_age", DEFAULT_NOTICE_MAX_AGE),
+        interrupt_deadline=config.get("interrupt_deadline", DEFAULT_INTERRUPT_DEADLINE),
+        hard_kill=lambda reason: os._exit(70),
     )
-    listener = Listener(config["socket"], family="AF_UNIX")
-    os.chmod(config["socket"], 0o600)
+    core.start_watchdog()
+    service = path_listener(config["socket"])
+    notice = path_listener(config["notice_socket"])
     ready_conn.send_bytes(b"{}")
-    _serve(listener, core.handle, threading.Event())
+    serve_many(
+        [
+            (service, lambda m: core.handle(m, SERVICE_BACKEND_REQUESTS)),
+            (notice, lambda m: core.handle(m, NOTICE_BACKEND_REQUESTS)),
+        ],
+        threading.Event(),
+    )
 
 
 class _Client:
+    """Lazy, reconnecting client. Every failure mode is a DENY, never an exception."""
+
     def __init__(self, path: str, timeout: float = 2.0) -> None:
+        self._path = path
+        self._timeout = timeout
+        self._conn = None
+
+    def _connect(self):
         from multiprocessing.connection import Client
 
-        self._timeout = timeout
-        self._conn = Client(path, family="AF_UNIX")
+        if self._conn is None:
+            self._conn = Client(self._path, family="AF_UNIX")
+        return self._conn
 
     def request(self, message: Mapping[str, object]) -> dict:
-        """Never raises: communication failure or garbage is a DENY."""
         try:
-            self._conn.send_bytes(json.dumps(message).encode("utf-8"))
-            if not self._conn.poll(self._timeout):
+            conn = self._connect()
+            conn.send_bytes(json.dumps(message).encode("utf-8"))
+            if not conn.poll(self._timeout):
+                self.close()  # a late reply would desynchronise the stream
                 return {"ok": False, "reason": "communication_failure"}
-            reply = json.loads(self._conn.recv_bytes(MAX_MESSAGE_BYTES).decode("utf-8"))
+            reply = json.loads(conn.recv_bytes(MAX_MESSAGE_BYTES).decode("utf-8"))
             return reply if isinstance(reply, dict) else {"ok": False, "reason": "bad_reply"}
         except Exception:
+            self.close()
             return {"ok": False, "reason": "communication_failure"}
 
     def close(self) -> None:
+        conn, self._conn = self._conn, None
         try:
-            self._conn.close()
+            if conn is not None:
+                conn.close()
         except Exception:
             pass
 
@@ -548,8 +747,9 @@ class GatedService:
     denies any operation lacking a valid gate token.
     """
 
-    def __init__(self, gate: GateClient, backend: BackendClient) -> None:
+    def __init__(self, gate: GateClient, backend: BackendClient, timeout: float = 15.0) -> None:
         self._gate, self._backend = gate, backend
+        self._backend._timeout = timeout
 
     def call(self, operation: str, args: Mapping[str, object]) -> dict:
         permit = self._gate.authorize(operation, args)
