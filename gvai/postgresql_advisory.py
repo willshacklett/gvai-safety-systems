@@ -153,6 +153,21 @@ class PostgreSQLCustomerStore:
             revoked = cursor.fetchone() is not None
         return revoked
 
+    def suspend_tenant(self, tenant_id: str) -> bool:
+        """Operator-only suspension independent of every customer credential."""
+        if not _valid_customer_tenant(tenant_id):
+            raise ApiKeyOperationError("Invalid tenant suspension input.")
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE gvai_authority.tenants SET status='disabled' "
+                    "WHERE tenant_id=%s RETURNING tenant_ref", (tenant_id,),
+                )
+                suspended = cursor.fetchone() is not None
+        except Exception:
+            raise ApiKeyOperationError("Tenant suspension uncertain; reconcile before retry.") from None
+        return suspended
+
 
 class _AdvisoryReservationAdapter(PostgreSQLReservationAuthority):
     _RESERVATION_SQL = """

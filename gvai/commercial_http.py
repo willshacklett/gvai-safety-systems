@@ -7,8 +7,9 @@ import re
 import select
 import threading
 import time
+from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable
 
 from gvai.commercial_service import (
     CommercialEvaluationService,
@@ -16,6 +17,7 @@ from gvai.commercial_service import (
     ServiceOutcome,
     ServiceReason,
 )
+from gvai.postgresql_advisory import AdvisoryPilotUsage
 
 
 HTTP_PATH = "/v1/evaluations"
@@ -29,6 +31,12 @@ MAX_REQUEST_TIMEOUT = 60.0
 _READ_CHUNK_BYTES = 4096
 _RESOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _CONTENT_LENGTH = re.compile(r"[0-9]{1,6}\Z")
+
+
+@dataclass(frozen=True)
+class PrivateHttpEndpoints:
+    usage: Callable[[str, str], AdvisoryPilotUsage | None]
+    ready: Callable[[], bool]
 
 
 class _BoundedHeaderReader:
@@ -108,6 +116,7 @@ def create_server(
     *,
     max_concurrent_handlers: int = DEFAULT_MAX_CONCURRENT_HANDLERS,
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+    private_endpoints: PrivateHttpEndpoints | None = None,
 ) -> ThreadingHTTPServer:
     """Create a local-only HTTP server around a trusted service instance."""
     if type(port) is not int or not 0 <= port <= 65535:
@@ -123,7 +132,7 @@ def create_server(
         or not math.isfinite(request_timeout)
     ):
         raise ValueError("request_timeout is outside the supported bound")
-    handler = _handler_for(service)
+    handler = _handler_for(service, private_endpoints)
     return _LocalThreadingHTTPServer(
         ("127.0.0.1", port), handler, max_concurrent_handlers, float(request_timeout)
     )
@@ -180,7 +189,10 @@ class _LocalThreadingHTTPServer(ThreadingHTTPServer):
         return
 
 
-def _handler_for(service: CommercialEvaluationService) -> type[BaseHTTPRequestHandler]:
+def _handler_for(
+    service: CommercialEvaluationService,
+    private_endpoints: PrivateHttpEndpoints | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class EvaluationHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "GVAI-Local"
@@ -360,7 +372,56 @@ def _handler_for(service: CommercialEvaluationService) -> type[BaseHTTPRequestHa
             self._write_error(status, code, message)
 
         def do_GET(self) -> None:
-            self._method_not_allowed()
+            if private_endpoints is None:
+                self._method_not_allowed()
+                return
+            if self.headers.get_all("Transfer-Encoding") or self.headers.get_all("Content-Length"):
+                self._write_error(400, "invalid_request", "GET bodies are not supported.")
+                return
+            if self.path == "/healthz":
+                self._send_json(200, {
+                    "status": "ok", "advisory_only": True, "enforcement_applied": False,
+                })
+                return
+            if self.path == "/readyz":
+                try:
+                    ready = private_endpoints.ready() is True
+                except Exception:
+                    ready = False
+                self._send_json(200 if ready else 503, {
+                    "status": "ready" if ready else "unavailable",
+                    "advisory_only": True, "enforcement_applied": False,
+                })
+                return
+            prefix = "/v1/usage/"
+            if not self.path.startswith(prefix) or _RESOURCE_ID.fullmatch(self.path[len(prefix):]) is None:
+                self._write_error(404, "not_found", "Endpoint is unavailable.")
+                return
+            authorization = self.headers.get_all("Authorization") or []
+            if len(authorization) != 1:
+                self._write_error(401, "authentication_required", "A bearer credential is required.")
+                return
+            scheme, separator, credential = authorization[0].partition(" ")
+            if (
+                not separator or scheme.lower() != "bearer" or not credential
+                or len(credential) > 4096 or any(character.isspace() for character in credential)
+            ):
+                self._write_error(401, "authentication_required", "A bearer credential is required.")
+                return
+            try:
+                summary = private_endpoints.usage(credential, self.path[len(prefix):])
+                if summary is not None and type(summary) is not AdvisoryPilotUsage:
+                    raise ValueError("Invalid advisory usage result.")
+            except Exception:
+                self._write_error(503, "accounting_failure", "Evaluation accounting is unavailable.")
+                return
+            if summary is None:
+                self._write_error(403, "authorization_denied", "Credential is not authorized for this resource.")
+                return
+            self._send_json(200, {
+                "version": 1, "usage": {**asdict(summary), "remaining": summary.remaining},
+                "advisory_only": True, "enforcement_applied": False,
+            })
 
         def do_HEAD(self) -> None:
             self._method_not_allowed()

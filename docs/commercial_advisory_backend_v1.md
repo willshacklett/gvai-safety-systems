@@ -1,5 +1,8 @@
 # Commercial advisory pilot backend V1
 
+For the runnable loopback-only assembly, separate operator commands, connection
+bounds and HTTP usage/diagnostics, see [private staging V1](private_staging_v1.md).
+
 ## Scope and trust boundary
 
 This is a development-validated PostgreSQL foundation for an invite-only,
