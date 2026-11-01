@@ -699,6 +699,12 @@ class CommercialUsage:
     def reserve(self, credential: object, resource_id: str, request_id: str) -> UsageResult:
         return self._operate(credential, resource_id, request_id, "reserve")
 
+    def reserve_evaluation(
+        self, credential: object, resource_id: str, request_id: str, payload: bytes
+    ) -> UsageResult:
+        """Legacy offline accounting; durable adapters bind the validated payload."""
+        return self.reserve(credential, resource_id, request_id)
+
     def complete(
         self, credential: object, resource_id: str, request_id: str, *, succeeded: bool,
     ) -> UsageResult:

@@ -158,6 +158,7 @@ internal authorization reasons are not exposed:
 | 404 | `not_found` | Unknown path. |
 | 405 | `method_not_allowed` | Non-POST method; response includes `Allow: POST`. |
 | 409 | `replay` | Request ID was already reserved or completed; no evaluation is repeated. |
+| 409 | `conflict` | The durable advisory backend found a different payload or resource under the same request ID. |
 | 413 | `request_too_large` | Body exceeds 16 KiB. |
 | 414 | `request_too_large` | Request line exceeds the stdlib 64 KiB parser bound. |
 | 415 | `unsupported_media_type` | Unsupported content type or content encoding. |

@@ -24,6 +24,16 @@ to a `CustomerIdentityVerifier`, such as `CustomerApiKeys`. The service does not
 accept an authorizer decision or identity object from the caller, nor does it
 implement another authorization path.
 
+The [durable advisory pilot backend](commercial_advisory_backend_v1.md) can also
+supply `PostgreSQLAdvisoryUsage`. The service's accounting protocol now calls
+`reserve_evaluation(credential, resource_id, request_id, payload)` with canonical
+immutable bytes of the validated evaluation request. Custom injected accounting
+adapters must implement this method plus `complete`; there is no unbound fallback.
+The existing `CommercialUsage` implements the method by retaining its legacy
+offline reservation behavior. PostgreSQL binds these bytes into the existing V1
+request digest, returning `conflict` when a reused ID has a different payload or
+resource. Neither path supplies controlled-execution authority.
+
 The in-process call is:
 
 ```python
