@@ -1,9 +1,11 @@
 import hashlib
-import hmac
 import threading
 import unittest
 from collections import Counter
 from dataclasses import replace
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gvai.commercial_reservation_authority import (
     AuthorityCredentialRecord,
@@ -26,40 +28,35 @@ from gvai.commercial_reservation_authority import (
     payload_digest_for_bounded_input,
     verify_authenticated_receipt,
 )
+from gvai.ed25519_receipt_verifier import Ed25519ReceiptVerifier
 from gvai.effects import make_action
 from gvai.external_control import GVExternalControlPlane
 
 
-_TEST_SIGNING_KEY = b"test-only-reservation-receipt-key"
+class _TestEd25519Signer:
+    """Ephemeral test-only signer; not a production authority or key provider."""
 
+    def __init__(self, key_id="test-ed25519-v1"):
+        self.key_id = key_id
+        self._private_key = Ed25519PrivateKey.generate()
 
-class _TestReceiptHmac:
-    """Test-only signing fixture; not a production authority or key provider."""
+    @property
+    def public_key_bytes(self):
+        return self._private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
 
-    key_id = "test-hmac-v1"
-
-    @classmethod
-    def sign(cls, receipt):
+    def sign(self, receipt):
         unsigned = replace(
             receipt,
-            signing_key_id=cls.key_id,
+            signing_key_id=self.key_id,
             signature=b"placeholder",
             evidence_class=EvidenceClass.AUTHENTICATED,
         )
-        signature = hmac.new(
-            _TEST_SIGNING_KEY,
-            unsigned.canonical_envelope_bytes(),
-            hashlib.sha256,
-        ).digest()
-        return replace(unsigned, signature=signature)
-
-    def verify_receipt(self, envelope, signature, signing_key_id, expected_authority):
-        return (
-            signing_key_id == self.key_id
-            and hmac.compare_digest(
-                signature,
-                hmac.new(_TEST_SIGNING_KEY, envelope, hashlib.sha256).digest(),
-            )
+        return replace(
+            unsigned,
+            signature=self._private_key.sign(unsigned.canonical_envelope_bytes()),
         )
 
 
@@ -257,6 +254,25 @@ class ReservationAuthorityContractTests(unittest.TestCase):
             signature,
             EvidenceClass.AUTHENTICATED,
         )
+
+    def ed25519_fixture(self, result, *, signer=None, trusted_public_keys=None, revoked_key_ids=frozenset()):
+        signer = _TestEd25519Signer() if signer is None else signer
+        receipt = signer.sign(result.receipt)
+        trusted_public_keys = (
+            {signer.key_id: signer.public_key_bytes}
+            if trusted_public_keys is None
+            else trusted_public_keys
+        )
+        verifier = Ed25519ReceiptVerifier(
+            authority=self.identity,
+            trusted_public_keys=trusted_public_keys,
+            revoked_key_ids=revoked_key_ids,
+        )
+        expected = replace(
+            self.expected_receipt_context(receipt),
+            signing_key_ids=frozenset({signer.key_id}),
+        )
+        return signer, receipt, expected, verifier
 
     def test_first_valid_reservation_uses_authority_owned_context(self):
         request = self.request()
@@ -522,27 +538,217 @@ class ReservationAuthorityContractTests(unittest.TestCase):
         request = self.request()
         reserved_result = self.authority.reserve(request, "credential-a")
         replay_result = self.authority.reserve(request, "credential-a")
-        reserved = _TestReceiptHmac.sign(reserved_result.receipt)
-        replay = _TestReceiptHmac.sign(replay_result.receipt)
+        signer = _TestEd25519Signer()
+        reserved = signer.sign(reserved_result.receipt)
+        replay = signer.sign(replay_result.receipt)
         self.assertEqual(replay.status, ReservationStatus.REPLAY)
         self.assertEqual(reserved.event.event_id, replay.event.event_id)
         self.assertNotEqual(
             reserved.canonical_envelope_bytes(), replay.canonical_envelope_bytes()
         )
 
+        verifier = Ed25519ReceiptVerifier(
+            authority=self.identity,
+            trusted_public_keys={signer.key_id: signer.public_key_bytes},
+        )
         expected_replay = replace(
             self.expected_receipt_context(replay),
-            signing_key_ids=frozenset({_TestReceiptHmac.key_id}),
+            signing_key_ids=frozenset({signer.key_id}),
         )
         self.assertTrue(
-            verify_authenticated_receipt(replay, expected_replay, _TestReceiptHmac())
+            verify_authenticated_receipt(replay, expected_replay, verifier)
         )
         substituted = replace(replay, status=ReservationStatus.RESERVED)
         expected_reserved = replace(expected_replay, status=ReservationStatus.RESERVED)
         self.assertFalse(
-            verify_authenticated_receipt(
-                substituted, expected_reserved, _TestReceiptHmac()
+            verify_authenticated_receipt(substituted, expected_reserved, verifier)
+        )
+
+    def test_ed25519_verifies_exact_envelope_with_pinned_public_key(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        _, receipt, expected, verifier = self.ed25519_fixture(result)
+
+        self.assertTrue(verify_authenticated_receipt(receipt, expected, verifier))
+        self.assertFalse(
+            verifier.verify_receipt(
+                receipt.canonical_envelope_bytes(),
+                receipt.signature,
+                receipt.signing_key_id,
+                AuthorityIdentity("other-authority", 1, "test-domain"),
             )
+        )
+
+    def test_ed25519_rejects_forged_signature_and_status_tampering(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        signer, receipt, expected, verifier = self.ed25519_fixture(result)
+
+        forged_signature = signer._private_key.sign(b"not the receipt envelope")
+        forged = replace(receipt, signature=forged_signature)
+        self.assertFalse(verify_authenticated_receipt(forged, expected, verifier))
+
+        altered_status = replace(receipt, status=ReservationStatus.REPLAY)
+        expected_replay = replace(expected, status=ReservationStatus.REPLAY)
+        self.assertFalse(
+            verify_authenticated_receipt(altered_status, expected_replay, verifier)
+        )
+
+    def test_ed25519_rejects_context_and_event_hash_tampering(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        _, receipt, expected, verifier = self.ed25519_fixture(result)
+
+        for field_name in (
+            "tenant_digest",
+            "principal_digest",
+            "request_id_digest",
+            "request_digest",
+            "resource_digest",
+        ):
+            with self.subTest(field=field_name):
+                altered = replace(expected, **{field_name: "b" * 64})
+                self.assertFalse(verify_authenticated_receipt(receipt, altered, verifier))
+
+        altered_event = replace(receipt.event, previous_event_hash="c" * 64)
+        altered_receipt = replace(receipt, event=altered_event)
+        self.assertNotEqual(receipt.event.event_hash, altered_receipt.event.event_hash)
+        self.assertFalse(
+            verify_authenticated_receipt(altered_receipt, expected, verifier)
+        )
+
+    def test_ed25519_rejects_unsupported_purpose_and_version(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        _, receipt, _, _ = self.ed25519_fixture(result)
+
+        with self.assertRaises(ValueError):
+            replace(receipt, purpose="execution_grant")
+        with self.assertRaises(ValueError):
+            replace(receipt, evidence_version=2)
+
+    def test_ed25519_key_rotation_unknown_keys_and_revocation_fail_closed(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        old_signer = _TestEd25519Signer("old-key")
+        new_signer = _TestEd25519Signer("new-key")
+        trusted_keys = {
+            old_signer.key_id: old_signer.public_key_bytes,
+            new_signer.key_id: new_signer.public_key_bytes,
+        }
+        verifier = Ed25519ReceiptVerifier(
+            authority=self.identity,
+            trusted_public_keys=trusted_keys,
+            revoked_key_ids=frozenset({old_signer.key_id}),
+        )
+
+        new_receipt = new_signer.sign(result.receipt)
+        expected_new = replace(
+            self.expected_receipt_context(new_receipt),
+            signing_key_ids=frozenset({new_signer.key_id}),
+        )
+        self.assertTrue(verify_authenticated_receipt(new_receipt, expected_new, verifier))
+
+        old_receipt = old_signer.sign(result.receipt)
+        expected_old = replace(
+            self.expected_receipt_context(old_receipt),
+            signing_key_ids=frozenset({old_signer.key_id}),
+        )
+        self.assertFalse(verify_authenticated_receipt(old_receipt, expected_old, verifier))
+
+        rotation_verifier = Ed25519ReceiptVerifier(
+            authority=self.identity,
+            trusted_public_keys=trusted_keys,
+        )
+        wrongly_rotated = replace(new_receipt, signing_key_id=old_signer.key_id)
+        self.assertFalse(
+            verify_authenticated_receipt(
+                wrongly_rotated, expected_old, rotation_verifier
+            )
+        )
+        unknown_key = replace(new_receipt, signing_key_id="unknown-key")
+        expected_unknown = replace(
+            expected_new,
+            signing_key_ids=frozenset({"unknown-key"}),
+        )
+        self.assertFalse(
+            verify_authenticated_receipt(unknown_key, expected_unknown, verifier)
+        )
+
+    def test_ed25519_rejects_malformed_and_test_only_evidence(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        _, receipt, expected, verifier = self.ed25519_fixture(result)
+
+        self.assertFalse(verify_authenticated_receipt(object(), expected, verifier))
+        malformed_signature = replace(receipt, signature=b"x" * 63)
+        self.assertFalse(
+            verify_authenticated_receipt(malformed_signature, expected, verifier)
+        )
+        test_only = replace(receipt, evidence_class=EvidenceClass.TEST_ONLY)
+        self.assertFalse(verify_authenticated_receipt(test_only, expected, verifier))
+
+    def test_ed25519_unavailable_trust_configuration_is_rejected(self):
+        with self.assertRaises(ValueError):
+            Ed25519ReceiptVerifier(authority=self.identity, trusted_public_keys=None)
+        with self.assertRaises(ValueError):
+            Ed25519ReceiptVerifier(authority=self.identity, trusted_public_keys={})
+
+    def test_ed25519_verifier_trust_state_cannot_be_reassigned(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        signer, receipt, expected, verifier = self.ed25519_fixture(result)
+        attacker = _TestEd25519Signer("attacker-key")
+        attacker_receipt = attacker.sign(result.receipt)
+        attacker_expected = replace(
+            self.expected_receipt_context(attacker_receipt),
+            signing_key_ids=frozenset({attacker.key_id}),
+        )
+
+        replacements = (
+            ("_authority", AuthorityIdentity("attacker-authority", 1, "test-domain")),
+            ("_trusted_public_keys", {attacker.key_id: attacker.public_key_bytes}),
+            ("_revoked_key_ids", frozenset()),
+        )
+        for field_name, replacement in replacements:
+            with self.subTest(field=field_name), self.assertRaises(AttributeError):
+                setattr(verifier, field_name, replacement)
+            with self.subTest(deleted_field=field_name), self.assertRaises(AttributeError):
+                delattr(verifier, field_name)
+
+        self.assertTrue(verify_authenticated_receipt(receipt, expected, verifier))
+        self.assertFalse(
+            verify_authenticated_receipt(attacker_receipt, attacker_expected, verifier)
+        )
+
+    def test_ed25519_verifier_defensively_copies_mutable_trust_inputs(self):
+        result = self.authority.reserve(self.request(), "credential-a")
+        signer = _TestEd25519Signer("pinned-key")
+        attacker = _TestEd25519Signer("revoked-key")
+        supplied_keys = {
+            signer.key_id: signer.public_key_bytes,
+            attacker.key_id: attacker.public_key_bytes,
+        }
+        supplied_revoked = {attacker.key_id}
+        verifier = Ed25519ReceiptVerifier(
+            authority=self.identity,
+            trusted_public_keys=supplied_keys,
+            revoked_key_ids=supplied_revoked,
+        )
+
+        supplied_keys.clear()
+        supplied_keys[attacker.key_id] = attacker.public_key_bytes
+        supplied_revoked.clear()
+
+        pinned_receipt = signer.sign(result.receipt)
+        pinned_expected = replace(
+            self.expected_receipt_context(pinned_receipt),
+            signing_key_ids=frozenset({signer.key_id}),
+        )
+        revoked_receipt = attacker.sign(result.receipt)
+        revoked_expected = replace(
+            self.expected_receipt_context(revoked_receipt),
+            signing_key_ids=frozenset({attacker.key_id}),
+        )
+
+        self.assertTrue(
+            verify_authenticated_receipt(pinned_receipt, pinned_expected, verifier)
+        )
+        self.assertFalse(
+            verify_authenticated_receipt(revoked_receipt, revoked_expected, verifier)
         )
 
     def test_evidence_class_relabel_changes_canonical_envelope(self):
