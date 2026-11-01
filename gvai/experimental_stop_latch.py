@@ -286,6 +286,11 @@ class StopLatch:
             return self._status
 
     @property
+    def head(self) -> AnchorHead:
+        with self._lock:
+            return self._head
+
+    @property
     def gap_detected(self) -> bool:
         with self._lock:
             return self._gap_detected
