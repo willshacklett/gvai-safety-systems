@@ -14,6 +14,8 @@ import subprocess
 
 
 TARGET = "gvai-safety-test-01"
+LAB_TARGET = "gvai-safety-lab-01"
+TARGETS = (TARGET, LAB_TARGET)
 COMMANDS = {
     "systemd": ("systemd-analyze", "--version"),
     "apparmor": ("aa-status", "--enabled"),
@@ -193,7 +195,9 @@ def load_baseline(path):
     return data
 
 
-def collect(*, prepared=False, baseline=None):
+def collect(*, prepared=False, baseline=None, target=TARGET):
+    if target not in TARGETS:
+        raise ValueError("Unsupported target.")
     checks = {}
     evidence = {}
 
@@ -204,7 +208,7 @@ def collect(*, prepared=False, baseline=None):
             checks[label] = False
 
     check("root_observer", lambda: os.geteuid() == 0)
-    check("target_hostname", lambda: read_regular("/etc/hostname", 256).decode().strip() == TARGET)
+    check("target_hostname", lambda: read_regular("/etc/hostname", 256).decode().strip() == target)
     check("ubuntu_24_04", lambda: {"ID=ubuntu", 'VERSION_ID="24.04"'} <= set(
         read_regular("/usr/lib/os-release", 16384).decode().splitlines()))
     check("systemd_pid1", lambda: read_regular("/proc/1/comm", 256).strip() == b"systemd")
@@ -213,13 +217,17 @@ def collect(*, prepared=False, baseline=None):
     profiles = None
     try:
         profiles = Path("/sys/kernel/security/apparmor/profiles").read_text()
-        check("protected_profiles_enforcing", lambda: all(
-            name + " (enforce)" in profiles.splitlines() for name in ("gvai-worker", "gvai-bwrap")))
+        if target == TARGET:
+            check("protected_profiles_enforcing", lambda: all(
+                name + " (enforce)" in profiles.splitlines() for name in ("gvai-worker", "gvai-bwrap")))
+        else:
+            check("restricted_unprivileged_userns", lambda: read_regular(
+                "/proc/sys/kernel/apparmor_restrict_unprivileged_userns", 256).strip() == b"1")
         evidence["protected"] = protected_snapshot(profiles)
         checks["protected_snapshot_available"] = True
     except (OSError, ValueError):
         checks["protected_snapshot_available"] = False
-        checks["protected_profiles_enforcing"] = False
+        checks["protected_profiles_enforcing" if target == TARGET else "restricted_unprivileged_userns"] = False
     check("protected_baseline_matches", lambda: baseline is not None
           and evidence.get("protected") == load_baseline(baseline))
     firewall = command("firewall")
@@ -235,12 +243,17 @@ def collect(*, prepared=False, baseline=None):
         line.split(":", 1) for line in read_regular("/proc/meminfo", 16384).decode().splitlines()
     )["MemAvailable"].split()[0]) >= 2 * 1024**2)
     check("cgroup_v2", lambda: Path("/sys/fs/cgroup/cgroup.controllers").is_file())
+    evidence["packages_available"] = {
+        name: shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin") is not None
+        for name in ("nginx", "psql", "openssl")
+    }
     for name in ("gvai-api", "gvai-proxy"):
         check(name + "_account", lambda name=name: account_check(name))
     check("service_account_separation", lambda:
           pwd.getpwnam("gvai-api").pw_uid != pwd.getpwnam("gvai-proxy").pw_uid
           and pwd.getpwnam("gvai-api").pw_gid != pwd.getpwnam("gvai-proxy").pw_gid)
     if prepared:
+        check("staging_packages_available", lambda: all(evidence["packages_available"].values()))
         for path, mode, directory in (
             ("/etc/gvai-runtime", 0o700, True),
             ("/etc/gvai-runtime/runtime.json", 0o400, False),
@@ -260,7 +273,7 @@ def collect(*, prepared=False, baseline=None):
             checks["proxy_secret_directory"] = False
     # Never grant deployment readiness based on metadata alone.
     return {
-        "version": 1, "phase": "prepared" if prepared else "inventory",
+        "version": 1, "target": target, "phase": "prepared" if prepared else "inventory",
         "automated_checks_pass": all(checks.values()),
         "deployment_authorized": False,
         "checks": checks, "evidence": evidence,
@@ -274,11 +287,13 @@ def collect(*, prepared=False, baseline=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read-only redacted GVAI test-host inventory; never deployment authorization.")
+    parser.add_argument("--target", choices=TARGETS, default=TARGET,
+                        help="Exact approved host; defaults to Test-01 with its enforcing-profile checks.")
     parser.add_argument("--prepared", action="store_true", help="Check installed staging metadata and loopback listeners.")
     parser.add_argument("--baseline", help="Founder-reviewed root-owned mode0600 protected fingerprint JSON.")
     args = parser.parse_args(argv)
     try:
-        report = collect(prepared=args.prepared, baseline=args.baseline)
+        report = collect(prepared=args.prepared, baseline=args.baseline, target=args.target)
         print(json.dumps(report, sort_keys=True))
         return 0 if report["automated_checks_pass"] else 1
     except Exception:
