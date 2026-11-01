@@ -65,6 +65,9 @@ def test_proxy_bounds_and_redacts_every_request_log():
         "limit_conn total_connections 8;", "limit_conn per_client_connections 4;",
         "proxy_connect_timeout 1s;", "proxy_read_timeout 20s;",
         "error_log /dev/null crit;",
+        "fastcgi_temp_path /run/gvai-ingress/fastcgi;",
+        "uwsgi_temp_path /run/gvai-ingress/uwsgi;",
+        "scgi_temp_path /run/gvai-ingress/scgi;",
         "log_format redacted '$status $body_bytes_sent $request_time';",
         "access_log /var/log/gvai-ingress/access.log redacted;",
     ):

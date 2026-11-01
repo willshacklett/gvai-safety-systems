@@ -249,6 +249,82 @@ backend denial/status preservation and throttling against a local test backend.
 That backend is simulated; these tests are not real PostgreSQL or DigitalOcean
 deployment evidence. Missing tools cause explicit skips, not a success claim.
 
+### Repeatable isolated official-container validation
+
+[Docker integration tests](../tests/test_private_https_docker.py) opt in separately:
+
+```sh
+docker pull nginx:stable
+GVAI_RUN_HTTPS_DOCKER=1 python -m pytest -q -s -p no:cacheprovider tests/test_private_https_docker.py
+```
+
+These commands require explicit development-container authorization. The image
+must already exist when the tests run (`--pull=never`). The tests create one
+uniquely named official Nginx container, install Python and systemd **inside
+that disposable container only**, then disconnect its Docker bridge before
+starting listeners. No ports are published, no host network or privileged
+container mode is used, and no volumes or production credentials are supplied.
+Source/config are copied in and made root-owned, not mounted writable.
+
+Temporary CAs and server/client certificates are generated locally, including
+an untrusted client; CA private keys are never copied into the server. The
+unmodified deployed config paths and actual `gvai-proxy` account run `nginx -t`
+and the proxy. The actual advisory service/evaluator, customer key verifier,
+authorizer and HTTP server run as `gvai-api`; test accounting/usage state is
+**in-memory**, not PostgreSQL. This validates transport integration and actual
+customer authentication/tenant denial, not durable accounting or DB restore.
+
+Coverage includes TLS 1.2/1.3, missing/untrusted client and wrong-server-hostname
+rejection, revoked/expired/missing bearer rejection without evaluator calls,
+cross-tenant reads/evaluation denial, exact retry, 16,384-byte acceptance versus
+16,385-byte rejection, throttling, forwarding spoof denial, redacted logs,
+loopback-only socket topology, and real backend-process outage.
+Loopback is not a barrier against trusted processes inside the same host/network
+namespace: an operator/root process can connect directly to the backend there.
+External clients have no direct backend route in this isolated test topology.
+
+Systemd validation runs `systemd-analyze verify` with real Python and Nginx
+executable paths, both service accounts and the actual unit files present.
+`systemd-analyze security --offline=yes` checks the configured restrictions.
+Real non-root filesystem tests verify secret/account separation, immutable
+code/config, zero effective capabilities and no-new-privileges; the last two
+are enforced by the Docker test environment. **Systemd is not PID 1 here**:
+LoadCredential delivery, service lifecycle, mount restrictions, IPAddressDeny
+BPF/cgroup enforcement and full unit sandbox activation still require an
+approved systemd host/VM. Offline analysis is not proof they ran.
+
+The fixture removes its named container and temporary PKI directory in `finally`,
+including on assertion failure. Official image cache is retained; no host
+packages or installed services are changed.
+
+Current real-container evidence:
+
+- **18 passed** using official `nginx:stable`, Nginx **1.30.6**, image digest
+  `sha256:66b50d24288dba67f3d000b31223daefc4868c58d29aaacb6a4ff9771597b5eb`.
+- Both actual unit files passed `systemd-analyze verify` under systemd
+  **257.13**, with real executable paths and service accounts. Offline security
+  analysis completed for both; no claim of systemd runtime sandbox activation.
+- Focused static/private HTTP regressions: **83 passed, 4 skipped** (the
+  older host-Nginx tests; host Nginx remains absent).
+- Complete default offline suite: **729 passed, 362 subtests, 69 skipped**:
+  47 opt-in PostgreSQL, four host-Nginx and 18 opt-in Docker tests. The 18
+  Docker cases passed separately; this mission does not rerun real PostgreSQL.
+
+### Confirmed non-root startup defect
+
+The initial real non-root `nginx -t` parsed the old configuration but failed:
+
+```text
+mkdir() "/var/cache/nginx/fastcgi_temp" failed (13: Permission denied)
+```
+
+Even unused FastCGI/uWSGI/SCGI defaults need writable temporary paths at startup.
+The repair pins all three under `/run/gvai-ingress`, the existing service-owned
+runtime directory, without weakening the account or read-only filesystem.
+The real regression reconstructs the old three-missing-directive config and
+requires it to fail while the repaired original config starts successfully.
+No application, database migration, signing, checkpoint or STOP behavior changes.
+
 Run focused and full offline regressions:
 
 ```sh
@@ -263,7 +339,7 @@ private monitoring, support/onboarding, tested backups/reconciliation and
 payments under separate missions. No TLS handshakes, infrastructure installation
 or independent checkpoint protection should be claimed from static tests.
 
-### Local evidence for this implementation
+### Original preparation evidence (before real-container validation)
 
 - Focused: **83 passed, 4 skipped** (the four real Nginx/mTLS tests).
 - Full offline: **729 passed, 362 subtests passed, 51 skipped** (47 opt-in
