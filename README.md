@@ -1,5 +1,9 @@
 # GVAI Safety Systems
 
+The [private HTTPS staging runbook](docs/private_https_staging_v1.md) prepares
+loopback-only mTLS ingress and restricted service configuration; it does not
+deploy a server or activate public access.
+
 The loopback-only advisory [private staging application](docs/private_staging_v1.md)
 assembles the PostgreSQL pilot backend with separate operator provisioning,
 authenticated usage, bounded connections and redacted diagnostics. It is not
