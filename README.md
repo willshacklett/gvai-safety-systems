@@ -114,6 +114,13 @@ or activate billing.
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 
+The [PostgreSQL advisory pilot backend](docs/commercial_advisory_backend_v1.md)
+adds durable operator-provisioned customer keys, project ownership, fixed pilot
+caps and payload-bound metering to the existing advisory service. It is tested
+against disposable PostgreSQL, not deployed or approved for paid production use.
+It does not promote unsigned evidence to execution authority, enable SQLite
+grants, activate checkpoint storage or change supervisor STOP.
+
 ---
 
 # V2 — Agent Safety

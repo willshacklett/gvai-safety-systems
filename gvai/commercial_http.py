@@ -342,6 +342,9 @@ def _handler_for(service: CommercialEvaluationService) -> type[BaseHTTPRequestHa
                 ServiceReason.REPLAY: (
                     409, "replay", "This request ID has already been used."
                 ),
+                ServiceReason.CONFLICT: (
+                    409, "conflict", "Request ID conflicts with a previous request."
+                ),
                 ServiceReason.ACCOUNTING_FAILURE: (
                     503, "accounting_failure", "Evaluation accounting is unavailable."
                 ),

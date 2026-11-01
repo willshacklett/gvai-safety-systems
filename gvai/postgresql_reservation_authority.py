@@ -28,6 +28,13 @@ class PostgreSQLReservationAuthority:
     are unauthenticated because no production signer or verifier is configured.
     """
 
+    _RESERVATION_SQL = """
+        SELECT *
+        FROM gvai_authority.reserve_v1(
+            %s, %s, %s, %s, %s, %s, %s, %s
+        )
+    """
+
     def __init__(
         self,
         connection_factory: Callable[[], object],
@@ -67,12 +74,7 @@ class PostgreSQLReservationAuthority:
             connection.autocommit = False
             cursor = connection.cursor()
             cursor.execute(
-                """
-                SELECT *
-                FROM gvai_authority.reserve_v1(
-                    %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                """,
+                self._RESERVATION_SQL,
                 (
                     key_id,
                     expected_verifier,
