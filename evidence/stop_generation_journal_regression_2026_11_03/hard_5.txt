@@ -1,0 +1,66 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+................................................................................................. [ 41%]
+.............................FFF........................................ [ 51%]
+........................................................................ [ 60%]
+...................................................ssssssssssssssss..................................................................... [ 78%]
+..................................................................... [ 88%]
+................................................... [ 94%]
+.......................................                            [100%]
+=================================== FAILURES ===================================
+________________ test_replayed_commands_rejected_after_restart _________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f568079b110>
+
+    def test_replayed_commands_rejected_after_restart(dep):
+        arm1 = signed(dep.arm_key, "arm-k1", 1, "arm")
+>       assert dep.control().submit_command(arm1)["ok"]
+E       assert False
+
+tests/test_experimental_external_gate.py:260: AssertionError
+_________________ test_arm_key_cannot_mint_permits_or_notices __________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f56807a92e0>
+
+    def test_arm_key_cannot_mint_permits_or_notices(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:270: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f56807a92e0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+___________________ test_forged_notice_cannot_reopen_backend ___________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f56807aa690>
+
+    def test_forged_notice_cannot_reopen_backend(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:278: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f56807aa690>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_replayed_commands_rejected_after_restart
+FAILED tests/test_experimental_external_gate.py::test_arm_key_cannot_mint_permits_or_notices
+FAILED tests/test_experimental_external_gate.py::test_forged_notice_cannot_reopen_backend
+3 failed, 729 passed, 20 skipped, 157 subtests passed in 48.77s

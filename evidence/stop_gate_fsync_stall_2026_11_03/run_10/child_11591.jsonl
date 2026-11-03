@@ -1,0 +1,12 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0429, "run": "10", "pid": 11591, "role": "?", "t": 1793721215.9807, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0446, "run": "10", "pid": 11591, "role": "backend", "t": 1793721215.9824, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0506, "run": "10", "pid": 11591, "role": "backend", "t": 1793721215.9884, "thr": "MainThread"}
+{"ev": "counters", "c": {}, "load": 1.203125, "run": "10", "pid": 11591, "role": "backend", "t": 1793721216.9873, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.203125, "run": "10", "pid": 11591, "role": "backend", "t": 1793721217.9882, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.203125, "run": "10", "pid": 11591, "role": "backend", "t": 1793721218.9909, "thr": "diag-watch"}
+{"ev": "scheduler_stall", "overshoot": 0.0597, "run": "10", "pid": 11591, "role": "backend", "t": 1793721219.2535, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.203125, "run": "10", "pid": 11591, "role": "backend", "t": 1793721220.0009, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.203125, "run": "10", "pid": 11591, "role": "backend", "t": 1793721221.0011, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.26708984375, "run": "10", "pid": 11591, "role": "backend", "t": 1793721222.0015, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.26708984375, "run": "10", "pid": 11591, "role": "backend", "t": 1793721223.002, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 1.26708984375, "run": "10", "pid": 11591, "role": "backend", "t": 1793721224.0027, "thr": "diag-watch"}

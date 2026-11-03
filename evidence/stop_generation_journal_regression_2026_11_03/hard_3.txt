@@ -1,0 +1,34 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+................................................................................................. [ 41%]
+............................................F........................... [ 51%]
+........................................................................ [ 60%]
+...................................................ssssssssssssssss..................................................................... [ 78%]
+..................................................................... [ 88%]
+................................................... [ 94%]
+.......................................                            [100%]
+=================================== FAILURES ===================================
+____________ test_concurrent_conflicting_arm_commands_single_winner ____________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fbd85e2b4a0>
+
+    def test_concurrent_conflicting_arm_commands_single_winner(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:440: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fbd85e2b4a0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_concurrent_conflicting_arm_commands_single_winner
+1 failed, 731 passed, 20 skipped, 157 subtests passed in 50.85s

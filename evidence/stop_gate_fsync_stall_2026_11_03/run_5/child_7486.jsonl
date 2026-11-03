@@ -1,0 +1,17 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0567, "run": "5", "pid": 7486, "role": "?", "t": 1793721149.8765, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0597, "run": "5", "pid": 7486, "role": "backend", "t": 1793721149.8794, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.068, "run": "5", "pid": 7486, "role": "backend", "t": 1793721149.8877, "thr": "MainThread"}
+{"ev": "scheduler_stall", "overshoot": 0.0578, "run": "5", "pid": 7486, "role": "backend", "t": 1793721150.4524, "thr": "diag-watch"}
+{"ev": "scheduler_stall", "overshoot": 0.0599, "run": "5", "pid": 7486, "role": "backend", "t": 1793721150.6703, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.66845703125, "run": "5", "pid": 7486, "role": "backend", "t": 1793721150.8844, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.775390625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721151.8861, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.775390625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721152.8862, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.775390625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721153.8909, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.775390625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721154.8918, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.775390625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721155.8919, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.87353515625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721156.8936, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.87353515625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721157.8964, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.87353515625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721158.9004, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.87353515625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721159.9012, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.87353515625, "run": "5", "pid": 7486, "role": "backend", "t": 1793721160.9026, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.9638671875, "run": "5", "pid": 7486, "role": "backend", "t": 1793721161.9041, "thr": "diag-watch"}

@@ -1,0 +1,75 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 29%]
+................................................................................................. [ 43%]
+..........................................FFF........................... [ 53%]
+........................................................................ [ 63%]
+...................................................ssssssssssssssss..................................................................... [ 81%]
+..................................................................... [ 91%]
+..............................................................        [100%]
+=================================== FAILURES ===================================
+_________ test_concurrent_authorize_when_armed_all_unique_and_execute __________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f4abc781fd0>
+
+    def test_concurrent_authorize_when_armed_all_unique_and_execute(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:402: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f4abc781fd0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+________ test_stop_during_concurrent_load_leaves_no_post_stop_execution ________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f4abc7bd430>
+
+    def test_stop_during_concurrent_load_leaves_no_post_stop_execution(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:416: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f4abc7bd430>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+____________ test_concurrent_conflicting_arm_commands_single_winner ____________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f4abd9566c0>
+
+    def test_concurrent_conflicting_arm_commands_single_winner(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:440: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f4abd9566c0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_concurrent_authorize_when_armed_all_unique_and_execute
+FAILED tests/test_experimental_external_gate.py::test_stop_during_concurrent_load_leaves_no_post_stop_execution
+FAILED tests/test_experimental_external_gate.py::test_concurrent_conflicting_arm_commands_single_winner
+3 failed, 701 passed, 20 skipped, 133 subtests passed in 48.39s
