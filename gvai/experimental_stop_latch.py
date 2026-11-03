@@ -486,6 +486,12 @@ class ReconcileResult:
     submitted_digest: Optional[str] = None
 
 
+class TransactionPersistence(Protocol):
+    def load(self) -> object: ...
+
+    def commit(self, command: StopCommand) -> None: ...
+
+
 class StopLatch:
     """Fail-closed latch. Starts stopped; only a signed, contiguous ARM opens it.
 
@@ -506,6 +512,7 @@ class StopLatch:
         keyring: StopLatchKeyring,
         anchor: TrustedAnchor,
         store: Optional[CommandStore] = None,
+        transaction: Optional[TransactionPersistence] = None,
     ) -> None:
         if not isinstance(latch_id, str) or not _IDENTIFIER.fullmatch(latch_id):
             raise StopLatchConfigError("invalid_latch_id")
@@ -513,6 +520,7 @@ class StopLatch:
         self._keyring = keyring
         self._anchor = anchor
         self._store = store if store is not None else InMemoryCommandStore()
+        self._transaction = transaction
         self._lock = threading.Lock()
         self._head = GENESIS_HEAD
         self._status = STATUS_STOPPED
@@ -541,6 +549,8 @@ class StopLatch:
 
     def _load(self) -> None:
         try:
+            if self._transaction is not None:
+                self._transaction.load()
             anchor_head = self._anchor.read()
             envelope = self._store.load()
         except Exception:
@@ -568,7 +578,9 @@ class StopLatch:
             return
         self._head = head
         self._status = (
-            STATUS_ARMED if command.command_type == COMMAND_ARM else STATUS_STOPPED
+            STATUS_ARMED
+            if command.command_type == COMMAND_ARM and self._transaction is None
+            else STATUS_STOPPED
         )
 
     def permit(self) -> LatchDecision:
@@ -577,6 +589,8 @@ class StopLatch:
             try:
                 if self._status == STATUS_FAULT:
                     return LatchDecision(False, STATUS_FAULT, self._fault_reason)
+                if self._transaction is not None:
+                    self._transaction.load()
                 if self._status == STATUS_STOPPED:
                     return LatchDecision(False, STATUS_STOPPED, "latched_stop")
                 try:
@@ -599,6 +613,8 @@ class StopLatch:
     def _durable_record_matches(self, command: StopCommand, head: AnchorHead) -> bool:
         """True only if the anchor and the stored, re-verified command both equal ``command``."""
         try:
+            if self._transaction is not None:
+                self._transaction.load()
             if self._anchor.read() != head:
                 return False
             stored = parse_command(self._store.load())
@@ -638,6 +654,8 @@ class StopLatch:
         with self._lock:
             status = self._status
             try:
+                if self._transaction is not None:
+                    self._transaction.load()
                 head = self._anchor.read()
                 envelope_now = self._store.load()
             except Exception:
@@ -736,6 +754,16 @@ class StopLatch:
                 return CommandResult(False, self._status, "sequence_gap")
 
             new_head = AnchorHead(command.sequence, command.digest())
+            if self._transaction is not None:
+                try:
+                    self._transaction.commit(command)
+                except Exception:
+                    self._fault("persistence_unknown")
+                    return CommandResult(False, STATUS_FAULT, "persistence_unknown", gap)
+                self._head = new_head
+                self._status = STATUS_STOPPED if command.command_type == COMMAND_STOP else STATUS_ARMED
+                self._gap_detected = self._gap_detected or (gap and command.command_type == COMMAND_STOP)
+                return CommandResult(True, self._status, "accepted", gap)
             try:
                 advanced = self._anchor.compare_and_advance(current, new_head)
             except Exception:

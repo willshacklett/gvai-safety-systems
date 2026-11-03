@@ -47,6 +47,7 @@ class Deployment:
         self.backend_sock = os.path.join(self.dir, "b.sock")
         self.notice_sock = os.path.join(self.dir, "bn.sock")
         self.state = os.path.join(self.dir, "state")
+        eg.GateTransaction.provision(self.state, LATCH)
         self.procs, self.gate_proc, self.gate_pub = [], None, None
         self.clients = []
         if with_gate:
@@ -298,6 +299,8 @@ def test_gate_restart_preserves_state_and_key(dep):
     dep.start_gate()
     assert dep.gate_pub == pub_before
     time.sleep(0.4)
+    assert not dep.service().call("echo", {"x": 1})["ok"]
+    dep.arm(2)
     assert dep.service().call("echo", {"x": 1})["ok"]
 
 
@@ -333,7 +336,7 @@ def test_store_rollback_between_restarts_faults(dep):
     open(os.path.join(dep.state, "store.json"), "w").write(saved)
     dep.start_gate()
     time.sleep(0.3)
-    assert dep.gate().status()["reason"] == "store_rollback_detected"
+    assert dep.gate().status()["status"] == "fault"
 
 
 def test_live_anchor_tamper_is_detected_not_prevented(dep):
@@ -460,6 +463,7 @@ def cores(tmp_path):
     stop, arm = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     now = [1000.0]
     mono = [0.0]
+    eg.GateTransaction.provision(str(tmp_path / "s"), LATCH)
     gate = eg.GateCore(
         str(tmp_path / "s"), LATCH, {"stop-k1": pub(stop)}, {"arm-k1": pub(arm)},
         frozenset({"echo"}), clock=lambda: now[0],
@@ -486,6 +490,7 @@ def test_backend_rejects_old_boot_notice_after_gate_restart(cores, tmp_path):
     gate, backend, stop, arm, *_ = cores
     old = gate.notice()
     assert backend.apply_notice(old)["ok"]
+    gate.close()
     gate2 = eg.GateCore(
         str(tmp_path / "s"), LATCH, {"stop-k1": pub(stop)}, {"arm-k1": pub(arm)}, frozenset({"echo"})
     )

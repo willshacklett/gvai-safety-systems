@@ -64,6 +64,7 @@ class Rig:
         self.arm = Ed25519PrivateKey.generate()
         self.now, self.mono = [1000.0], [0.0]
         self.state = str(tmp_path / "s")
+        eg.GateTransaction.provision(self.state, LATCH)
         self.gate = eg.GateCore(
             self.state, LATCH, {"stop-k1": pub(self.stop1), "stop-k2": pub(self.stop2)},
             {"arm-k1": pub(self.arm)}, frozenset({"echo"}), clock=lambda: self.now[0],
@@ -237,6 +238,7 @@ def test_retry_after_gate_restart_is_still_already_applied(rig):
     rig.arm_to(1)
     env = rig.stop(2)
     assert rig.client.submit_stop(env)["outcome"] == "STOP_RECORDED"
+    rig.gate.close()
     gate2 = eg.GateCore(
         rig.state, LATCH, {"stop-k1": pub(rig.stop1), "stop-k2": pub(rig.stop2)},
         {"arm-k1": pub(rig.arm)}, frozenset({"echo"}),
@@ -372,7 +374,8 @@ def test_stalled_arm_outlives_client_wait_then_stop_reconciles(rig, monkeypatch)
             latch_lock.release()
 
     def blocked_fsync(fd):
-        if threading.current_thread() is arm_thread and not entered.is_set():
+        if (threading.current_thread() is arm_thread and not entered.is_set()
+                and os.path.exists(anchor_tmp)):
             descriptor = os.fstat(fd)
             pathname = os.stat(anchor_tmp)
             if (descriptor.st_dev, descriptor.st_ino) == (

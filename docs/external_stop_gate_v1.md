@@ -21,7 +21,23 @@ Builds on the STOP-latch prototype (`docs/stop_latch_prototype_v1.md`, PR #42). 
 
 ## Bounded windows
 
-Gate-side STOP is immediate and the backend learns of it before the STOP command returns (notice pushed first). If the notice channel fails, a previously issued permit remains usable until its TTL or until notices go stale (≤ `notice_max_age`), whichever first. Already-running operations are not interrupted.
+Gate-side STOP can wait behind synchronous ARM persistence; no bounded STOP
+latency is claimed. After confirmed recording the gate attempts notification,
+whose acknowledgement is separate from termination evidence. If notice delivery
+fails, previously issued permits remain usable until expiry or notice staleness.
+The backend watchdog requests cancellation of active work; uncooperative-work
+termination depends on the configured process boundary, not the STOP receipt.
+
+## I6D local persistence
+
+The live experimental gate requires explicitly provisioned transaction state.
+See [STOP reconciliation and transaction contract](stop_reconciliation_v1.md#i6d-local-transaction-and-restart-contract)
+for schema, barrier ordering, crash windows and offline provisioning.
+Legacy directories are rejected; there is no automatic migration or repair.
+Clean restart retains sequence history but never restores old ARM permission:
+it starts STOPPED and requires a fresh signed ARM. Unresolved transaction
+artifacts fault the gate. Local confirmation does not provide independent
+rollback resistance, physical power-loss proof or workload termination.
 
 ## What is simulated — read carefully
 

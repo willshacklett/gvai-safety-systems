@@ -25,6 +25,7 @@ import json
 import os
 import secrets
 import socket
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from gvai.experimental_stop_latch import (
     StopLatch,
     StopLatchKeyring,
 )
+from gvai.gate_transaction import GateTransaction
 
 SEPARATION_MODEL = "simulated_process_separation_same_uid"
 OS_ENFORCED_ISOLATION_IMPLEMENTED = False
@@ -135,19 +137,20 @@ class FileCommandStore:
 # -------------------------------------------------------------- gate signing
 
 
-def _load_or_create_gate_seed(path: str) -> bytes:
+def _load_gate_seed(path: str) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        with open(path, "rb") as fh:
-            seed = fh.read()
-        if len(seed) != 32:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            raise ValueError("unsafe_gate_seed")
+        seed = os.read(fd, 33)
+        named = os.stat(path, follow_symlinks=False)
+        if len(seed) != 32 or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino):
             raise ValueError("gate_key_corrupt")
         return seed
-    except FileNotFoundError:
-        seed = secrets.token_bytes(32)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(seed)
-        return seed
+    finally:
+        os.close(fd)
 
 
 def _public_bytes(priv) -> bytes:
@@ -179,8 +182,7 @@ class GateCore:
             Ed25519PrivateKey,
         )
 
-        os.makedirs(state_dir, mode=0o700, exist_ok=True)
-        seed = _load_or_create_gate_seed(os.path.join(state_dir, "gate_key.seed"))
+        seed = _load_gate_seed(os.path.join(state_dir, "gate_key.seed"))
         self._priv = Ed25519PrivateKey.from_private_bytes(seed)
         self.gate_public_key = _public_bytes(self._priv)
         self.gate_key_id = "gate-" + hashlib.sha256(self.gate_public_key).hexdigest()[:16]
@@ -190,11 +192,13 @@ class GateCore:
             list(forbidden_public_keys) + [self.gate_public_key],
         )
         self.latch_id = latch_id
+        self._transaction = GateTransaction(state_dir, latch_id, keyring)
         self._latch = StopLatch(
             latch_id,
             keyring,
             FileTrustedAnchor(os.path.join(state_dir, "anchor.json")),
             FileCommandStore(os.path.join(state_dir, "store.json")),
+            transaction=self._transaction,
         )
         self._ops = frozenset(allowed_operations)
         self._ttl = token_ttl
@@ -202,6 +206,10 @@ class GateCore:
         self._boot_id = secrets.token_hex(8)
         self._counter = 0
         self._lock = threading.Lock()
+
+    def close(self) -> None:
+        if self._transaction is not None:
+            self._transaction.close()
 
     def notice(self) -> dict:
         with self._lock:
@@ -789,8 +797,8 @@ class GateClient(_Client):
             out.update(outcome="STOP_RECORDED", durable=True)
         elif r.get("ok") is True and reason == "already_applied":
             out.update(outcome="ALREADY_APPLIED", durable=True)
-        elif reason in ("anchor_advance_failed", "store_write_failed"):
-            out.update(outcome="NOT_DURABLE")
+        elif reason in ("anchor_advance_failed", "store_write_failed", "persistence_unknown"):
+            out.update(outcome="UNKNOWN")
         return out
 
 

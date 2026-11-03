@@ -138,13 +138,15 @@ def test_gate_loss_cancels_in_flight_operation_within_bound(dep):
     assert latency <= T3_GATE_SILENCE_INTERRUPT
 
 
-def test_gate_restart_resumes_only_from_durable_armed_state(dep):
+def test_gate_restart_requires_fresh_arm(dep):
     dep.arm(1)
     dep.kill_gate()
     time.sleep(0.9)
     assert not dep.service().call("echo", {})["ok"]
     dep.start_gate()
     time.sleep(0.4)
+    assert not dep.service().call("echo", {"x": 1})["ok"]
+    dep.arm(2)
     assert dep.service().call("echo", {"x": 1})["ok"]
 
 
@@ -210,6 +212,12 @@ def keys():
 
 
 def make_gate(tmp_path, keys):
+    if not tmp_path.exists():
+        eg.GateTransaction.provision(str(tmp_path), LATCH)
+    elif not list(tmp_path.iterdir()):
+        # Provisioning owns creation; pytest supplied only this empty directory.
+        tmp_path.rmdir()
+        eg.GateTransaction.provision(str(tmp_path), LATCH)
     stop, arm = keys
     return eg.GateCore(
         str(tmp_path), LATCH, {"stop-k1": pub(stop)}, {"arm-k1": pub(arm)}, frozenset({"echo"})
@@ -224,6 +232,7 @@ def test_truncated_anchor_file_denies(tmp_path, keys):
     g = make_gate(tmp_path, keys)
     assert g.handle({"type": "command", "envelope": arm_cmd(keys, 1)})["ok"]
     (tmp_path / "anchor.json").write_text('{"sequence": 1, "dig')
+    g.close()
     g2 = make_gate(tmp_path, keys)
     assert g2.handle({"type": "status"})["status"] == "fault"
     assert not g2.authorize("echo", "0" * 64)["ok"]
@@ -234,6 +243,7 @@ def test_garbage_anchor_file_denies(tmp_path, keys, content):
     g = make_gate(tmp_path, keys)
     g.handle({"type": "command", "envelope": arm_cmd(keys, 1)})
     (tmp_path / "anchor.json").write_text(content)
+    g.close()
     assert make_gate(tmp_path, keys).handle({"type": "status"})["status"] == "fault"
 
 
@@ -241,6 +251,7 @@ def test_truncated_store_file_denies(tmp_path, keys):
     g = make_gate(tmp_path, keys)
     g.handle({"type": "command", "envelope": arm_cmd(keys, 1)})
     (tmp_path / "store.json").write_text('{"version": 1, "la')
+    g.close()
     assert make_gate(tmp_path, keys).handle({"type": "status"})["status"] == "fault"
 
 
@@ -250,29 +261,35 @@ def test_crash_between_anchor_advance_and_store_write_faults(tmp_path, keys):
     anchor = eg.FileTrustedAnchor(str(tmp_path / "anchor.json"))
     cur = anchor.read()
     assert anchor.compare_and_advance(cur, sl.AnchorHead(2, "a" * 64))  # crash before store.save
+    g.close()
     g2 = make_gate(tmp_path, keys)
     assert g2.handle({"type": "status"})["status"] == "fault"
 
 
-def test_leftover_tmp_files_from_crash_are_ignored(tmp_path, keys):
+def test_leftover_tmp_files_from_crash_deny(tmp_path, keys):
+    g = make_gate(tmp_path, keys)
+    g.close()
     (tmp_path / "anchor.json.tmp").write_text('{"sequence": 9')
     (tmp_path / "store.json.tmp").write_text("garbage")
     g = make_gate(tmp_path, keys)
-    assert g.handle({"type": "command", "envelope": arm_cmd(keys, 1)})["ok"]
-    assert make_gate(tmp_path, keys).authorize("echo", "0" * 64)["ok"]
+    assert not g.handle({"type": "command", "envelope": arm_cmd(keys, 1)})["ok"]
+    assert g._latch.status == sl.STATUS_FAULT
+    assert not g.authorize("echo", "0" * 64)["ok"]
 
 
 def test_store_write_failure_denies_and_survives_restart_as_fault(tmp_path, keys, monkeypatch):
     g = make_gate(tmp_path, keys)
 
-    def boom(self, envelope):
-        raise OSError("disk full")
+    def boom(phase):
+        if phase == "store.json:before_file_sync":
+            raise OSError("disk full")
 
-    monkeypatch.setattr(eg.FileCommandStore, "save", boom)
+    monkeypatch.setattr(g._transaction, "phase", boom)
     r = g.handle({"type": "command", "envelope": arm_cmd(keys, 1)})
-    assert r["ok"] is False and r["reason"] == "store_write_failed"
+    assert r["ok"] is False and r["reason"] == "persistence_unknown"
     assert not g.authorize("echo", "0" * 64)["ok"]
     monkeypatch.undo()
+    g.close()
     assert make_gate(tmp_path, keys).handle({"type": "status"})["status"] == "fault"
 
 

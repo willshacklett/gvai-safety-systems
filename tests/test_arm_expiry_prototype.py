@@ -155,7 +155,11 @@ def gate(rig, monkeypatch, tmp_path):
     """Use the real GateCore constructor/logic, replacing all file state."""
     monkeypatch.setattr(eg, "FileTrustedAnchor", lambda path: rig.anchor)
     monkeypatch.setattr(eg, "FileCommandStore", lambda path: rig.store)
-    monkeypatch.setattr(eg, "_load_or_create_gate_seed", lambda path: b"\x03" * 32)
+    monkeypatch.setattr(eg, "GateTransaction", lambda *args: None)
+    state = tmp_path / "gate"
+    state.mkdir()
+    (state / "gate_key.seed").write_bytes(b"\x03" * 32)
+    (state / "gate_key.seed").chmod(0o600)
     core = eg.GateCore(
         str(tmp_path / "gate"),
         LATCH,
@@ -171,7 +175,7 @@ def gate(rig, monkeypatch, tmp_path):
 def test_gate_fixture_uses_temporary_directory(gate, tmp_path):
     state_dir = tmp_path / "gate"
     assert state_dir.is_dir()
-    assert list(state_dir.iterdir()) == []
+    assert [path.name for path in state_dir.iterdir()] == ["gate_key.seed"]
 
 
 @contextmanager
