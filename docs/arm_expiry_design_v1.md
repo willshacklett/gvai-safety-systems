@@ -125,6 +125,72 @@ PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
   tests/test_experimental_stop_latch.py
 ```
 
+## Stage B2: test-only STOP race protection model
+
+Base: `59a58db3d86fe61188077d46ef220ca556cb2fdf`.
+[`test_arm_v2_stop_race.py`](../tests/test_arm_v2_stop_race.py) adds an
+in-memory authority model **only in tests**. Stage A and B1 production code,
+the live latch/gate, STOP behavior, persistence and timeouts remain unchanged.
+
+The simulated trusted authority owns a monotonic generation, generation
+high-water reference, revocation set and B1 clock high-water reference.
+Its reentrant lock serializes every operation decision, STOP increment and
+revocation. Each operation reparses/verifies ARM with Stage A, checks revocation
+and invokes B1 with the authority's own generation provider. Cached decisions
+are not accepted as requests. The atomicity is **relative to modeled STOP and
+revocation operations using this lock**, not a transaction with the real world.
+
+Linearization points:
+
+- STOP linearizes when generation and its high-water reference are incremented
+  together under the lock. Its success means generation advanced in memory,
+  not STOP authentication, durable recording or workload halt.
+- An ARM operation decision linearizes when its result is formed inside the
+  same critical section, after authentication, revocation and freshness checks.
+  STOP cannot change generation between these checks and the decision.
+  A trusted injected clock reading is still a sample; real time can expire
+  afterward. No workload action occurs in this test model.
+
+Event-controlled races exercise both acquisition orders, without sleeps:
+STOP-first advances generation and the old ARM receives DENY. ARM-first may
+receive freshness ALLOW; STOP then advances generation, and every subsequent
+operation with the old ARM receives DENY. The earlier immutable ALLOW still
+exists as a historical result; it cannot be reused as permission or retroactively
+prove a workload stopped. A new separately signed authorization bound to the
+new generation may pass. Same-generation replay is not consumed and can pass
+until expiration/revocation/STOP; this is explicitly tested, not claimed solved.
+
+STOP never reads the ARM clock, and still advances after clock failure or
+rollback. It can fail if authority state is unavailable, corrupt, rolled back
+or generation is exhausted; such failures deny subsequent ARM decisions.
+Valid-looking coherent rollback of **all** volatile reference state is not
+detectable. Restart tests retain the same state object to prove logic continuity,
+test corrupt/missing state denial, and explicitly show that resetting everything
+to genesis can reapprove old ARM. This is not process-restart durability.
+
+Future enforcement must put generation, revocation, signing policy, clock and
+anti-rollback state behind an independent supervisor identity with durable
+transactional authority. The protected backend must obtain a fresh operation-
+bound decision at its action boundary, reject old-generation capabilities,
+and invalidate/interdict in-flight work on STOP or authority silence. STOP
+must have an independently enforced path not indefinitely blocked behind
+ARM processing or I/O. This model holds a shared lock and proves ordering,
+**not bounded STOP latency**, clock independence from lock availability,
+host isolation, production-grade atomicity, persistent anti-rollback or
+independent shutdown. No Lab-01, staging or deployment changes are made.
+
+Focused results: **39 B2 cases passed**, **86 B1 cases passed**, **148 Stage A
+cases passed**, and **58 latch cases passed**; combined **331 passed**, no
+failures, skips, expected failures or XPASSes. Command:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
+/opt/conda/bin/python -m pytest -p no:cacheprovider -q \
+  tests/test_arm_v2_stop_race.py tests/test_arm_v2_freshness.py \
+  tests/test_arm_v2_authorization.py tests/test_experimental_stop_latch.py
+```
+
 ## Evidence and test interpretation
 
 [`test_arm_expiry_prototype.py`](../tests/test_arm_expiry_prototype.py) uses the
