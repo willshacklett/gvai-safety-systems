@@ -527,6 +527,21 @@ def test_integrity_manifest_matches_and_detects_tampering(tmp_path, monkeypatch)
     assert integrity.check()[0] == ["integrity manifest missing"]
 
 
+def test_integrity_ignores_bytecode_artifacts():
+    cache = os.path.join(ROOT, "deploy/stop_gate/__pycache__")
+    existed = os.path.isdir(cache)
+    os.makedirs(cache, exist_ok=True)
+    junk = os.path.join(cache, "zz_test.cpython-312.pyc")
+    try:
+        open(junk, "wb").close()
+        assert not any("__pycache__" in f or f.endswith(".pyc") for f in integrity.control_files())
+        assert integrity.check()[0] == []
+    finally:
+        os.remove(junk)
+        if not existed:
+            os.rmdir(cache)
+
+
 def test_integrity_cli_returns_nonzero_on_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(integrity, "ROOT", str(tmp_path))
     assert integrity.main([]) == 1

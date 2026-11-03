@@ -40,8 +40,10 @@ def control_files():
     found = set()
     for pattern in PATTERNS:
         for path in glob.glob(os.path.join(ROOT, pattern), recursive=True):
-            if os.path.isfile(path) and not os.path.islink(path):
-                found.add(os.path.relpath(path, ROOT).replace(os.sep, "/"))
+            rel = os.path.relpath(path, ROOT).replace(os.sep, "/")
+            if os.path.isfile(path) and not os.path.islink(path) and "__pycache__" not in rel \
+                    and not rel.endswith((".pyc", ".pyo")):
+                found.add(rel)
     return sorted(found - {MANIFEST})
 
 
