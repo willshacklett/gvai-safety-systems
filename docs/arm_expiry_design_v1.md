@@ -433,6 +433,137 @@ PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
   tests/test_stop_generation_journal.py tests/test_arm_expiry_prototype.py
 ```
 
+## Stage C3A: disconnected authenticated checkpoint contract
+
+Base: `1d83498b87adb4449893cff24616a723601da693`.
+[`stop_authority_checkpoint.py`](../gvai/stop_authority_checkpoint.py) provides
+`Checkpoint`, `CheckpointOutcome`, `CheckpointTransport`, `CheckpointClient`
+and `SimulatedCheckpointServer`. C1/C2 interfaces and behavior are unchanged.
+No checkpoint is wired to live authority admission, ARM, the latch, external
+gate, backend or deployment.
+
+### Approved trust and protocol decisions
+
+Checkpoint scope binds authority ID, latch ID, checkpoint ID and trust domain.
+The retained head includes STOP epoch, exact C1 revision/head digest and writer
+identity/fence. Explicit trusted genesis provisioning is required; a missing
+checkpoint never initializes itself during a request.
+
+Supervisor-owned request signing and separately pinned server response signing
+use Ed25519 under `GVAI-STOP-CHECKPOINT-REQUEST-V1\n` and
+`GVAI-STOP-CHECKPOINT-RESPONSE-V1\n`. Signing is injected through a credential
+adapter callback, not a workload-selected key or protocol-carried private key.
+The deployment must provision separate client/server/ARM/STOP keys; this
+simulation tests separate ephemeral keys, not off-host custody. Client key IDs
+are pinned to writer identities; duplicated client public keys are rejected.
+Pinned writer credentials are authorized to submit valid C1 fence rotations;
+rotation is a trusted administrative capability, not an untrusted writer API.
+
+Every request signs exact scope, action, client/writer identity, writer fence,
+fresh random challenge, expected checkpoint and full bounded C1 snapshot.
+Every response signs scope/server identity, exact signed-request SHA-256 digest,
+challenge, outcome/reason and retained head. Canonical bytes, exact fields,
+strict signatures, UTF-8, duplicate-key rejection, nonfinite rejection and
+1 MiB input limits are checked. Full C1 history and signed STOP commands are
+validated on both sides. No clock is required to record/checkpoint STOP.
+
+The simulation remembers up to 1024 authenticated challenges. Replay is
+rejected; exhaustion denies instead of evicting replay evidence. Genuine
+deployment needs durable bounded replay management and independently protected
+server history. Fresh challenges bind responses to calls but cannot prove
+that a malicious or rolled-back trusted server holds the latest real history.
+
+### Verification, advancement and fencing
+
+`client.verify(snapshot)` returns VERIFIED **only** for the exact authenticated
+remote head matching that snapshot. Older or newer local heads produce CONFLICT;
+there is no implicit catch-up or success from local C2 durability.
+
+`client.advance(snapshot, expected=checkpoint)` is explicit conditional
+advancement. The expected checkpoint must match an exact validated history
+prefix; the server current head must equal that expectation. Each extension
+therefore inherits C1 monotonic epochs, revisions, STOP signatures and fence
+transitions. Same-revision/different-digest forks, stale heads, stale fences,
+wrong-writer submissions and competing expected heads are rejected.
+An exact already-established target is idempotently VERIFIED on a fresh retry
+without another advancement, but stale writers are still rejected.
+The simulation's lock makes compare-and-advance atomic; response signing is
+performed against that serialized result. Another STOP may advance afterward.
+A verification response is historical evidence at this boundary, not a reusable
+execution capability or proof that the workload terminated.
+
+Outcomes are explicit:
+
+| Outcome | Meaning |
+| --- | --- |
+| VERIFIED | Authenticated response confirms the exact requested head |
+| CONFLICT | Authenticated mismatch, stale fence/head, replay or conditional conflict |
+| UNAVAILABLE | Transport inaccessible, signed missing checkpoint or exhausted request history |
+| UNKNOWN | Lost response, unverifiable response or ambiguous/corrupt server state |
+
+No outcome besides VERIFIED establishes the contract's head match. A caller
+requiring independent verification must fail closed on the other outcomes.
+Even VERIFIED from `SimulatedCheckpointServer` is **simulation evidence**, not
+independent real-world authority. Unexpected exchange failures are UNKNOWN;
+exception details are not surfaced as successful or informative receipts.
+
+### Local-first ordering and recovery
+
+1. C2 locally persists and confirms its exact STOP snapshot first.
+2. Explicit checkpoint advancement submits that complete validated history
+   against the previously established remote checkpoint.
+3. Only a matching authenticated VERIFIED response establishes checkpoint
+   completion. C2's local durable outcome remains separate.
+
+The client is disconnected and cannot itself prove the caller performed step
+1; orchestration is a future trusted integration obligation. Do not advance
+a remote checkpoint from an unconfirmed local partial commit.
+
+Crash after local commit but before checkpoint advancement leaves local state
+ahead: verify returns CONFLICT and execution stays denied. Trusted recovery
+can explicitly advance from the retained remote prefix using complete validated
+local history; it never lowers/replaces a remote head or repairs a C2 incomplete
+commit. A lost advancement reply is UNKNOWN: retry with a fresh challenge and
+the same expected/target recognizes an already-completed update. Conflicting
+advancement remains CONFLICT; no silent replacement or automatic failover.
+If remote is ahead of local, reject local rollback and require independently
+authorized restoration of history, never reset checkpoint to local state.
+
+### Independence still required
+
+[`test_stop_authority_checkpoint.py`](../tests/test_stop_authority_checkpoint.py)
+uses local C2 files and a separately retained **in-memory fake** to demonstrate
+coherent local rollback detection, authenticated exchanges, replay, CAS
+contention, stale fences, lost replies and crash-gap catch-up. Tests explicitly
+show that losing/resetting the fake remote history loses rollback protection.
+Another local directory or process is not independent authority.
+
+Future off-host deployment must provide a separate administrative/credential
+domain, durable transactional checkpoint storage, independently retained
+rollback checkpoints, controlled genesis/rotation/recovery, authenticated and
+resource-bounded transport, key rotation/revocation and exact-response replay
+handling. Workload and local authority credentials must not erase or roll back
+server history. Root on the workload host must not own the off-host signing/
+storage authority; compromise of that authority remains a separate threat.
+No infrastructure is provisioned, no remote persistence exists, no money is
+spent and no workload termination or power-loss guarantee is claimed.
+
+Verified C3A results: **46 passed**; focused C3A/C2/C1 selection **166 passed**.
+Expanded relevant regressions: **632 passed, 1 skipped, 24 strict xfailed,
+30 subtests passed**, no failures or XPASSes. The skip remains the existing
+root-only journal foreign-owner test; prototype enforcement xfails are unchanged.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
+/opt/conda/bin/python -m pytest -p no:cacheprovider -q -rs \
+  tests/test_stop_authority_checkpoint.py tests/test_stop_authority_filesystem.py \
+  tests/test_stop_generation_authority.py tests/test_arm_v2_authorization.py \
+  tests/test_arm_v2_freshness.py tests/test_arm_v2_stop_race.py \
+  tests/test_experimental_stop_latch.py tests/test_stop_generation_journal.py \
+  tests/test_arm_expiry_prototype.py
+```
+
 ## Evidence and test interpretation
 
 [`test_arm_expiry_prototype.py`](../tests/test_arm_expiry_prototype.py) uses the
