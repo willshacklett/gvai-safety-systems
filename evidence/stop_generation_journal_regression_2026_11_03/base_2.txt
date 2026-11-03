@@ -1,0 +1,37 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 29%]
+................................................................................................. [ 43%]
+.......................F................................................ [ 53%]
+........................................................................ [ 63%]
+...................................................ssssssssssssssss..................................................................... [ 81%]
+..................................................................... [ 91%]
+..............................................................        [100%]
+=================================== FAILURES ===================================
+__________________ test_omitting_verifier_call_cannot_bypass ___________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f04436773b0>
+
+    def test_omitting_verifier_call_cannot_bypass(dep):
+        dep.arm(1)
+        b = dep.backend()
+        assert b.execute("echo", {"x": 1}, None)["reason"] == "malformed_request"
+        assert b.execute("echo", {"x": 1}, {})["reason"] == "token_authentication_failed"
+>       dep.stop(2)
+
+tests/test_experimental_external_gate.py:198: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f04436773b0>
+seq = 2
+
+    def stop(self, seq):
+        r = self.control().submit_command(signed(self.stop_key, "stop-k1", seq, "stop"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:130: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_omitting_verifier_call_cannot_bypass
+1 failed, 703 passed, 20 skipped, 133 subtests passed in 50.30s

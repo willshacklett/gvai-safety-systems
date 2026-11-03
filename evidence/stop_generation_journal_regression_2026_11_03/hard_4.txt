@@ -1,0 +1,81 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+................................................................................................. [ 41%]
+.........................................FFF............................ [ 51%]
+........................................................................ [ 60%]
+...................................................ssssssssssssssss..................................................................... [ 78%]
+..................................................................... [ 88%]
+................................................... [ 94%]
+.......................................                            [100%]
+=================================== FAILURES ===================================
+________________________ test_malformed_requests_denied ________________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f3beacaa150>
+
+    def test_malformed_requests_denied(dep):
+        g = dep.gate()
+        for bad in ({}, {"type": "nope"}, {"type": "authorize", "operation": 5},
+                    {"type": "authorize", "operation": "rm", "args_digest": "0" * 64},
+                    {"type": "command", "envelope": "x"}):
+            assert g.request(bad)["ok"] is False
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:395: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f3beacaa150>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+_________ test_concurrent_authorize_when_armed_all_unique_and_execute __________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f3beacab860>
+
+    def test_concurrent_authorize_when_armed_all_unique_and_execute(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:402: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f3beacab860>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+________ test_stop_during_concurrent_load_leaves_no_post_stop_execution ________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f3beacaa360>
+
+    def test_stop_during_concurrent_load_leaves_no_post_stop_execution(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:416: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f3beacaa360>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_malformed_requests_denied
+FAILED tests/test_experimental_external_gate.py::test_concurrent_authorize_when_armed_all_unique_and_execute
+FAILED tests/test_experimental_external_gate.py::test_stop_during_concurrent_load_leaves_no_post_stop_execution
+3 failed, 729 passed, 20 skipped, 157 subtests passed in 49.45s

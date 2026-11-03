@@ -1,0 +1,200 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 29%]
+................................................................................................. [ 43%]
+...........................FFFF......................................... [ 53%]
+........................................................................ [ 63%]
+...................................................ssssssssssssssss..................................................................... [ 81%]
+.........FFFFF....................................................... [ 91%]
+..............................................................        [100%]
+=================================== FAILURES ===================================
+__________ test_compromised_service_cannot_arm_or_stop_with_own_keys ___________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1fabc28a0>
+
+    def test_compromised_service_cannot_arm_or_stop_with_own_keys(dep):
+        attacker = Ed25519PrivateKey.generate()
+        g = dep.control()
+        for kid in ("arm-k1", "stop-k1", "attacker"):
+            r = g.submit_command(signed(attacker, kid, 1, "arm"))
+            assert (r["ok"], r["reason"]) == (False, "authentication_failed")
+        assert not dep.service().call("echo", {})["ok"]
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:243: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1fabc28a0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+_______________ test_stop_key_cannot_arm_and_arm_key_cannot_stop _______________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1fabc0830>
+
+    def test_stop_key_cannot_arm_and_arm_key_cannot_stop(dep):
+        g = dep.control()
+        assert not g.submit_command(signed(dep.stop_key, "stop-k1", 1, "arm"))["ok"]
+        assert not g.submit_command(signed(dep.stop_key, "arm-k1", 1, "arm"))["ok"]
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:253: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1fabc0830>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+________________ test_replayed_commands_rejected_after_restart _________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1fabc2fc0>
+
+    def test_replayed_commands_rejected_after_restart(dep):
+        arm1 = signed(dep.arm_key, "arm-k1", 1, "arm")
+>       assert dep.control().submit_command(arm1)["ok"]
+E       assert False
+
+tests/test_experimental_external_gate.py:260: AssertionError
+_________________ test_arm_key_cannot_mint_permits_or_notices __________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1fac9bb00>
+
+    def test_arm_key_cannot_mint_permits_or_notices(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:270: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1fac9bb00>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+___________ test_gate_loss_cancels_in_flight_operation_within_bound ____________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1facb1070>
+
+    def test_gate_loss_cancels_in_flight_operation_within_bound(dep):
+>       dep.arm(1)
+
+tests/test_stop_gate_resilience.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1facb1070>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+___________ test_gate_restart_resumes_only_from_durable_armed_state ____________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1faa8fad0>
+
+    def test_gate_restart_resumes_only_from_durable_armed_state(dep):
+>       dep.arm(1)
+
+tests/test_stop_gate_resilience.py:142: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1faa8fad0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+____________ test_gate_restart_with_rolled_back_state_stays_denied _____________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1fabc1f40>
+
+    def test_gate_restart_with_rolled_back_state_stays_denied(dep):
+>       dep.arm(1)
+
+tests/test_stop_gate_resilience.py:152: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1fabc1f40>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+_______________ test_backend_restart_refuses_pre_restart_permits _______________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1faba4cb0>
+
+    def test_backend_restart_refuses_pre_restart_permits(dep):
+>       dep.arm(1)
+
+tests/test_stop_gate_resilience.py:164: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1faba4cb0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+______________ test_backend_without_notices_denies_after_restart _______________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe1fc0bb6b0>
+
+    def test_backend_without_notices_denies_after_restart(dep):
+>       dep.arm(1)
+
+tests/test_stop_gate_resilience.py:179: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe1fc0bb6b0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_compromised_service_cannot_arm_or_stop_with_own_keys
+FAILED tests/test_experimental_external_gate.py::test_stop_key_cannot_arm_and_arm_key_cannot_stop
+FAILED tests/test_experimental_external_gate.py::test_replayed_commands_rejected_after_restart
+FAILED tests/test_experimental_external_gate.py::test_arm_key_cannot_mint_permits_or_notices
+FAILED tests/test_stop_gate_resilience.py::test_gate_loss_cancels_in_flight_operation_within_bound
+FAILED tests/test_stop_gate_resilience.py::test_gate_restart_resumes_only_from_durable_armed_state
+FAILED tests/test_stop_gate_resilience.py::test_gate_restart_with_rolled_back_state_stays_denied
+FAILED tests/test_stop_gate_resilience.py::test_backend_restart_refuses_pre_restart_permits
+FAILED tests/test_stop_gate_resilience.py::test_backend_without_notices_denies_after_restart
+9 failed, 695 passed, 20 skipped, 133 subtests passed in 57.86s
