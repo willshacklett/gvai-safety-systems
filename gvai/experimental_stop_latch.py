@@ -246,6 +246,24 @@ class CommandResult:
     gap_detected: bool = False
 
 
+@dataclass(frozen=True)
+class ReconcileResult:
+    """Read-only answer about one submitted STOP envelope.
+
+    ``verdict`` is EXACT_APPLIED only when the complete identity of the
+    submitted command equals the durable record (anchor and store agree).
+    ``answered`` is False when the query itself could not be evaluated.
+    """
+
+    answered: bool
+    verdict: str
+    status: str
+    reason: str
+    head_sequence: Optional[int] = None
+    head_digest: Optional[str] = None
+    submitted_digest: Optional[str] = None
+
+
 class StopLatch:
     """Fail-closed latch. Starts stopped; only a signed, contiguous ARM opens it.
 
@@ -356,6 +374,81 @@ class StopLatch:
             except Exception:
                 return LatchDecision(False, STATUS_FAULT, "internal_error")
 
+    def _durable_record_matches(self, command: StopCommand, head: AnchorHead) -> bool:
+        """True only if the anchor and the stored, re-verified command both equal ``command``."""
+        try:
+            if self._anchor.read() != head:
+                return False
+            stored = parse_command(self._store.load())
+        except Exception:
+            return False
+        return (
+            stored.latch_id == self._latch_id
+            and self._keyring.verify(stored)
+            and stored.digest() == command.digest()
+            and AnchorHead(stored.sequence, stored.digest()) == head
+        )
+
+    def reconcile(self, envelope: object) -> ReconcileResult:
+        """Read-only: relate a submitted signed STOP to the durable record. Never raises.
+
+        Requires a parseable, correctly signed STOP for this latch, so it is
+        never an unauthenticated oracle. It changes no state.
+        """
+        try:
+            return self._reconcile(envelope)
+        except Exception:
+            return ReconcileResult(False, "UNVERIFIABLE", self.status, "internal_error")
+
+    def _reconcile(self, envelope: object) -> ReconcileResult:
+        try:
+            command = parse_command(envelope)
+        except ValueError as exc:
+            return ReconcileResult(False, "REJECTED", self.status, str(exc))
+        if command.latch_id != self._latch_id:
+            return ReconcileResult(False, "REJECTED", self.status, "wrong_latch")
+        if command.command_type != COMMAND_STOP:
+            return ReconcileResult(False, "REJECTED", self.status, "not_a_stop_command")
+        if not self._keyring.verify(command):
+            return ReconcileResult(False, "REJECTED", self.status, "authentication_failed")
+        submitted = command.digest()
+        with self._lock:
+            status = self._status
+            try:
+                head = self._anchor.read()
+                envelope_now = self._store.load()
+            except Exception:
+                return ReconcileResult(
+                    False, "UNVERIFIABLE", status, "anchor_or_store_unavailable",
+                    submitted_digest=submitted,
+                )
+            if envelope_now is None:
+                durable_ok = head == GENESIS_HEAD
+            else:
+                try:
+                    stored = parse_command(envelope_now)
+                    durable_ok = (
+                        stored.latch_id == self._latch_id
+                        and self._keyring.verify(stored)
+                        and AnchorHead(stored.sequence, stored.digest()) == head
+                    )
+                except Exception:
+                    durable_ok = False
+            if status == STATUS_FAULT or not durable_ok:
+                return ReconcileResult(
+                    False, "UNVERIFIABLE", status, self._fault_reason or "durable_record_inconsistent",
+                    head.sequence, head.digest, submitted,
+                )
+            if command.sequence > head.sequence:
+                verdict = "NOT_APPLIED"
+            elif command.sequence == head.sequence:
+                verdict = "EXACT_APPLIED" if submitted == head.digest else "CONFLICT"
+            else:
+                verdict = "SUPERSEDED_UNVERIFIED"
+            return ReconcileResult(
+                True, verdict, status, verdict.lower(), head.sequence, head.digest, submitted
+            )
+
     def apply(self, envelope: object) -> CommandResult:
         """Verify and apply a signed command. Never raises."""
         try:
@@ -388,6 +481,15 @@ class StopLatch:
                 )
                 return CommandResult(False, STATUS_FAULT, self._fault_reason)
             if command.sequence <= current.sequence:
+                if (
+                    command.command_type == COMMAND_STOP
+                    and command.sequence == current.sequence
+                ):
+                    if command.digest() == current.digest:
+                        if self._durable_record_matches(command, current):
+                            return CommandResult(False, self._status, "already_applied")
+                        return CommandResult(False, self._status, "stale_or_replayed")
+                    return CommandResult(False, self._status, "conflicting_command")
                 return CommandResult(False, self._status, "stale_or_replayed")
 
             gap = command.sequence != current.sequence + 1

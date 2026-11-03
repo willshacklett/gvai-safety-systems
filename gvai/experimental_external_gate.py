@@ -50,7 +50,7 @@ DEFAULT_INTERRUPT_DEADLINE = 1.0
 
 # Request types each listener may carry (least privilege per socket).
 SERVICE_GATE_REQUESTS = frozenset({"authorize", "status"})
-CONTROL_GATE_REQUESTS = frozenset({"command", "status"})
+CONTROL_GATE_REQUESTS = frozenset({"command", "status", "reconcile"})
 SERVICE_BACKEND_REQUESTS = frozenset({"execute", "audit"})
 NOTICE_BACKEND_REQUESTS = frozenset({"notice"})
 
@@ -226,9 +226,27 @@ class GateCore:
     def handle_command(self, envelope: object) -> dict:
         result = self._latch.apply(envelope)
         return {
-            "ok": result.accepted,
+            "ok": result.accepted or result.reason == "already_applied",
             "status": result.status,
             "reason": result.reason,
+        }
+
+    def reconcile(self, envelope: object) -> dict:
+        """Read-only STOP reconciliation; ``ok`` means the query was answered.
+
+        It never asserts that the backend halted: that needs independent evidence.
+        """
+        r = self._latch.reconcile(envelope)
+        return {
+            "ok": r.answered,
+            "verdict": r.verdict,
+            "status": r.status,
+            "reason": r.reason,
+            "head_sequence": r.head_sequence,
+            "head_digest": r.head_digest,
+            "submitted_digest": r.submitted_digest,
+            "stop_recorded": r.verdict == "EXACT_APPLIED",
+            "backend_halt": "UNVERIFIED",
         }
 
     def authorize(self, operation: object, digest: object) -> dict:
@@ -271,6 +289,8 @@ class GateCore:
                 if out["ok"]:
                     out["notice"] = self.notice()
                 return out
+            if kind == "reconcile":
+                return self.reconcile(message.get("envelope"))
             if kind == "authorize":
                 return self.authorize(message.get("operation"), message.get("args_digest"))
             if kind == "status":
@@ -581,17 +601,32 @@ def serve_many(listeners_and_handlers, stop_event) -> None:
     stop_event.wait()
 
 
+def make_control_handler(gate: GateCore, push: Callable[..., bool]):
+    """Control-socket handler. ``backend_notice`` reports only the backend's reply to the
+    notice; it is not evidence that execution halted."""
+
+    def control_handler(message):
+        reply = gate.handle(message, CONTROL_GATE_REQUESTS)
+        if reply.get("ok") and "notice" in reply:
+            acked = push(reply["notice"])
+            reply["backend_notice"] = "acknowledged" if acked is True else "unconfirmed"
+        return reply
+
+    return control_handler
+
+
 def run_gate(gate: GateCore, service_listener, control_listener, backend_notice_path,
              heartbeat_interval: float, stop: threading.Event) -> None:
-    def push(notice=None):
+    def push(notice=None) -> bool:
         if not backend_notice_path:
-            return
+            return False
         try:
             conn = BackendClient(backend_notice_path, timeout=1.0)
-            conn.send_notice(notice or gate.notice())
+            reply = conn.send_notice(notice or gate.notice())
             conn.close()
+            return reply.get("ok") is True
         except Exception:
-            pass
+            return False
 
     def heartbeat():
         while not stop.is_set():
@@ -603,11 +638,7 @@ def run_gate(gate: GateCore, service_listener, control_listener, backend_notice_
     def service_handler(message):
         return gate.handle(message, SERVICE_GATE_REQUESTS)
 
-    def control_handler(message):
-        reply = gate.handle(message, CONTROL_GATE_REQUESTS)
-        if reply.get("ok") and "notice" in reply:
-            push(reply["notice"])
-        return reply
+    control_handler = make_control_handler(gate, push)
 
     serve_many([(service_listener, service_handler), (control_listener, control_handler)], stop)
 
@@ -725,6 +756,40 @@ class GateClient(_Client):
 
     def status(self) -> dict:
         return self.request({"type": "status"})
+
+    def reconcile_stop(self, envelope: Mapping[str, object]) -> dict:
+        """Authenticated read-only query. A transport failure yields UNKNOWN."""
+        reply = self.request({"type": "reconcile", "envelope": dict(envelope)})
+        if "verdict" in reply:
+            return reply
+        verdict = "UNKNOWN" if reply.get("reason") == "communication_failure" else "REJECTED"
+        return {"ok": False, "verdict": verdict, "reason": reply.get("reason", "denied"),
+                "stop_recorded": False, "backend_halt": "UNVERIFIED"}
+
+    def submit_stop(self, envelope: Mapping[str, object]) -> dict:
+        """Submit a signed STOP and classify the reply.
+
+        ``outcome`` is UNKNOWN on any transport failure, never an acknowledgement.
+        ``durable`` means the gate's anchor and store hold exactly this command.
+        ``backend_halt`` is always UNVERIFIED here: halting needs independent evidence.
+        """
+        if not isinstance(envelope, Mapping) or envelope.get("command_type") != "stop":
+            return {"outcome": "REJECTED", "durable": False, "reason": "not_a_stop_command",
+                    "backend_notice": "unknown", "backend_halt": "UNVERIFIED"}
+        r = self.submit_command(envelope)
+        reason = r.get("reason")
+        out = {"outcome": "REJECTED", "durable": False, "reason": reason,
+               "backend_notice": r.get("backend_notice", "unknown"),
+               "backend_halt": "UNVERIFIED"}
+        if reason == "communication_failure":
+            out.update(outcome="UNKNOWN", backend_notice="unknown")
+        elif r.get("ok") is True and reason == "accepted":
+            out.update(outcome="STOP_RECORDED", durable=True)
+        elif r.get("ok") is True and reason == "already_applied":
+            out.update(outcome="ALREADY_APPLIED", durable=True)
+        elif reason in ("anchor_advance_failed", "store_write_failed"):
+            out.update(outcome="NOT_DURABLE")
+        return out
 
 
 class BackendClient(_Client):
