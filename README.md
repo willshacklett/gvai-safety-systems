@@ -1,5 +1,14 @@
 # GVAI Safety Systems
 
+The [private HTTPS staging runbook](docs/private_https_staging_v1.md) prepares
+loopback-only mTLS ingress and restricted service configuration; it does not
+deploy a server or activate public access.
+
+The loopback-only advisory [private staging application](docs/private_staging_v1.md)
+assembles the PostgreSQL pilot backend with separate operator provisioning,
+authenticated usage, bounded connections and redacted diagnostics. It is not
+a public deployment or controlled-execution service.
+
 **[Read the GV Agent Safety V2 Technical Brief](docs/GV_Agent_Safety_V2_Technical_Brief.pdf)**  
 **[Watch the GV Agent Safety V2 Demo](docs/GV_Agent_Safety_V2_Demo.mp4)**
 
@@ -113,6 +122,13 @@ or activate billing.
 
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
+
+The [PostgreSQL advisory pilot backend](docs/commercial_advisory_backend_v1.md)
+adds durable operator-provisioned customer keys, project ownership, fixed pilot
+caps and payload-bound metering to the existing advisory service. It is tested
+against disposable PostgreSQL, not deployed or approved for paid production use.
+It does not promote unsigned evidence to execution authority, enable SQLite
+grants, activate checkpoint storage or change supervisor STOP.
 
 ---
 

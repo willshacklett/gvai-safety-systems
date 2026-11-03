@@ -1,0 +1,21 @@
+[Unit]
+Description=GVAI protected backend sockets
+PartOf=gvai-protected-backend.service
+
+[Socket]
+ListenStream=/run/gvai-protected-backend/service.sock
+FileDescriptorName=service
+SocketUser=gvai-api
+SocketGroup=gvai-api
+SocketMode=0600
+# notice: only the gate may deliver STOP/heartbeat notices.
+ListenStream=/run/gvai-protected-backend/notice.sock
+FileDescriptorName=notice
+SocketUser=gvai-gate
+SocketGroup=gvai-gate
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
