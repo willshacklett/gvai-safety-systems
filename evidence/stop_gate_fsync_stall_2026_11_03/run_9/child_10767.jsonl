@@ -1,0 +1,7 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0414, "run": "9", "pid": 10767, "role": "?", "t": 1793721205.1637, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0431, "run": "9", "pid": 10767, "role": "gate", "t": 1793721205.1653, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0569, "run": "9", "pid": 10767, "role": "gate", "t": 1793721205.1792, "thr": "MainThread"}
+{"ev": "latch_apply", "dt": 0.00034, "accepted": false, "reason": "stale_or_replayed", "run": "9", "pid": 10767, "role": "gate", "t": 1793721205.1806, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 0.00038, "ok": false, "reason": "stale_or_replayed", "run": "9", "pid": 10767, "role": "gate", "t": 1793721205.1806, "thr": "Thread-4 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 0.00042, "run": "9", "pid": 10767, "role": "gate", "t": 1793721205.1806, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:authorize", "dt": 1e-05, "ok": false, "reason": "latched_stop", "run": "9", "pid": 10767, "role": "gate", "t": 1793721205.1812, "thr": "Thread-5 (conn_loop)"}

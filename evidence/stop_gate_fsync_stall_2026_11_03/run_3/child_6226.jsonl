@@ -1,0 +1,4 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0404, "run": "3", "pid": 6226, "role": "?", "t": 1793721134.7867, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.042, "run": "3", "pid": 6226, "role": "backend", "t": 1793721134.7883, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0479, "run": "3", "pid": 6226, "role": "backend", "t": 1793721134.7942, "thr": "MainThread"}
+{"ev": "counters", "c": {"backend_apply_notice": [2, 0.00062, 0.00079]}, "load": 0.39306640625, "run": "3", "pid": 6226, "role": "backend", "t": 1793721135.79, "thr": "diag-watch"}

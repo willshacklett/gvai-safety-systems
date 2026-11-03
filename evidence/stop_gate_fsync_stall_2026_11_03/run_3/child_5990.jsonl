@@ -1,0 +1,25 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0463, "run": "3", "pid": 5990, "role": "?", "t": 1793721130.022, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0482, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.0239, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.062, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.0377, "thr": "MainThread"}
+{"ev": "latch_apply", "dt": 0.00027, "accepted": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1147, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 0.00033, "ok": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1147, "thr": "Thread-4 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 0.00035, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1147, "thr": "Thread-4 (conn_loop)"}
+{"ev": "latch_apply", "dt": 3e-05, "accepted": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1152, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 6e-05, "ok": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1152, "thr": "Thread-4 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 7e-05, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1153, "thr": "Thread-4 (conn_loop)"}
+{"ev": "latch_apply", "dt": 1e-05, "accepted": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1155, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 3e-05, "ok": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1155, "thr": "Thread-4 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 4e-05, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1155, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:authorize", "dt": 2e-05, "ok": false, "reason": "latched_stop", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1159, "thr": "Thread-5 (conn_loop)"}
+{"ev": "fsync", "dt": 0.00318, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1202, "thr": "Thread-6 (conn_loop)"}
+{"ev": "anchor_lock_hold:op", "dt": 0.00365, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1203, "thr": "Thread-6 (conn_loop)"}
+{"ev": "fsync", "dt": 0.00158, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.122, "thr": "Thread-6 (conn_loop)"}
+{"ev": "store_save", "dt": 0.00167, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.122, "thr": "Thread-6 (conn_loop)"}
+{"ev": "latch_apply", "dt": 0.00568, "accepted": true, "reason": "accepted", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.122, "thr": "Thread-6 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 0.00587, "ok": true, "reason": "accepted", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1222, "thr": "Thread-6 (conn_loop)"}
+{"ev": "notice_push:control", "dt": 0.00105, "ok": true, "reason": null, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1233, "thr": "Thread-6 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 0.00702, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1233, "thr": "Thread-6 (conn_loop)"}
+{"ev": "latch_apply", "dt": 0.00025, "accepted": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1741, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 0.00029, "ok": false, "reason": "authentication_failed", "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1741, "thr": "Thread-4 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 0.00031, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1741, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:authorize", "dt": 0.00029, "ok": true, "reason": null, "run": "3", "pid": 5990, "role": "gate", "t": 1793721130.1749, "thr": "Thread-7 (conn_loop)"}

@@ -1,0 +1,17 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.047, "run": "6", "pid": 8620, "role": "?", "t": 1793721180.2877, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0495, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.2902, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0642, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3049, "thr": "MainThread"}
+{"ev": "gate_handle:None", "dt": 1e-05, "ok": false, "reason": "request_not_permitted", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3761, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:nope", "dt": 0.0, "ok": false, "reason": "request_not_permitted", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3764, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:authorize", "dt": 1e-05, "ok": false, "reason": "operation_not_authorized", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3765, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:authorize", "dt": 1e-05, "ok": false, "reason": "operation_not_authorized", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3767, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 0.0, "ok": false, "reason": "request_not_permitted", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3769, "thr": "Thread-4 (conn_loop)"}
+{"ev": "fsync", "dt": 0.00204, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3802, "thr": "Thread-5 (conn_loop)"}
+{"ev": "anchor_lock_hold:op", "dt": 0.00257, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3802, "thr": "Thread-5 (conn_loop)"}
+{"ev": "fsync", "dt": 0.0018, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3822, "thr": "Thread-5 (conn_loop)"}
+{"ev": "store_save", "dt": 0.00208, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3824, "thr": "Thread-5 (conn_loop)"}
+{"ev": "latch_apply", "dt": 0.00508, "accepted": true, "reason": "accepted", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3824, "thr": "Thread-5 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 0.00554, "ok": true, "reason": "accepted", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3829, "thr": "Thread-5 (conn_loop)"}
+{"ev": "notice_push:control", "dt": 0.0011, "ok": true, "reason": null, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.384, "thr": "Thread-5 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 0.00673, "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.3841, "thr": "Thread-5 (conn_loop)"}
+{"ev": "gate_handle:authorize", "dt": 1e-05, "ok": false, "reason": "operation_not_authorized", "run": "6", "pid": 8620, "role": "gate", "t": 1793721180.4353, "thr": "Thread-4 (conn_loop)"}
