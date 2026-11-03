@@ -12,6 +12,7 @@ and fork detection exist only against an independently held ``JournalAnchor``.
 
 from __future__ import annotations
 
+import enum
 import fcntl
 import hashlib
 import json
@@ -20,7 +21,7 @@ import re
 import stat
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
@@ -48,9 +49,10 @@ _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _SIGNATURE_HEX = re.compile(r"[0-9a-f]{128}\Z")
 _MAX_INT = 2**63 - 1
 _OPEN_FIELDS = frozenset({
-    "authority_id", "generation", "index", "key_id", "kind", "previous_hash",
-    "signature", "trust_domain",
+    "authority_id", "generation", "index", "journal_id", "key_id", "kind",
+    "not_after", "not_before", "previous_hash", "signature", "trust_domain",
 })
+_MAX_TIME = 2**53
 _STOP_FIELDS = frozenset({"generation", "index", "kind", "previous_hash", "reason"})
 
 
@@ -95,6 +97,9 @@ class JournalRecord:
     trust_domain: Optional[str] = None
     key_id: Optional[str] = None
     signature: Optional[bytes] = None
+    journal_id: Optional[str] = None
+    not_before: Optional[int] = None
+    not_after: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.kind not in ("open", "stop") or type(self.kind) is not str:
@@ -106,7 +111,10 @@ class JournalRecord:
         if self.kind == "stop":
             if not _identifier(self.reason) or any(
                 value is not None
-                for value in (self.authority_id, self.trust_domain, self.key_id, self.signature)
+                for value in (
+                    self.authority_id, self.trust_domain, self.key_id, self.signature,
+                    self.journal_id, self.not_before, self.not_after,
+                )
             ):
                 raise ValueError("Invalid STOP record.")
         else:
@@ -114,8 +122,13 @@ class JournalRecord:
                 _identifier(self.authority_id)
                 and _identifier(self.trust_domain)
                 and _identifier(self.key_id)
+                and _identifier(self.journal_id)
             ):
                 raise ValueError("Invalid OPEN record.")
+            if not (_int(self.not_before, 0, _MAX_TIME) and _int(self.not_after, 0, _MAX_TIME)):
+                raise ValueError("Invalid OPEN validity window.")
+            if self.not_before >= self.not_after:
+                raise ValueError("Empty OPEN validity window.")
             if type(self.signature) is not bytes or len(self.signature) != 64:
                 raise ValueError("Invalid OPEN signature.")
 
@@ -130,7 +143,10 @@ class JournalRecord:
             record["reason"] = self.reason
         else:
             record["authority_id"] = self.authority_id
+            record["journal_id"] = self.journal_id
             record["key_id"] = self.key_id
+            record["not_after"] = self.not_after
+            record["not_before"] = self.not_before
             record["trust_domain"] = self.trust_domain
         return record
 
@@ -197,6 +213,8 @@ def decode_journal(raw: object) -> tuple[JournalRecord, ...]:
                 "open", item["generation"], item["index"], item["previous_hash"],
                 authority_id=item["authority_id"], trust_domain=item["trust_domain"],
                 key_id=item["key_id"], signature=bytes.fromhex(signature),
+                journal_id=item["journal_id"], not_before=item["not_before"],
+                not_after=item["not_after"],
             ))
         else:
             raise ValueError("Invalid record fields.")
@@ -225,6 +243,20 @@ class JournalAnchor:
             raise ValueError("Invalid anchor hash.")
 
 
+class StopAck(enum.IntEnum):
+    """How far a STOP request is known to have progressed. Ordered; never decreases.
+
+    MEMORY_ONLY: denied in this process only; a restart may read active.
+    INTENT_DURABLE: crash-surviving intent evidence exists; restart fails closed.
+    COMMITTED: the STOP record itself is durable in the journal.
+    A caller that receives no acknowledgement must treat the request as unknown.
+    """
+
+    MEMORY_ONLY = 0
+    INTENT_DURABLE = 1
+    COMMITTED = 2
+
+
 @dataclass(frozen=True)
 class JournalState:
     """Informational only. ``stopped=False`` is never an authorization to run."""
@@ -241,10 +273,10 @@ class JournalState:
 
 @dataclass(frozen=True)
 class StopOutcome:
-    """STOP is always in effect in memory; ``durable`` reports only the disk result."""
+    """STOP is always in effect in memory; ``ack`` reports how far it reached disk."""
 
     stopped: bool
-    durable: bool
+    ack: StopAck
     reason: str
     state: JournalState
 
@@ -264,13 +296,19 @@ class StopGenerationJournal:
         *,
         authority_id: str,
         trust_domain: str,
+        expected_journal_id: str,
         trusted_public_keys: Mapping[str, bytes],
         other_purpose_key_ids: frozenset = frozenset(),
         other_purpose_public_keys: frozenset = frozenset(),
         revoked_key_ids: frozenset = frozenset(),
         first_generation: int = 1,
         anchor: Optional[JournalAnchor] = None,
+        clock: Optional[Callable[[], float]] = None,
     ) -> None:
+        if not _identifier(expected_journal_id):
+            raise ValueError("An independently provisioned journal identity is required.")
+        if clock is not None and not callable(clock):
+            raise ValueError("Invalid clock.")
         if type(directory) is not str or not directory:
             raise ValueError("A journal directory path is required.")
         if not _identifier(authority_id) or not _identifier(trust_domain):
@@ -302,6 +340,9 @@ class StopGenerationJournal:
                 keys[key_id] = Ed25519PublicKey.from_public_bytes(raw_key)
 
         self._authority_id = authority_id
+        self._expected_journal_id = expected_journal_id
+        self._clock = clock or time.time
+        self._ack = StopAck.MEMORY_ONLY
         self._trust_domain = trust_domain
         self._keys = keys
         self._first_generation = first_generation
@@ -370,20 +411,19 @@ class StopGenerationJournal:
             except Exception:
                 self._poisoned = True
                 state = self._observe_after_failure("commit_failed")
-                return StopOutcome(True, False, "commit_failed", state)
+                return self._outcome("commit_failed", state)
 
     def _latch_stop_locked(self, reason: str) -> StopOutcome:
         if self._sticky is not None and (self._sticky.fault or self._sticky.terminal):
-            return StopOutcome(True, self._sticky.terminal and not self._sticky.fault,
-                               self._sticky.reason, self._sticky)
+            return self._outcome(self._sticky.reason, self._sticky)
         if self._poisoned or self._dir is None:
-            return StopOutcome(True, False, "journal_poisoned", self._observe())
+            return self._outcome("journal_poisoned", self._observe())
         try:
             with self._flock(exclusive=True):
                 state, records = self._evaluate()
                 if state.fault or state.terminal or not records:
                     self._sticky = self._sticky or state
-                    return StopOutcome(True, state.terminal and not state.fault, state.reason, state)
+                    return self._outcome(state.reason, state)
                 tail = records[-1]
                 stop = JournalRecord(
                     "stop", tail.generation, len(records), tail.record_hash(), reason=reason
@@ -392,22 +432,34 @@ class StopGenerationJournal:
                     raise _Fault("journal_full")
                 updated = records + (stop,)
                 try:
-                    durable = self._commit(encode_journal(updated))
+                    self._commit(encode_journal(updated))
                 except BaseException:
                     self._poisoned = True
                     raise
         except _LockTimeout:
             self._poisoned = True
-            return StopOutcome(True, False, "lock_unavailable", self._observe_after_failure("lock_unavailable"))
+            return self._outcome("lock_unavailable", self._observe_after_failure("lock_unavailable"))
         except _Fault as fault:
             self._poisoned = True
-            return StopOutcome(True, False, fault.code, self._observe_after_failure(fault.code))
+            return self._outcome(fault.code, self._observe_after_failure(fault.code))
         self._seen = tuple(r.record_hash() for r in updated)
         final = self._stopped_state(stop.generation, "stopped", True, updated)
         self._sticky = final
-        return StopOutcome(True, durable, "stopped", final)
+        return self._outcome("stopped", final)
 
-    def _commit(self, raw: bytes) -> bool:
+    @staticmethod
+    def _ack_for_state(state: JournalState) -> StopAck:
+        if state.terminal and not state.fault:
+            return StopAck.COMMITTED
+        if state.fault and state.reason == "incomplete_commit":
+            return StopAck.INTENT_DURABLE  # leftover intent evidence survived a crash
+        return StopAck.MEMORY_ONLY
+
+    def _outcome(self, reason: str, state: JournalState) -> StopOutcome:
+        self._ack = max(self._ack, self._ack_for_state(state))
+        return StopOutcome(True, self._ack, reason, state)
+
+    def _commit(self, raw: bytes) -> None:
         """Intent, pending, atomic rename, fsyncs. Crash-left files are never deleted."""
 
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -418,6 +470,7 @@ class StopGenerationJournal:
         finally:
             os.close(fd)
         os.fsync(self._dir)
+        self._ack = max(self._ack, StopAck.INTENT_DURABLE)
         fd = os.open(PENDING_NAME, flags, 0o600, dir_fd=self._dir)
         try:
             _write_all(fd, raw)
@@ -426,13 +479,13 @@ class StopGenerationJournal:
             os.close(fd)
         os.rename(PENDING_NAME, JOURNAL_NAME, src_dir_fd=self._dir, dst_dir_fd=self._dir)
         os.fsync(self._dir)
+        self._ack = StopAck.COMMITTED
         # The record is now durable; a failed cleanup only leaves conservative evidence.
         try:
             os.unlink(INTENT_NAME, dir_fd=self._dir)
             os.fsync(self._dir)
         except OSError:
             self._poisoned = True
-        return True
 
     def _observe_after_failure(self, code: str) -> JournalState:
         if self._sticky is None:
@@ -548,6 +601,7 @@ class StopGenerationJournal:
             self._seen = max(self._seen, hashes, key=len)
             if terminal:
                 return self._stopped_state(generation, "stopped", True, records), records
+            self._check_validity(records[-1])
             return JournalState(
                 False, generation, "not_stopped", False, False, len(records),
                 hashes[-1], self._detection(),
@@ -579,6 +633,8 @@ class StopGenerationJournal:
     def _verify_open(self, record: JournalRecord) -> None:
         if record.authority_id != self._authority_id or record.trust_domain != self._trust_domain:
             raise _Fault("untrusted_authority")
+        if record.journal_id != self._expected_journal_id:
+            raise _Fault("journal_id_mismatch")
         key = self._keys.get(record.key_id)  # type: ignore[arg-type]
         if key is None:
             raise _Fault("untrusted_key")
@@ -586,6 +642,20 @@ class StopGenerationJournal:
             key.verify(record.signature, record.signing_input())  # type: ignore[arg-type]
         except InvalidSignature:
             raise _Fault("invalid_signature") from None
+
+    def _check_validity(self, record: JournalRecord) -> None:
+        """The active OPEN must be inside [not_before, not_after) by the injected clock."""
+
+        try:
+            now = self._clock()
+        except Exception:
+            raise _Fault("clock_unverifiable") from None
+        if type(now) not in (int, float) or now != now or now in (float("inf"), float("-inf")):
+            raise _Fault("clock_unverifiable")
+        if now < record.not_before:  # type: ignore[operator]
+            raise _Fault("open_premature")
+        if now >= record.not_after:  # type: ignore[operator]
+            raise _Fault("open_expired")
 
     def _check_history(self, hashes: tuple[str, ...]) -> None:
         seen = self._seen

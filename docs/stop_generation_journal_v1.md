@@ -26,19 +26,56 @@ commercial service, the STOP gate, systemd or any host. Based on PR #44 head
 `{"records":[...],"version":1}` canonical (sorted keys, no whitespace, ASCII),
 max 64 records / 64 KiB, byte-exact re-encode check. `record_hash =
 SHA-256(domain || canonical(record))`, genesis `0*64`.
-`open` (offline-signed: authority, trust domain, key id, signature) and `stop`
-(unsigned: STOP is the safe direction and needs no secret). Directory layout:
+`open` (offline-signed) and `stop`
+(unsigned: STOP is the safe direction and needs no secret). Every `open`
+signs, under domain `gvai-stop-generation-open-v2`: authority, trust domain,
+key id, **`journal_id`**, **`not_before`**, **`not_after`** (integer epoch
+seconds, `not_before < not_after`), generation, index and `previous_hash`.
+Directory layout:
 `journal.lock`, `journal.json` (both pre-provisioned, mode 0600, never created
 by the module), transient `journal.intent`, `journal.pending`.
+
+## Identity and validity
+
+- The caller injects `expected_journal_id` (required), obtained independently
+  of the journal storage. Every `open` must carry exactly that id
+  (`journal_id_mismatch` otherwise), which blocks replay of a valid journal
+  from another deployment that shares the authority, domain and key.
+- The *active* `open` (last record, not terminal) must satisfy
+  `not_before <= now < not_after` by an injected clock (default `time.time`):
+  `open_premature`, `open_expired`, or `clock_unverifiable` (clock raises, or
+  returns a non-number, bool, NaN or infinity). These are stopped faults and
+  sticky for the instance. A terminal STOP does not depend on the clock.
+  Earlier generations' windows are not re-checked.
+- Revoked or unpinned keys, wrong authority/domain, and bad signatures remain
+  faults. Editing any signed field breaks the signature.
+- **Clock limitation:** the clock is local. Rolling the host clock back lets a
+  *new* instance accept an expired `open`; the window bounds operation only
+  against an honest clock, and is not an independent time source.
 
 ## STOP commit protocol
 
 In-memory STOP first; exclusive `flock`; verify chain; create intent + fsync +
 dir fsync; write pending + fsync; `rename` over journal; dir fsync; unlink
-intent + dir fsync. Any failure poisons the instance; `StopOutcome.durable`
-is true only after the full sequence. Failure to remove the intent after the
+intent + dir fsync. Any failure poisons the instance. Cleanup failure after the
 rename is deliberately conservative (next start reports `incomplete_commit`;
 resolving that is an offline operator action, not an in-process one).
+
+## STOP acknowledgement
+
+`StopOutcome.ack` is an ordered `StopAck`, replacing the old `durable` boolean;
+it never decreases for an instance.
+
+| Ack | Meaning | After restart |
+|---|---|---|
+| `MEMORY_ONLY` | Denied in this process only. No proven durable evidence. | **May read active** |
+| `INTENT_DURABLE` | Intent file and its directory entry were fsynced (or leftover intent evidence was observed). | Fails closed (`incomplete_commit`) |
+| `COMMITTED` | The `stop` record was renamed in and the directory fsynced (or a committed STOP was observed). | Terminal STOP |
+
+A STOP in memory is effective after any write failure. A requester that gets
+no acknowledgement, or `MEMORY_ONLY`, must treat durability as **unknown**
+(unreceived and accepted-but-not-durable are different facts, but both leave no
+restart-safe evidence) and rely on independent backend enforcement.
 
 ## Rollback and fork detection
 
@@ -54,9 +91,11 @@ resolving that is an offline operator action, not an in-process one).
 
 ## Test evidence (Cloud, offline, temp dirs)
 
-`tests/test_stop_generation_journal.py`: 81 tests (plus subtests) covering
+`tests/test_stop_generation_journal.py`: 109 tests (plus subtests) covering
 persistence incl. subprocess restart, generation authority (forged/wrong key/
-revoked/skipped/replayed/missing stop), corruption (truncated, oversized,
+revoked/skipped/replayed/missing stop), journal-identity replay, validity
+window and clock boundaries, acknowledgement correctness, corruption
+(truncated, oversized,
 noncanonical, duplicate, coerced types), crash and syscall-failure injection,
 symlink/hardlink/permission/FIFO/foreign-owner/dir-swap attacks, thread and
 multi-process contention, rollback/fork/deletion, and static surface checks.
@@ -64,8 +103,13 @@ Full-suite results are in the commit report.
 
 ## Unresolved limitations
 
-1. A crash before the intent file exists leaves no trace; restart reads
-   not-stopped. Narrow window, documented, untested on real hardware.
+1. **Crash before durable intent (unresolved).** A crash, or an I/O failure,
+   before `journal.intent` is durable leaves no trace; restart reads
+   not-stopped and the request is `MEMORY_ONLY`. This cannot be closed by the
+   journal. It requires independent backend enforcement: the protected backend
+   must hold downstream credentials and require a fresh positive authority,
+   and a requester must escalate on anything short of an acknowledgement.
+   Tested only by injection (`test_failure_before_intent_exists_is_memory_only_and_restart_reads_active`).
 2. Durability (`fsync` semantics, power loss, reboot, filesystem behaviour) is
    **unproven on Linux hosts**; tests inject failures, they do not cut power.
 3. No independent anchor exists yet; coherent rollback is undetectable locally.
@@ -80,6 +124,8 @@ Full-suite results are in the commit report.
 7. Locking is advisory `flock`; behaviour on NFS or similar is unsupported.
 8. Max 64 records; a full journal fails closed (`journal_full`) pending
    offline replacement.
+9. Validity windows rely on a local clock (see above); `journal_id` must be
+   provisioned to the verifier independently of the journal's storage.
 
 No production enforcement claim is permitted until Linux host evidence and
 external authority validation exist.

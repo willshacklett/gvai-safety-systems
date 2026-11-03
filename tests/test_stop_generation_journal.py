@@ -28,6 +28,7 @@ from gvai import stop_generation_journal as sgj
 from gvai.stop_generation_journal import (
     JournalAnchor,
     JournalRecord,
+    StopAck,
     StopGenerationJournal,
     decode_journal,
     encode_journal,
@@ -38,6 +39,14 @@ ROOT = MODULE_PATH.parent.parent
 AUTHORITY = "offline-authority"
 DOMAIN = "stop-generation"
 KEY_ID = "provision-key-1"
+JOURNAL_ID = "journal-A"
+NOW = 1_000_000
+NOT_BEFORE = NOW - 100
+NOT_AFTER = NOW + 1000
+
+
+def _clock():
+    return NOW
 
 
 def _pub(key: Ed25519PrivateKey) -> bytes:
@@ -46,16 +55,15 @@ def _pub(key: Ed25519PrivateKey) -> bytes:
     )
 
 
-def _open(key, generation, index, previous, key_id=KEY_ID, authority=AUTHORITY, domain=DOMAIN):
-    unsigned = JournalRecord(
-        "open", generation, index, previous,
-        authority_id=authority, trust_domain=domain, key_id=key_id, signature=b"\0" * 64,
+def _open(key, generation, index, previous, key_id=KEY_ID, authority=AUTHORITY, domain=DOMAIN,
+          journal_id=JOURNAL_ID, not_before=NOT_BEFORE, not_after=NOT_AFTER):
+    fields = dict(
+        authority_id=authority, trust_domain=domain, key_id=key_id,
+        journal_id=journal_id, not_before=not_before, not_after=not_after,
     )
+    unsigned = JournalRecord("open", generation, index, previous, signature=b"\0" * 64, **fields)
     signature = key.sign(unsigned.signing_input())
-    return JournalRecord(
-        "open", generation, index, previous,
-        authority_id=authority, trust_domain=domain, key_id=key_id, signature=signature,
-    )
+    return JournalRecord("open", generation, index, previous, signature=signature, **fields)
 
 
 def _stop(prev: JournalRecord, index, reason="manual"):
@@ -102,6 +110,8 @@ class Base(unittest.TestCase):
         kwargs = dict(
             authority_id=AUTHORITY,
             trust_domain=DOMAIN,
+            expected_journal_id=JOURNAL_ID,
+            clock=_clock,
             trusted_public_keys={KEY_ID: _pub(self.key)},
         )
         kwargs.update(overrides)
@@ -136,7 +146,7 @@ class PersistenceTests(Base):
     def test_stop_is_durable_and_survives_restart(self):
         self.provision()
         outcome = self.journal().latch_stop("operator")
-        self.assertTrue(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.COMMITTED)
         self.assertTrue(outcome.stopped)
         fresh = self.journal()
         self.assertTrue(fresh.state.stopped)
@@ -152,9 +162,10 @@ class PersistenceTests(Base):
             "import sys;sys.path.insert(0,%r);"
             "from gvai.stop_generation_journal import StopGenerationJournal as J;"
             "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey;"
-            "j=J(%r,authority_id=%r,trust_domain=%r,trusted_public_keys={%r:bytes.fromhex(%r)});"
+            "j=J(%r,authority_id=%r,trust_domain=%r,expected_journal_id=%r,"
+            "trusted_public_keys={%r:bytes.fromhex(%r)});"
             "s=j.state;sys.exit(0 if s.stopped and s.terminal else 3)"
-        ) % (str(ROOT), self.dir, AUTHORITY, DOMAIN, KEY_ID, _pub(self.key).hex())
+        ) % (str(ROOT), self.dir, AUTHORITY, DOMAIN, JOURNAL_ID, KEY_ID, _pub(self.key).hex())
         result = subprocess.run([sys.executable, "-c", code], capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -190,7 +201,7 @@ class PersistenceTests(Base):
     def test_stop_reason_is_sanitised(self):
         self.provision()
         outcome = self.journal().latch_stop("bad reason\n{")
-        self.assertTrue(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.COMMITTED)
         self.assertIn(b'"reason":"stop"', pathlib.Path(self.jpath()).read_bytes())
 
 
@@ -262,7 +273,7 @@ class GenerationAuthorityTests(Base):
 
     def test_key_reuse_rejected(self):
         pub = _pub(self.key)
-        base = dict(authority_id=AUTHORITY, trust_domain=DOMAIN)
+        base = dict(authority_id=AUTHORITY, trust_domain=DOMAIN, expected_journal_id=JOURNAL_ID)
         with self.assertRaises(ValueError):
             StopGenerationJournal(self.dir, trusted_public_keys={KEY_ID: pub},
                                   other_purpose_key_ids=frozenset({KEY_ID}), **base)
@@ -276,7 +287,7 @@ class GenerationAuthorityTests(Base):
         for bad in ({}, {KEY_ID: b"short"}, {"bad id": b"\0" * 32}):
             with self.assertRaises(ValueError):
                 StopGenerationJournal(self.dir, authority_id=AUTHORITY, trust_domain=DOMAIN,
-                                      trusted_public_keys=bad)
+                                      expected_journal_id=JOURNAL_ID, trusted_public_keys=bad)
 
 
 class CorruptionTests(Base):
@@ -379,7 +390,7 @@ class CrashTests(Base):
         with mock.patch("os.fsync", side_effect=OSError("disk")):
             outcome = j.latch_stop()
         self.assertTrue(outcome.stopped)
-        self.assertFalse(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.MEMORY_ONLY)
         fresh = self.assert_never_reopens(j)
         self.assertEqual(fresh.state.reason, "incomplete_commit")
 
@@ -401,7 +412,8 @@ class CrashTests(Base):
 
                 with mock.patch("os." + name, side_effect=flaky):
                     outcome = j.latch_stop()
-                self.assertFalse(outcome.durable)
+                expected = StopAck.MEMORY_ONLY if name == "fsync" else StopAck.INTENT_DURABLE
+                self.assertEqual(outcome.ack, expected)
                 self.assertTrue(j.state.stopped)
                 self.assertTrue(os.path.exists(self.jpath(sgj.INTENT_NAME)))
                 self.assertTrue(self.journal().state.stopped)
@@ -434,14 +446,14 @@ class CrashTests(Base):
         with mock.patch.object(j, "_latch_stop_locked", side_effect=RuntimeError):
             outcome = j.latch_stop()
         self.assertTrue(outcome.stopped)
-        self.assertFalse(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.MEMORY_ONLY)
         self.assertTrue(j.state.stopped)
 
     def test_failed_instance_never_retries_to_success(self):
         j = self.journal()
         with mock.patch("os.fsync", side_effect=OSError):
             j.latch_stop()
-        self.assertFalse(j.latch_stop().durable)
+        self.assertEqual(j.latch_stop().ack, StopAck.MEMORY_ONLY)
 
     def test_unsynced_crash_window_is_documented_limitation(self):
         # A crash before the intent file exists leaves no trace; restart reads not-stopped.
@@ -526,7 +538,7 @@ class FilesystemAttackTests(Base):
         os.mkdir(evil, 0o700)
         self.provision(directory=evil)
         outcome = j.latch_stop()
-        self.assertTrue(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.COMMITTED)
         self.assertTrue(decode_journal(pathlib.Path(moved, sgj.JOURNAL_NAME).read_bytes())[-1].kind == "stop")
         self.assertEqual(len(decode_journal(pathlib.Path(evil, sgj.JOURNAL_NAME).read_bytes())), 1)
 
@@ -535,7 +547,7 @@ class FilesystemAttackTests(Base):
         victim = os.path.join(self.tmp, "victim")
         os.symlink(victim, self.jpath(sgj.INTENT_NAME))
         outcome = self.journal().latch_stop()
-        self.assertFalse(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.INTENT_DURABLE)
         self.assertFalse(os.path.exists(victim))
 
     def test_missing_directory(self):
@@ -555,7 +567,7 @@ class FilesystemAttackTests(Base):
         j = self.journal()
         j.close()
         self.assertTrue(j.state.stopped)
-        self.assertFalse(j.latch_stop().durable)
+        self.assertEqual(j.latch_stop().ack, StopAck.MEMORY_ONLY)
 
 
 class RollbackTests(Base):
@@ -683,7 +695,7 @@ class ConcurrencyTests(Base):
         for t in threads:
             t.join()
         self.assertTrue(all(r.stopped for r in results))
-        self.assertEqual(sum(1 for r in results if r.durable), len(results))
+        self.assertTrue(all(r.ack == StopAck.COMMITTED for r in results))
         records = decode_journal(pathlib.Path(self.jpath()).read_bytes())
         self.assertEqual([r.kind for r in records], ["open", "stop"])
         self.assertFalse(any(not s.stopped and s.terminal for s in observed))
@@ -737,7 +749,7 @@ class ConcurrencyTests(Base):
             fcntl.flock(holder, fcntl.LOCK_UN)
             os.close(holder)
         self.assertTrue(outcome.stopped)
-        self.assertFalse(outcome.durable)
+        self.assertEqual(outcome.ack, StopAck.MEMORY_ONLY)
         self.assertTrue(j.state.stopped)
 
     def test_multiprocess_writers_and_readers(self):
@@ -749,6 +761,7 @@ class ConcurrencyTests(Base):
         def work(role):
             j = StopGenerationJournal(
                 self.dir, authority_id=AUTHORITY, trust_domain=DOMAIN,
+                expected_journal_id=JOURNAL_ID, clock=_clock,
                 trusted_public_keys={KEY_ID: pub},
             )
             if role == "w":
@@ -766,6 +779,280 @@ class ConcurrencyTests(Base):
         self.assertTrue(all(queue.get(timeout=5)[1] for _ in procs))
         records = decode_journal(pathlib.Path(self.jpath()).read_bytes())
         self.assertEqual([r.kind for r in records], ["open", "stop"])
+
+
+class IdentityAndValidityTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.now = NOW
+
+    def clocked(self, **overrides):
+        return self.journal(clock=lambda: self.now, **overrides)
+
+    def faults(self, records, code):
+        self.provision(records)
+        state = self.clocked().state
+        self.assertTrue(state.stopped and state.fault)
+        self.assertEqual(state.reason, code)
+
+    def test_journal_id_is_required_and_validated(self):
+        with self.assertRaises(TypeError):
+            StopGenerationJournal(self.dir, authority_id=AUTHORITY, trust_domain=DOMAIN,
+                                  trusted_public_keys={KEY_ID: _pub(self.key)})
+        for bad in ("", "bad id", None, 7):
+            with self.assertRaises(ValueError):
+                self.journal(expected_journal_id=bad)
+
+    def test_foreign_journal_replay_is_rejected(self):
+        self.faults((_open(self.key, 1, 0, sgj.GENESIS_HASH, journal_id="journal-B"),),
+                    "journal_id_mismatch")
+
+    def test_foreign_journal_id_on_later_generation_rejected(self):
+        first = _open(self.key, 1, 0, sgj.GENESIS_HASH)
+        stop = _stop(first, 1)
+        second = _open(self.key, 2, 2, stop.record_hash(), journal_id="journal-B")
+        self.faults((first, stop, second), "journal_id_mismatch")
+
+    def test_signed_fields_cannot_be_edited(self):
+        self.provision()
+        original = json.loads(pathlib.Path(self.jpath()).read_bytes())
+        for field, value in (("not_after", NOT_AFTER + 10**6), ("not_before", 0),
+                             ("journal_id", "journal-B")):
+            with self.subTest(field=field):
+                data = json.loads(json.dumps(original))
+                data["records"][0][field] = value
+                os.unlink(self.jpath())
+                self.raw_write(sgj._canon(data), self.jpath())
+                reason = "journal_id_mismatch" if field == "journal_id" else "invalid_signature"
+                self.assertEqual(self.clocked().state.reason, reason)
+
+    def test_missing_binding_fields_are_corrupt(self):
+        self.provision()
+        original = json.loads(pathlib.Path(self.jpath()).read_bytes())
+        for field in ("journal_id", "not_before", "not_after"):
+            with self.subTest(field=field):
+                data = json.loads(json.dumps(original))
+                del data["records"][0][field]
+                os.unlink(self.jpath())
+                self.raw_write(sgj._canon(data), self.jpath())
+                self.assertEqual(self.clocked().state.reason, "journal_corrupt")
+
+    def test_invalid_windows_cannot_be_constructed_or_decoded(self):
+        for nb, na in ((5, 5), (6, 5), (-1, 5), (True, 9), (1.5, 9), ("1", 9), (1, None)):
+            with self.assertRaises(ValueError):
+                _open(self.key, 1, 0, sgj.GENESIS_HASH, not_before=nb, not_after=na)
+        self.provision()
+        data = json.loads(pathlib.Path(self.jpath()).read_bytes())
+        data["records"][0]["not_after"] = float(NOT_AFTER)
+        os.unlink(self.jpath())
+        self.raw_write(sgj._canon(data), self.jpath())
+        self.assertEqual(self.clocked().state.reason, "journal_corrupt")
+
+    def test_clock_boundaries_are_half_open(self):
+        self.provision()
+        for now, reason in (
+            (NOT_BEFORE - 1, "open_premature"),
+            (NOT_BEFORE, "not_stopped"),
+            (NOT_AFTER - 1, "not_stopped"),
+            (NOT_AFTER, "open_expired"),
+            (NOT_AFTER + 1, "open_expired"),
+        ):
+            with self.subTest(now=now):
+                self.now = now
+                self.assertEqual(self.clocked().state.reason, reason)
+
+    def test_expired_and_premature_are_stopped_with_fault(self):
+        self.provision()
+        for now in (NOT_BEFORE - 1, NOT_AFTER):
+            self.now = now
+            state = self.clocked().state
+            self.assertTrue(state.stopped and state.fault and not state.terminal)
+
+    def test_time_fault_is_sticky_even_if_clock_later_recovers(self):
+        self.provision()
+        self.now = NOT_AFTER + 5
+        j = self.clocked()
+        self.assertEqual(j.state.reason, "open_expired")
+        self.now = NOW
+        self.assertTrue(j.state.stopped)
+
+    def test_unverifiable_clock_fails_closed(self):
+        self.provision()
+
+        def boom():
+            raise RuntimeError("clock")
+
+        for bad in (boom, lambda: float("nan"), lambda: float("inf"), lambda: "now",
+                    lambda: None, lambda: True, lambda: [1]):
+            with self.subTest(clock=bad):
+                state = self.journal(clock=bad).state
+                self.assertEqual(state.reason, "clock_unverifiable")
+                self.assertTrue(state.stopped)
+
+    def test_non_callable_clock_rejected(self):
+        with self.assertRaises(ValueError):
+            self.journal(clock="now")
+
+    def test_expiry_applies_to_active_open_only(self):
+        first = _open(self.key, 1, 0, sgj.GENESIS_HASH, not_before=10, not_after=20)
+        stop = _stop(first, 1)
+        second = _open(self.key, 2, 2, stop.record_hash())
+        self.provision((first, stop, second))
+        state = self.clocked().state
+        self.assertFalse(state.stopped)
+        self.assertEqual(state.generation, 2)
+
+    def test_terminal_stop_does_not_depend_on_clock(self):
+        self.provision()
+        self.clocked().latch_stop()
+        self.now = NOT_AFTER + 10**6
+        state = self.clocked().state
+        self.assertTrue(state.terminal)
+        self.assertEqual(state.reason, "stopped")
+
+    def test_expired_open_cannot_be_reactivated_by_clock_rollback_in_new_instance(self):
+        # A new instance with a wound-back clock reads active: documented limitation.
+        self.provision()
+        self.now = NOT_AFTER + 1
+        self.assertTrue(self.clocked().state.stopped)
+        self.now = NOW
+        self.assertFalse(self.clocked().state.stopped)
+
+    def test_revoked_key_rejects_open_even_when_in_window(self):
+        self.provision()
+        state = self.clocked(revoked_key_ids=frozenset({KEY_ID})).state
+        self.assertEqual(state.reason, "untrusted_key")
+
+    def test_expired_instance_stop_request_is_memory_only_and_stays_stopped(self):
+        self.provision()
+        self.now = NOT_AFTER
+        outcome = self.clocked().latch_stop()
+        self.assertTrue(outcome.stopped)
+        self.assertEqual(outcome.ack, StopAck.MEMORY_ONLY)
+
+
+class AcknowledgementTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.provision()
+
+    def test_ack_enum_is_exactly_the_three_ordered_states(self):
+        self.assertEqual([m.name for m in StopAck],
+                         ["MEMORY_ONLY", "INTENT_DURABLE", "COMMITTED"])
+        self.assertLess(StopAck.MEMORY_ONLY, StopAck.INTENT_DURABLE)
+        self.assertLess(StopAck.INTENT_DURABLE, StopAck.COMMITTED)
+
+    def test_outcome_has_no_durable_boolean(self):
+        outcome = self.journal().latch_stop()
+        self.assertFalse(hasattr(outcome, "durable"))
+        self.assertIsInstance(outcome.ack, StopAck)
+
+    def test_committed_only_after_full_commit(self):
+        outcome = self.journal().latch_stop()
+        self.assertEqual(outcome.ack, StopAck.COMMITTED)
+        self.assertEqual(outcome.reason, "stopped")
+
+    def test_failure_before_intent_exists_is_memory_only_and_restart_reads_active(self):
+        j = self.journal()
+        real_open = os.open
+
+        def deny_intent(path, *args, **kwargs):
+            if path == sgj.INTENT_NAME:
+                raise OSError("injected")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("os.open", side_effect=deny_intent):
+            outcome = j.latch_stop()
+        self.assertEqual(outcome.ack, StopAck.MEMORY_ONLY)
+        self.assertTrue(j.state.stopped)  # effective in memory
+        # Unresolved window: nothing durable exists, so a restart is NOT stopped.
+        self.assertFalse(self.journal().state.stopped)
+
+    def test_failure_after_intent_durable_is_intent_durable_and_restart_fails_closed(self):
+        j = self.journal()
+        real_fsync = os.fsync
+        calls = {"n": 0}
+
+        def fail_third(fd):
+            calls["n"] += 1
+            if calls["n"] >= 3:
+                raise OSError("injected")
+            return real_fsync(fd)
+
+        with mock.patch("os.fsync", side_effect=fail_third):
+            outcome = j.latch_stop()
+        self.assertEqual(outcome.ack, StopAck.INTENT_DURABLE)
+        self.assertTrue(j.state.stopped)
+        self.assertEqual(self.journal().state.reason, "incomplete_commit")
+
+    def test_failure_after_rename_before_directory_sync_is_not_reported_committed(self):
+        j = self.journal()
+        real_fsync = os.fsync
+        calls = {"n": 0}
+
+        def fail_fourth(fd):
+            calls["n"] += 1
+            if calls["n"] >= 4:
+                raise OSError("injected")
+            return real_fsync(fd)
+
+        with mock.patch("os.fsync", side_effect=fail_fourth):
+            outcome = j.latch_stop()
+        self.assertEqual(outcome.ack, StopAck.INTENT_DURABLE)
+        self.assertTrue(j.state.stopped)
+        self.assertEqual(self.journal().state.reason, "incomplete_commit")
+
+    def test_cleanup_failure_after_commit_still_reports_committed(self):
+        j = self.journal()
+        with mock.patch("os.unlink", side_effect=OSError("injected")):
+            outcome = j.latch_stop()
+        self.assertEqual(outcome.ack, StopAck.COMMITTED)
+        self.assertEqual(self.journal().state.reason, "incomplete_commit")
+
+    def test_ack_never_downgrades_on_later_requests(self):
+        j = self.journal()
+        with mock.patch("os.rename", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                j.latch_stop()
+        for _ in range(3):
+            self.assertEqual(j.latch_stop().ack, StopAck.INTENT_DURABLE)
+        self.assertTrue(j.state.stopped)
+
+    def test_fresh_instance_with_crash_left_intent_acknowledges_intent_durable(self):
+        pathlib.Path(self.jpath(sgj.INTENT_NAME)).write_bytes(b"1")
+        os.chmod(self.jpath(sgj.INTENT_NAME), 0o600)
+        outcome = self.journal().latch_stop()
+        self.assertEqual(outcome.ack, StopAck.INTENT_DURABLE)
+        self.assertEqual(outcome.reason, "incomplete_commit")
+        self.assertTrue(os.path.exists(self.jpath(sgj.INTENT_NAME)))  # evidence preserved
+
+    def test_already_committed_journal_acknowledges_committed(self):
+        self.journal().latch_stop()
+        self.assertEqual(self.journal().latch_stop().ack, StopAck.COMMITTED)
+
+    def test_faulted_or_unprovisioned_journal_is_memory_only(self):
+        pathlib.Path(self.jpath()).write_bytes(b"garbage")
+        self.assertEqual(self.journal().latch_stop().ack, StopAck.MEMORY_ONLY)
+
+    def test_every_write_failure_keeps_stop_effective_in_memory(self):
+        for target in ("os.open", "os.write", "os.fsync", "os.rename", "os.unlink", "os.close"):
+            with self.subTest(target=target):
+                shutil.rmtree(self.dir)
+                os.mkdir(self.dir, 0o700)
+                self.provision()
+                j = self.journal()
+                real = getattr(os, target.split(".")[1])
+
+                def selective(*a, _real=real, _t=target, **k):
+                    if _t == "os.open" and a and a[0] not in (sgj.INTENT_NAME, sgj.PENDING_NAME):
+                        return _real(*a, **k)
+                    raise OSError("injected")
+
+                with mock.patch(target, side_effect=selective):
+                    outcome = j.latch_stop()
+                self.assertTrue(outcome.stopped)
+                self.assertTrue(j.state.stopped)
+                self.assertTrue(j.latch_stop().stopped)
 
 
 class StaticSurfaceTests(unittest.TestCase):
@@ -839,6 +1126,7 @@ class StaticSurfaceTests(unittest.TestCase):
         pathlib.Path(tmp, sgj.JOURNAL_NAME).write_bytes(encode_journal((_open(key, 1, 0, sgj.GENESIS_HASH),)))
         os.chmod(pathlib.Path(tmp, sgj.JOURNAL_NAME), 0o600)
         j = StopGenerationJournal(tmp, authority_id=AUTHORITY, trust_domain=DOMAIN,
+                                  expected_journal_id=JOURNAL_ID, clock=_clock,
                                   trusted_public_keys={KEY_ID: _pub(key)})
         j.latch_stop()
         j.close()
