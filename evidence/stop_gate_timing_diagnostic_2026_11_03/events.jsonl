@@ -1,0 +1,150 @@
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0063, "outcome": "ok", "reply_ok": true, "total": 0.0066, "run": "1"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0016, "outcome": "ok", "reply_ok": true, "total": 0.0021, "run": "1"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0011, "outcome": "ok", "reply_ok": true, "total": 0.0012, "run": "1"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "1"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "1"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0004, "t_send": 0.0002, "t_wait": 0.0074, "outcome": "ok", "reply_ok": true, "total": 0.0081, "run": "2"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0017, "outcome": "ok", "reply_ok": true, "total": 0.0021, "run": "2"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.001, "outcome": "ok", "reply_ok": true, "total": 0.0012, "run": "2"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0001, "outcome": "ok", "reply_ok": true, "total": 0.0002, "run": "2"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "2"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0059, "outcome": "ok", "reply_ok": true, "total": 0.006, "run": "3"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0019, "outcome": "ok", "reply_ok": true, "total": 0.0023, "run": "3"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0012, "outcome": "ok", "reply_ok": true, "total": 0.0013, "run": "3"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "3"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "3"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0003, "t_send": 0.0002, "t_wait": 0.006, "outcome": "ok", "reply_ok": true, "total": 0.0065, "run": "4"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0015, "outcome": "ok", "reply_ok": true, "total": 0.0018, "run": "4"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.001, "outcome": "ok", "reply_ok": true, "total": 0.0011, "run": "4"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "4"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "4"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0053, "outcome": "ok", "reply_ok": true, "total": 0.0055, "run": "5"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0002, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.001, "run": "5"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0008, "outcome": "ok", "reply_ok": true, "total": 0.0009, "run": "5"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0003, "outcome": "ok", "reply_ok": true, "total": 0.0004, "run": "5"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "5"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0056, "outcome": "ok", "reply_ok": true, "total": 0.0058, "run": "6"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0021, "outcome": "ok", "reply_ok": true, "total": 0.0025, "run": "6"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0019, "outcome": "ok", "reply_ok": true, "total": 0.0022, "run": "6"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0004, "outcome": "ok", "reply_ok": true, "total": 0.0006, "run": "6"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "6"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0069, "outcome": "ok", "reply_ok": true, "total": 0.0072, "run": "7"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0009, "outcome": "ok", "reply_ok": true, "total": 0.001, "run": "7"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0001, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "7"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "7"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "7"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0056, "outcome": "ok", "reply_ok": true, "total": 0.0058, "run": "8"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0013, "outcome": "ok", "reply_ok": true, "total": 0.0017, "run": "8"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0012, "outcome": "ok", "reply_ok": true, "total": 0.0013, "run": "8"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "8"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "8"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0079, "outcome": "ok", "reply_ok": true, "total": 0.0081, "run": "9"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.001, "run": "9"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "9"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "9"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "9"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0086, "outcome": "ok", "reply_ok": true, "total": 0.0089, "run": "10"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0009, "run": "10"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.0008, "run": "10"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0003, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "10"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "10"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0074, "outcome": "ok", "reply_ok": true, "total": 0.0077, "run": "11"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0009, "run": "11"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0008, "outcome": "ok", "reply_ok": true, "total": 0.0009, "run": "11"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0003, "outcome": "ok", "reply_ok": true, "total": 0.0004, "run": "11"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "11"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0056, "outcome": "ok", "reply_ok": true, "total": 0.0058, "run": "12"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0005, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "12"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "12"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "12"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "12"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0058, "outcome": "ok", "reply_ok": true, "total": 0.006, "run": "13"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0016, "outcome": "ok", "reply_ok": true, "total": 0.002, "run": "13"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0014, "outcome": "ok", "reply_ok": true, "total": 0.0015, "run": "13"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "13"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "13"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0056, "outcome": "ok", "reply_ok": true, "total": 0.0058, "run": "14"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0016, "outcome": "ok", "reply_ok": true, "total": 0.0019, "run": "14"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.001, "outcome": "ok", "reply_ok": true, "total": 0.0011, "run": "14"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "14"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "14"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0055, "outcome": "ok", "reply_ok": true, "total": 0.0056, "run": "15"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0004, "outcome": "ok", "reply_ok": true, "total": 0.0006, "run": "15"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "15"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "15"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "15"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0075, "outcome": "ok", "reply_ok": true, "total": 0.0079, "run": "16"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.001, "run": "16"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.0008, "run": "16"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "16"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "16"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0056, "outcome": "ok", "reply_ok": true, "total": 0.0057, "run": "17"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0005, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "17"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "17"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "17"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "17"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0088, "outcome": "ok", "reply_ok": true, "total": 0.0092, "run": "18"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0005, "outcome": "ok", "reply_ok": true, "total": 0.0009, "run": "18"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.0009, "run": "18"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "18"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "18"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.007, "outcome": "ok", "reply_ok": true, "total": 0.0073, "run": "19"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0008, "run": "19"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.0008, "run": "19"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "19"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "19"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0069, "outcome": "ok", "reply_ok": true, "total": 0.0072, "run": "20"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0017, "outcome": "ok", "reply_ok": true, "total": 0.0019, "run": "20"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0016, "outcome": "ok", "reply_ok": true, "total": 0.0018, "run": "20"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "20"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "20"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.006, "outcome": "ok", "reply_ok": true, "total": 0.0062, "run": "21"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0016, "outcome": "ok", "reply_ok": true, "total": 0.0019, "run": "21"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0015, "outcome": "ok", "reply_ok": true, "total": 0.0016, "run": "21"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "21"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "21"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0096, "outcome": "ok", "reply_ok": true, "total": 0.0099, "run": "22"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0001, "t_wait": 0.0008, "outcome": "ok", "reply_ok": true, "total": 0.0011, "run": "22"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0007, "outcome": "ok", "reply_ok": true, "total": 0.0008, "run": "22"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "22"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "22"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0055, "outcome": "ok", "reply_ok": true, "total": 0.0057, "run": "23"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0016, "outcome": "ok", "reply_ok": true, "total": 0.002, "run": "23"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0012, "outcome": "ok", "reply_ok": true, "total": 0.0013, "run": "23"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "23"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "23"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0006, "t_send": 0.0, "t_wait": 0.0068, "outcome": "ok", "reply_ok": true, "total": 0.0075, "run": "24"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.002, "outcome": "ok", "reply_ok": true, "total": 0.0024, "run": "24"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0011, "outcome": "ok", "reply_ok": true, "total": 0.0012, "run": "24"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "24"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "24"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0055, "outcome": "ok", "reply_ok": true, "total": 0.0057, "run": "25"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.0012, "outcome": "ok", "reply_ok": true, "total": 0.0015, "run": "25"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0009, "outcome": "ok", "reply_ok": true, "total": 0.001, "run": "25"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "25"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "25"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0052, "outcome": "ok", "reply_ok": true, "total": 0.0053, "run": "26"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0015, "outcome": "ok", "reply_ok": true, "total": 0.0019, "run": "26"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0014, "outcome": "ok", "reply_ok": true, "total": 0.0015, "run": "26"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0002, "run": "26"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "26"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0003, "t_send": 0.0001, "t_wait": 0.0088, "outcome": "ok", "reply_ok": true, "total": 0.0093, "run": "27"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0015, "outcome": "ok", "reply_ok": true, "total": 0.0018, "run": "27"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0012, "outcome": "ok", "reply_ok": true, "total": 0.0013, "run": "27"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "27"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "27"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0003, "t_send": 0.0001, "t_wait": 0.0078, "outcome": "ok", "reply_ok": true, "total": 0.0083, "run": "28"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0007, "run": "28"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0005, "outcome": "ok", "reply_ok": true, "total": 0.0006, "run": "28"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0002, "run": "28"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "28"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0062, "outcome": "ok", "reply_ok": true, "total": 0.0064, "run": "29"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0001, "t_wait": 0.002, "outcome": "ok", "reply_ok": true, "total": 0.0024, "run": "29"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0014, "outcome": "ok", "reply_ok": true, "total": 0.0015, "run": "29"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "29"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "29"}
+{"path": "gc.sock", "type": "command", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0001, "t_send": 0.0, "t_wait": 0.0084, "outcome": "ok", "reply_ok": true, "total": 0.0087, "run": "30"}
+{"path": "g.sock", "type": "authorize", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0002, "t_send": 0.0, "t_wait": 0.0006, "outcome": "ok", "reply_ok": true, "total": 0.0008, "run": "30"}
+{"path": "b.sock", "type": "execute", "timeout": 15.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0009, "outcome": "ok", "reply_ok": true, "total": 0.001, "run": "30"}
+{"path": "b.sock", "type": "audit", "timeout": 2.0, "fresh_conn": true, "t_connect": 0.0, "t_send": 0.0, "t_wait": 0.0002, "outcome": "ok", "reply_ok": true, "total": 0.0003, "run": "30"}
+{"event": "pre_close", "gate_alive": true, "gate_exit": null, "backend_alive": true, "backend_exit": null, "post_close_alive": [false, false], "post_close_exit": [-9, -9], "dir_removed": true, "run": "30"}
