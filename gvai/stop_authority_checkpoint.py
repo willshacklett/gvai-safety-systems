@@ -259,9 +259,35 @@ class SimulatedCheckpointServer:
         self._nonces: set[tuple[str, str]] = set()
         self._lock = Lock()
 
+    def _response(self, body: dict) -> bytes:
+        try:
+            return _signed(body, RESPONSE_DOMAIN, self._signer)
+        except Exception as exc:
+            # Failure may follow advancement; never classify it as non-delivery.
+            raise RuntimeError("checkpoint_response_unavailable") from exc
+
     def exchange(self, raw: bytes) -> bytes:
+        try:
+            return self._exchange(raw)
+        except (ValueError, TypeError, InvalidSignature, RecursionError):
+            # Unauthenticated input must never disclose a retained checkpoint.
+            response = dict(
+                self._scope, version=1, server_id=self._server_id,
+                request_digest=(
+                    hashlib.sha256(raw).hexdigest()
+                    if type(raw) is bytes and len(raw) <= MAX_WIRE_BYTES else None
+                ),
+                nonce=None, verdict="UNKNOWN", reason="checkpoint_request_rejected",
+                checkpoint=None,
+            )
+            return self._response(response)
+
+    def _exchange(self, raw: bytes) -> bytes:
         body = _decode(raw)
-        entry = self._clients.get(body.get("client_id"))
+        client_id = body.get("client_id")
+        if not _identity(client_id):
+            raise ValueError("invalid_checkpoint_client_id")
+        entry = self._clients.get(client_id)
         if entry is None:
             raise ValueError("untrusted_checkpoint_client")
         body = _verify(body, REQUEST_DOMAIN, entry[1])
@@ -269,7 +295,7 @@ class SimulatedCheckpointServer:
             set(body) != {*self._scope, "version", "action", "client_id", "writer_id",
                           "writer_fence", "nonce", "expected", "snapshot"}
             or type(body["version"]) is not int or body["version"] != 1
-            or body["action"] not in ("verify", "advance")
+            or type(body["action"]) is not str or body["action"] not in ("verify", "advance")
             or body["writer_id"] != entry[0]
             or any(body[name] != value for name, value in self._scope.items())
             or type(body["nonce"]) is not str or _HASH.fullmatch(body["nonce"]) is None
@@ -304,7 +330,7 @@ class SimulatedCheckpointServer:
                     else None
                 ),
             )
-            return _signed(response, RESPONSE_DOMAIN, self._signer)
+            return self._response(response)
 
     def _decide(self, action, snapshot, target, expected, writer):
         current = self._head

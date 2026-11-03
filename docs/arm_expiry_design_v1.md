@@ -507,6 +507,29 @@ Even VERIFIED from `SimulatedCheckpointServer` is **simulation evidence**, not
 independent real-world authority. Unexpected exchange failures are UNKNOWN;
 exception details are not surfaced as successful or informative receipts.
 
+C3A hardening at base `56ad8b11d9fb287f227726d72c571c1783cbbd78` validates
+`client_id` before key lookup and validates action types before dispatch.
+Malformed/unauthenticated requests receive a signed UNKNOWN
+`checkpoint_request_rejected` result with no checkpoint or usable challenge.
+This is denial-shaped protocol rejection, not authentication or verification.
+The client treats that response as unverifiable because it cannot bind a valid
+challenge. Bounded nested input is rejected without a lookup `TypeError`.
+No checkpoint head is disclosed by the rejection response.
+
+Server response-signing failure is an ambiguous exchange failure: the client
+returns UNKNOWN even if the head already advanced. It must retry with a fresh
+challenge and the exact expected/target; idempotent reconciliation does not
+advance twice. Signing failures are not proof that the request was undelivered.
+
+A fresh challenge prevents reuse of a reply for a different call, but imposes
+no maximum response age. A correctly signed delayed VERIFIED reply can arrive
+after a newer STOP checkpoint advances. It remains evidence of the earlier
+serialized decision, not a statement that the head is current at receipt.
+An event-controlled test demonstrates this: delayed old-head VERIFIED arrives,
+then a fresh verification of that old head returns CONFLICT. Downstream code
+must never cache such replies as execution permission; currentness/latency
+and backend fencing are future enforcement-integration obligations.
+
 ### Local-first ordering and recovery
 
 1. C2 locally persists and confirms its exact STOP snapshot first.
@@ -548,10 +571,17 @@ storage authority; compromise of that authority remains a separate threat.
 No infrastructure is provisioned, no remote persistence exists, no money is
 spent and no workload termination or power-loss guarantee is claimed.
 
-Verified C3A results: **46 passed**; focused C3A/C2/C1 selection **166 passed**.
+Original C3A results: **46 passed**; focused C3A/C2/C1 selection **166 passed**.
 Expanded relevant regressions: **632 passed, 1 skipped, 24 strict xfailed,
 30 subtests passed**, no failures or XPASSes. The skip remains the existing
 root-only journal foreign-owner test; prototype enforcement xfails are unchanged.
+
+Hardened C3A results: **71 passed**; focused C3A/C2/C1 selection **191 passed**,
+with no failures, skips or XPASSes. New cases cover malformed/nested lookup and
+dispatch fields, cross-domain signatures, direct authenticated malformed
+history, post-advancement signing failure and delayed historical responses.
+Existing request-rejection tests now assert the explicit signed denial and
+absence of checkpoint evidence instead of expecting an exception.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 \

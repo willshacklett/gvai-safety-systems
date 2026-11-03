@@ -5,7 +5,6 @@ import threading
 from dataclasses import replace
 
 import pytest
-from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -19,6 +18,16 @@ def public(key):
     return key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw,
     )
+
+
+def assert_rejected(rig, raw):
+    response = cp._verify(
+        cp._decode(rig.server.exchange(raw)), cp.RESPONSE_DOMAIN,
+        rig.server_key.public_key(),
+    )
+    assert response["verdict"] == "UNKNOWN"
+    assert response["reason"] == "checkpoint_request_rejected"
+    assert response["checkpoint"] is None
 
 
 class Transport:
@@ -263,8 +272,7 @@ def test_response_tampering_and_false_verified_head(rig):
     b" " * (cp.MAX_WIRE_BYTES + 1),
 ])
 def test_malformed_unsigned_requests_never_change_remote(rig, raw):
-    with pytest.raises((ValueError, TypeError)):
-        rig.server.exchange(raw)
+    assert_rejected(rig, raw)
     assert rig.server._head == rig.initial
 
 
@@ -309,8 +317,7 @@ def test_request_field_tampering_rejected_before_state_change(rig, field, value)
     request = json.loads(rig.transport.requests[-1])
     request[field] = value
     raw = cp._canonical(request)
-    with pytest.raises(InvalidSignature):
-        rig.server.exchange(raw)
+    assert_rejected(rig, raw)
     assert rig.server._head == rig.initial
 
 
@@ -324,8 +331,7 @@ def test_authenticated_invalid_request_binding_rejected(rig, field, value):
     request.pop("signature")
     request[field] = value
     raw = cp._signed(request, cp.REQUEST_DOMAIN, rig.client_key.sign)
-    with pytest.raises(ValueError):
-        rig.server.exchange(raw)
+    assert_rejected(rig, raw)
     assert rig.server._head == rig.initial
 
 
@@ -369,3 +375,120 @@ def test_concurrent_identical_advances_are_idempotent(rig):
         assert not thread.is_alive()
     assert len(results) == 2 and all(result.verdict == "VERIFIED" for result in results)
     assert rig.server._head.revision == 1
+
+
+@pytest.mark.parametrize("value", [[], {}, None, 1, True, [["nested"]]])
+def test_malformed_client_lookup_denies_without_exception(rig, value):
+    rig.client.verify(rig.genesis)
+    request = json.loads(rig.transport.requests[-1])
+    request["client_id"] = value
+    assert_rejected(rig, cp._canonical(request))
+    assert rig.server._head == rig.initial and len(rig.server._nonces) == 1
+
+
+@pytest.mark.parametrize("field", ["action", "writer_id", "nonce"])
+@pytest.mark.parametrize("value", [[], {}, None])
+def test_authenticated_malformed_dispatch_fields(rig, field, value):
+    rig.client.verify(rig.genesis)
+    request = json.loads(rig.transport.requests[-1])
+    request.pop("signature")
+    request[field] = value
+    assert_rejected(rig, cp._signed(request, cp.REQUEST_DOMAIN, rig.client_key.sign))
+    assert rig.server._head == rig.initial
+
+
+@pytest.mark.parametrize("depth", [30, 1500])
+def test_nested_lookup_values_within_wire_limit(rig, depth):
+    raw = b'{"client_id":' + b"[" * depth + b"null" + b"]" * depth + b"}"
+    assert len(raw) < cp.MAX_WIRE_BYTES
+    assert_rejected(rig, raw)
+    assert rig.server._head == rig.initial
+
+
+def test_request_response_domain_reuse_rejected(rig):
+    rig.client.verify(rig.genesis)
+    body = json.loads(rig.transport.requests[-1])
+    body.pop("signature")
+    # Correct client key, incorrect signing domain.
+    assert_rejected(rig, cp._signed(body, cp.RESPONSE_DOMAIN, rig.client_key.sign))
+    class WrongDomain:
+        def exchange(self, raw):
+            response = json.loads(rig.server.exchange(raw))
+            response.pop("signature")
+            return cp._signed(response, cp.REQUEST_DOMAIN, rig.server_key.sign)
+    result = rig.make_client(transport=WrongDomain()).verify(rig.genesis)
+    assert result.verdict == "UNKNOWN" and result.reason == "checkpoint_response_unverifiable"
+    assert rig.server._head == rig.initial
+
+
+@pytest.mark.parametrize("mutation", ["missing", "bool_epoch", "bad_digest", "forged_stop", "extra"])
+def test_direct_authenticated_malformed_snapshot_denies(rig, mutation):
+    rig.fence()
+    snapshot = rig.stop_once()
+    rig.client.verify(snapshot)
+    body = json.loads(rig.transport.requests[-1])
+    body.pop("signature")
+    if mutation == "missing":
+        del body["snapshot"]["events"]
+    elif mutation == "extra":
+        body["snapshot"]["extra"] = 1
+    else:
+        event = body["snapshot"]["events"][-1]
+        if mutation == "bool_epoch":
+            event["stop_epoch"] = True
+        elif mutation == "bad_digest":
+            event["event_digest"] = "f" * 64
+        else:
+            event["command"]["signature"] = "0" * 128
+    assert_rejected(rig, cp._signed(body, cp.REQUEST_DOMAIN, rig.client_key.sign))
+    assert rig.server._head == rig.initial
+
+
+def test_signing_failure_after_advance_reconciles_exact_retry(rig):
+    snapshot = rig.fence()
+    original = rig.server._signer
+    def unavailable(payload):
+        raise OSError("private signing failure")
+    rig.server._signer = unavailable
+    result = rig.client.advance(snapshot, expected=rig.initial)
+    assert result.verdict == "UNKNOWN"
+    assert rig.server._head == cp.checkpoint_for(snapshot, "checkpoint", "offhost")
+    rig.server._signer = original
+    head = rig.server._head
+    retry = rig.client.advance(snapshot, expected=rig.initial)
+    assert retry.verdict == "VERIFIED" and retry.reason == "checkpoint_already_advanced"
+    assert rig.server._head == head
+
+
+def test_delayed_valid_response_is_historical_after_newer_stop(rig):
+    snapshot = rig.fence()
+    first = rig.client.advance(snapshot, expected=rig.initial)
+    stopped = rig.stop_once()
+    entered, release = threading.Event(), threading.Event()
+    class Delayed:
+        def exchange(self, raw):
+            response = rig.server.exchange(raw)
+            entered.set()
+            assert release.wait(5)
+            return response
+    results, errors = [], []
+    client = rig.make_client(transport=Delayed())
+    def run():
+        try:
+            results.append(client.verify(snapshot))
+        except BaseException as exc:
+            errors.append(exc)
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        newer = rig.client.advance(stopped, expected=first.checkpoint)
+        assert newer.verdict == "VERIFIED" and newer.checkpoint.stop_epoch == 1
+    finally:
+        release.set()
+        thread.join(6)
+    assert not thread.is_alive() and not errors
+    assert len(results) == 1 and results[0].verdict == "VERIFIED"
+    assert results[0].checkpoint.stop_epoch == 0
+    assert rig.client.verify(snapshot).verdict == "CONFLICT"
+    assert rig.client.verify(stopped).verdict == "VERIFIED"
