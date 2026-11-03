@@ -97,9 +97,23 @@ def check_file(path, text, doc, inactive):
             if uses and not uses.startswith("./") and not SHA_RE.match(uses):
                 bucket.append(f"{where}: action not pinned to a full commit SHA: {uses}")
             run = step.get("run", "")
+            if re.search(r"pip install[^\n]*PyYAML", run) and "PyYAML==" not in run:
+                errors.append(f"{where}: PyYAML must be pinned exactly")
             if strict and "${{" in run:
                 errors.append(f"{where}: expression inside run script (pass via env): {step.get('name')}")
         if self_hosted(job):
+            env_name = job.get("environment")
+            env_name = env_name.get("name") if isinstance(env_name, dict) else env_name
+            needs = job.get("needs") or []
+            needs = [needs] if isinstance(needs, str) else needs
+            gate_text = " ".join(s.get("run", "") for n in needs
+                                 for s in (doc["jobs"].get(n, {}).get("steps") or []))
+            if env_name and f"verify_lab01_environment.py {env_name}" not in gate_text:
+                errors.append(f"{where}: needs a gate job that runs verify_lab01_environment.py {env_name}")
+            if "pipeline_integrity.py check" not in gate_text:
+                errors.append(f"{where}: needs a gate job that runs pipeline_integrity.py check")
+            if "LAB01_ENV_VERIFIED_BY_FOUNDER" not in text:
+                errors.append(f"{where}: missing manual Environment attestation gate")
             if not lab01 or "timeout-minutes" not in job:
                 errors.append(f"{where}: self-hosted allowed only in lab01 workflows with timeouts")
             if not job.get("environment"):
@@ -126,6 +140,30 @@ def check_file(path, text, doc, inactive):
     return errors, warnings
 
 
+CODEOWNERS_REQUIRED = ("/.github/", "/deploy/lab01_ci/", "/deploy/stop_gate/",
+                       "/scripts/pipeline_security_check.py", "/scripts/pipeline_integrity.py",
+                       "/scripts/verify_lab01_evidence.py", "/scripts/verify_lab01_environment.py",
+                       "/tests/test_lab01_ci_pipeline.py", "/requirements-dev.txt")
+
+
+def check_codeowners():
+    """CODEOWNERS must cover control files. It only has effect with a review-requiring ruleset."""
+    path = os.path.join(ROOT, ".github/CODEOWNERS")
+    if not os.path.isfile(path):
+        return [".github/CODEOWNERS missing"]
+    owned = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            parts = line.split("#", 1)[0].split()
+            if len(parts) >= 2 and all(o.startswith("@") for o in parts[1:]):
+                owned[parts[0]] = parts[1:]
+    errors = [f"CODEOWNERS does not cover {p}" for p in CODEOWNERS_REQUIRED if p not in owned]
+    reqs = os.path.join(ROOT, "requirements-dev.txt")
+    if os.path.isfile(reqs) and not re.search(r"^PyYAML==\d", open(reqs).read(), re.M):
+        errors.append("requirements-dev.txt: PyYAML must be pinned with ==")
+    return errors
+
+
 def run():
     errors, warnings, seen = [], [], 0
     for pattern, inactive in ((ACTIVE_GLOB, False), (INACTIVE_GLOB, True)):
@@ -142,6 +180,7 @@ def run():
     for path in active_lab01:
         if os.path.basename(path) != "lab01-readonly-validate.yml":
             errors.append(f"{os.path.relpath(path, ROOT)}: only the read-only validator may be active")
+    errors += check_codeowners()
     if seen == 0:
         errors.append("no workflows found (fail closed)")
     return errors, warnings

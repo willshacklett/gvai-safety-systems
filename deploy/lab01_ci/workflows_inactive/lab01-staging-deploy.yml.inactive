@@ -31,7 +31,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
     env:
+      ENV_ATTESTED: ${{ vars.LAB01_ENV_VERIFIED_BY_FOUNDER }}
       ACTIVATED: ${{ vars.LAB01_STAGING_ACTIVATED }}
       INPUT_SHA: ${{ inputs.sha }}
       INPUT_CONFIRM: ${{ inputs.confirm }}
@@ -43,6 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$ACTIVATED" == "true" ]] || { echo "::error::stage 2 is not activated"; exit 1; }
+          [[ "$ENV_ATTESTED" == "true" ]] || { echo "::error::Environment protection not attested"; exit 1; }
           [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::owner only"; exit 1; }
           [[ "$REF" == "refs/heads/main" ]] || { echo "::error::main only"; exit 1; }
           [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be 40 hex"; exit 1; }
@@ -56,9 +59,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install policy-check dependency
-        run: python -m pip install "PyYAML>=6.0"
+        run: python -m pip install "PyYAML==6.0.2"
       - name: Pipeline security policy check
         run: python scripts/pipeline_security_check.py
+      - name: Control-file integrity manifest (tamper-evidence, not a boundary)
+        run: python scripts/pipeline_integrity.py check
+      - name: Verify lab01-staging Environment enforces approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/verify_lab01_environment.py lab01-staging
 
   stage:
     needs: gate

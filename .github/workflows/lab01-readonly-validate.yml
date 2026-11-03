@@ -5,7 +5,11 @@ name: lab01-readonly-validate
 # Safety properties (enforced by scripts/pipeline_security_check.py in CI):
 # - workflow_dispatch only; no PR/fork/workflow_run triggers. Dispatchable only once this file is on
 #   the default branch, i.e. after the founder merges it.
-# - Fails closed unless repo variable LAB01_VALIDATION_ENABLED == 'true' (default: unset = off).
+# - Fails closed unless repo variables LAB01_VALIDATION_ENABLED and LAB01_ENV_VERIFIED_BY_FOUNDER
+#   are both 'true' (default: unset = off). The second is a manual attestation that the
+#   Environment checklist in docs/lab01_secure_deployment_pipeline_v1.md was completed.
+# - The gate also tries to verify the Environment's reviewers/branch policy via the API (fail closed).
+#   A missing Environment is auto-created by GitHub WITHOUT approval rules, hence this check.
 # - The Lab-01 job needs the `lab01-readonly` Environment (required founder approval, branch policy).
 # - The Lab-01 job runs on an UNPRIVILEGED runner, has no GITHUB_TOKEN permissions, no secrets, does
 #   NOT check out repository code, and only executes the root-owned installed collector.
@@ -26,8 +30,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
     env:
       ENABLED: ${{ vars.LAB01_VALIDATION_ENABLED }}
+      ENV_ATTESTED: ${{ vars.LAB01_ENV_VERIFIED_BY_FOUNDER }}
       REF: ${{ github.ref }}
       ACTOR: ${{ github.actor }}
       OWNER: ${{ github.repository_owner }}
@@ -37,6 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$ENABLED" == "true" ]] || { echo "::error::LAB01_VALIDATION_ENABLED is not 'true'"; exit 1; }
+          [[ "$ENV_ATTESTED" == "true" ]] || { echo "::error::Environment protection not attested by founder"; exit 1; }
           [[ "$EVENT" == "workflow_dispatch" ]] || { echo "::error::unexpected event"; exit 1; }
           [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::only the repository owner may dispatch"; exit 1; }
           case "$REF" in
@@ -52,9 +59,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install policy-check dependency
-        run: python -m pip install "PyYAML>=6.0"
+        run: python -m pip install "PyYAML==6.0.2"
       - name: Pipeline security policy check
         run: python scripts/pipeline_security_check.py
+      - name: Control-file integrity manifest (tamper-evidence, not a boundary)
+        run: python scripts/pipeline_integrity.py check
+      - name: Verify lab01-readonly Environment enforces approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/verify_lab01_environment.py lab01-readonly
       - name: Audit record
         env:
           RUN_ID: ${{ github.run_id }}

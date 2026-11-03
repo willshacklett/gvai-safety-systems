@@ -43,7 +43,7 @@ if ! id "$CI_USER" >/dev/null 2>&1; then
   act useradd --system --user-group --home-dir "$CI_HOME" --no-create-home \
       --shell /usr/sbin/nologin "$CI_USER"
 fi
-act install -d -o "$CI_USER" -g "$CI_USER" -m 0700 "$CI_HOME" "$CI_HOME/runner" "$CI_HOME/tmp"
+act install -d -o "$CI_USER" -g "$CI_USER" -m 0700 "$CI_HOME" "$CI_HOME/runner"
 act install -d -o root -g root -m 0755 "$LIBEXEC"
 act install -o root -g root -m 0755 "$SRC_DIR/lab01_readonly_collect.py" "$LIBEXEC/lab01-readonly-collect"
 act install -o root -g root -m 0644 "$SRC_DIR/gvai-ci-runner.service" "$UNIT"

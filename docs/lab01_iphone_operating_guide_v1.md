@@ -5,8 +5,10 @@ You never need PowerShell or SSH for routine checks. Stage 1 is **read-only**.
 ## Run a read-only validation
 1. GitHub app → repo `gvai-safety-systems` → **Actions** → **lab01-readonly-validate** → **Run workflow**
    (branch `main`; if it is greyed out, the pipeline is not merged/enabled yet).
-2. The `gate` job runs. If it fails with *"LAB01_VALIDATION_ENABLED is not 'true'"*, that is the
-   safety switch working. Enable only when you intend to run (Settings → Variables).
+2. The `gate` job runs. If it fails with *"LAB01_VALIDATION_ENABLED is not 'true'"* or *"Environment
+   protection not attested"*, that is the safety switch working. Enable only when you intend to run
+   (Settings → Variables), and only after the Environment checklist (pipeline doc, section 8) is done.
+   An *Environment* error in the gate means approval rules are missing: **do not proceed**.
 3. You get a **"Review deployments"** prompt/notification for `lab01-readonly`. Check the
    actor is you, the branch/SHA is what you expect, then **Approve and deploy**. If anything is
    unexpected, tap **Reject**.

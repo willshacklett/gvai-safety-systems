@@ -18,6 +18,7 @@ REQUIRED_CHECKS = (
     "identity.no_new_privs", "host.ubuntu_2404", "network.unexpected_public_listeners",
     "protected.denied:/etc/gvai-stop-gate", "protected.denied:/var/lib/gvai-stop-gate",
     "protected.denied:/etc/gvai-backend", "protected.denied:/etc/gvai-operator",
+    "protected.denied:/run/gvai-stop-gate", "protected.denied:/run/gvai-protected-backend",
     "host.firewall_ufw_and_do_cloud_firewall", "host.apparmor_loaded_profiles_and_enforce_state",
 )
 STATUSES = {"pass", "fail", "not_collected"}

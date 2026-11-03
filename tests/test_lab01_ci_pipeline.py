@@ -25,6 +25,8 @@ def load(rel, name):
 policy = load("scripts/pipeline_security_check.py", "pipeline_policy")
 verify_mod = load("scripts/verify_lab01_evidence.py", "verify_evidence")
 collector = load("deploy/lab01_ci/host/lab01_readonly_collect.py", "collector")
+envcheck = load("scripts/verify_lab01_environment.py", "envcheck")
+integrity = load("scripts/pipeline_integrity.py", "integrity")
 
 ACTIVE = os.path.join(ROOT, ".github/workflows/lab01-readonly-validate.yml")
 INACTIVE_DIR = os.path.join(ROOT, "deploy/lab01_ci/workflows_inactive")
@@ -362,3 +364,198 @@ def test_no_pipeline_file_references_stop_authority_secrets_or_grants_root():
 def test_existing_stop_gate_staging_tool_still_forbids_authority_paths():
     stage = read(os.path.join(ROOT, "deploy/stop_gate/lab01_stage.py"))
     assert "FORBIDDEN_TARGETS" in stage and "gate_key.seed" in stage
+
+
+# ---------- socket directories, runner state, pinning ----------
+
+def test_socket_directories_are_protected_everywhere():
+    runtime_dirs = ("/run/gvai-stop-gate", "/run/gvai-protected-backend")
+    unit = unit_items(read(os.path.join(HOST_DIR, "gvai-ci-runner.service")))
+    for d in runtime_dirs:
+        assert d in collector.PROTECTED_PATHS and d in unit["InaccessiblePaths"].split()
+        assert f"protected.denied:{d}" in verify_mod.REQUIRED_CHECKS
+    # They match the staged STOP-gate socket units, so the list cannot silently drift.
+    for sock in ("gvai-stop-gate.socket", "gvai-protected-backend.socket"):
+        listens = re.findall(r"ListenStream=(/run/[^/]+)/", read(os.path.join(ROOT, "deploy/stop_gate", sock)))
+        assert listens and all(l in collector.PROTECTED_PATHS for l in listens)
+
+
+def test_collector_fails_when_socket_dir_is_accessible(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can access everything; covered by the identity failure")
+    d = tmp_path / "run/gvai-stop-gate"
+    d.mkdir(parents=True)
+    os.chmod(d, 0o755)
+    res = {c["id"]: c["status"] for c in collector.check_protected_paths(str(tmp_path))}
+    assert res["protected.denied:/run/gvai-stop-gate"] == "fail"
+    assert res["protected.denied:/run/gvai-protected-backend"] == "pass"
+
+
+def test_runner_state_is_ephemeral_and_not_updating():
+    text = read(os.path.join(HOST_DIR, "gvai-ci-runner.service"))
+    u = unit_items(text)
+    assert u["RuntimeDirectory"] == "gvai-ci" and u["RuntimeDirectoryPreserve"] == "no"
+    assert u["RuntimeDirectoryMode"] == "0700" and "Environment=TMPDIR=/run/gvai-ci/tmp" in text
+    assert "--ephemeral --disableupdate" in text
+    assert "/var/lib/gvai-ci/tmp" not in text + read(os.path.join(HOST_DIR, "bootstrap_lab01_ci.sh"))
+    docs = read(os.path.join(ROOT, "docs/lab01_secure_deployment_pipeline_v1.md"))
+    assert "--ephemeral --disableupdate" in docs and "rm -rf /var/lib/gvai-ci/runner/*" in docs
+
+
+def test_pyyaml_pinned_exactly_everywhere():
+    assert re.search(r"^PyYAML==\d+\.\d+\.\d+$", read(os.path.join(ROOT, "requirements-dev.txt")), re.M)
+    files = [ACTIVE] + [os.path.join(INACTIVE_DIR, n) for n in os.listdir(INACTIVE_DIR)]
+    for f in files:
+        for line in read(f).splitlines():
+            if "pip install" in line and "PyYAML" in line:
+                assert "PyYAML==" in line, (f, line)
+    errors = mutate(ACTIVE, lambda d: doc_job(d, "gate")["steps"].insert(
+        0, {"run": 'python -m pip install "PyYAML>=6.0"'}))
+    assert any("pinned exactly" in e for e in errors)
+
+
+# ---------- environment approval cannot silently fail open ----------
+
+def good_env():
+    return ({"name": "lab01-readonly", "can_admins_bypass": False,
+             "protection_rules": [{"type": "required_reviewers",
+                                   "reviewers": [{"type": "User", "reviewer": {"login": "willshacklett"}}]},
+                                  {"type": "branch_policy"}],
+             "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}},
+            {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]})
+
+
+def test_environment_evaluation_accepts_good_and_rejects_each_weakness():
+    env, pol = good_env()
+    assert envcheck.evaluate(env, pol) == []
+    auto_created = {"name": "lab01-readonly", "can_admins_bypass": True, "protection_rules": [],
+                    "deployment_branch_policy": None}
+    assert len(envcheck.evaluate(auto_created, {"branch_policies": []})) == 3
+    cases = {
+        "no reviewers": lambda e, p: e.__setitem__("protection_rules", []),
+        "empty reviewers": lambda e, p: e.__setitem__(
+            "protection_rules", [{"type": "required_reviewers", "reviewers": []}]),
+        "admin bypass": lambda e, p: e.__setitem__("can_admins_bypass", True),
+        "admin bypass missing": lambda e, p: e.pop("can_admins_bypass"),
+        "all branches": lambda e, p: e.__setitem__("deployment_branch_policy", None),
+        "protected-only": lambda e, p: e.__setitem__(
+            "deployment_branch_policy", {"protected_branches": True, "custom_branch_policies": False}),
+        "empty allow-list": lambda e, p: p.__setitem__("branch_policies", []),
+        "wildcard branch": lambda e, p: p["branch_policies"].append({"name": "*", "type": "branch"}),
+        "feature branch": lambda e, p: p["branch_policies"].append({"name": "feature/x", "type": "branch"}),
+    }
+    for label, fn in cases.items():
+        env, pol = good_env()
+        fn(env, pol)
+        assert envcheck.evaluate(env, pol), label
+    assert envcheck.evaluate({}, {}) and envcheck.evaluate("x", {})
+
+
+def test_environment_check_fails_closed_on_missing_token_api_error_and_404(monkeypatch, capsys):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    assert envcheck.main(["lab01-readonly"]) == 1
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_API_URL", "http://insecure.example")
+    assert envcheck.main(["lab01-readonly"]) == 1
+    monkeypatch.setenv("GITHUB_API_URL", "https://api.github.com")
+
+    def boom(url, token):
+        raise envcheck.urllib.error.HTTPError(url, 404, "nf", {}, None)
+    monkeypatch.setattr(envcheck, "fetch", boom)
+    assert envcheck.main(["lab01-readonly"]) == 1
+    assert "auto-created" in capsys.readouterr().out
+    monkeypatch.setattr(envcheck, "fetch", lambda url, token: good_env()[0] if "policies" not in url else good_env()[1])
+    assert envcheck.main(["lab01-readonly"]) == 0
+    assert envcheck.main([]) == 2
+    out = capsys.readouterr().out
+    assert "Bearer" not in out
+
+
+def test_every_lab01_workflow_gates_its_environment_and_requires_attestation():
+    files = [ACTIVE] + [os.path.join(INACTIVE_DIR, n) for n in os.listdir(INACTIVE_DIR)]
+    for f in files:
+        doc = yaml.safe_load(read(f))
+        text = read(f)
+        assert "LAB01_ENV_VERIFIED_BY_FOUNDER" in text, f
+        for jid, job in doc["jobs"].items():
+            if "self-hosted" in str(job["runs-on"]):
+                need = job["needs"]
+                gate = doc["jobs"][need if isinstance(need, str) else need[0]]
+                assert gate["permissions"].get("actions") == "read" and gate["permissions"]["contents"] == "read"
+                runs = " ".join(s.get("run", "") for s in gate["steps"])
+                assert f"verify_lab01_environment.py {job['environment']}" in runs, (f, jid)
+                assert "pipeline_integrity.py check" in runs
+    for fn, needle in ((lambda d: doc_job(d, "gate")["steps"].pop(
+            [i for i, s in enumerate(doc_job(d, "gate")["steps"])
+             if "verify_lab01_environment" in s.get("run", "")][0]), "verify_lab01_environment.py"),
+            (lambda d: doc_job(d, "gate")["steps"].pop(
+                [i for i, s in enumerate(doc_job(d, "gate")["steps"])
+                 if "pipeline_integrity" in s.get("run", "")][0]), "pipeline_integrity.py")):
+        assert any(needle in e for e in mutate(ACTIVE, fn)), needle
+
+
+# ---------- workflow integrity ----------
+
+def test_integrity_manifest_matches_and_detects_tampering(tmp_path, monkeypatch):
+    errors, digest = integrity.check()
+    assert errors == [] and len(digest) == 64
+    files = integrity.control_files()
+    for required in (".github/workflows/lab01-readonly-validate.yml", ".github/CODEOWNERS",
+                     "scripts/pipeline_security_check.py", "scripts/verify_lab01_environment.py",
+                     "deploy/lab01_ci/host/gvai-ci-runner.service",
+                     "deploy/stop_gate/gvai-stop-gate.service"):
+        assert required in files, required
+    assert integrity.MANIFEST not in files
+    # Tamper in a scratch copy of the repo subset.
+    for rel in files + [integrity.MANIFEST]:
+        dst = tmp_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(os.path.join(ROOT, rel), dst)
+    monkeypatch.setattr(integrity, "ROOT", str(tmp_path))
+    assert integrity.check()[0] == []
+    wf = tmp_path / ".github/workflows/lab01-readonly-validate.yml"
+    wf.write_text(wf.read_text() + "\n# tamper\n")
+    assert any("digest mismatch" in e for e in integrity.check()[0])
+    wf.write_text(read(ACTIVE))
+    (tmp_path / "scripts/pipeline_extra.py").write_text("x=1\n")
+    assert any("not in manifest" in e for e in integrity.check()[0])
+    os.remove(tmp_path / "scripts/pipeline_extra.py")
+    os.remove(tmp_path / ".github/CODEOWNERS")
+    assert integrity.check()[0]
+    os.remove(tmp_path / integrity.MANIFEST)
+    assert integrity.check()[0] == ["integrity manifest missing"]
+
+
+def test_integrity_cli_returns_nonzero_on_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(integrity, "ROOT", str(tmp_path))
+    assert integrity.main([]) == 1
+    assert integrity.main(["bogus"]) == 2
+
+
+def test_codeowners_covers_control_files_and_policy_enforces_it(tmp_path, monkeypatch):
+    assert policy.check_codeowners() == []
+    shutil.copytree(os.path.join(ROOT, ".github"), tmp_path / ".github")
+    shutil.copy(os.path.join(ROOT, "requirements-dev.txt"), tmp_path)
+    monkeypatch.setattr(policy, "ROOT", str(tmp_path))
+    assert policy.check_codeowners() == []
+    co = tmp_path / ".github/CODEOWNERS"
+    co.write_text(co.read_text().replace("/deploy/lab01_ci/", "/deploy/other/"))
+    assert any("/deploy/lab01_ci/" in e for e in policy.check_codeowners())
+    co.unlink()
+    assert policy.check_codeowners() == [".github/CODEOWNERS missing"]
+
+
+def test_docs_do_not_claim_ci_is_an_independent_boundary_and_list_required_settings():
+    doc = read(os.path.join(ROOT, "docs/lab01_secure_deployment_pipeline_v1.md"))
+    assert "Nothing in CI is an independent security boundary" in doc
+    for needle in ("Code Owners", "do not allow bypass", "second trusted account",
+                   "auto-created", "LAB01_ENV_VERIFIED_BY_FOUNDER", "administrators to bypass"):
+        assert needle in doc, needle
+
+
+def test_pipeline_security_workflow_has_no_path_filter_and_reports_control_changes():
+    doc = yaml.safe_load(read(os.path.join(ROOT, ".github/workflows/pipeline-security.yml")))
+    assert "paths" not in doc[True]["pull_request"]
+    steps = " ".join(s.get("run", "") for s in doc["jobs"]["policy"]["steps"])
+    assert "pipeline_integrity.py check" in steps and "CODEOWNER review" in steps

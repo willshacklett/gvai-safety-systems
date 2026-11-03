@@ -33,6 +33,8 @@ PROTECTED_PATHS = (
     "/etc/gvai-operator",
     "/var/lib/gvai-operator",
     "/etc/gvai-ingress",
+    "/run/gvai-stop-gate",
+    "/run/gvai-protected-backend",
 )
 FORBIDDEN_GROUPS = ("root", "sudo", "adm", "docker", "lxd", "disk", "shadow",
                     "gvai-gate", "gvai-backend", "gvai-operator", "gvai-api", "gvai-proxy")

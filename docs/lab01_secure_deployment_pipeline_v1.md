@@ -16,7 +16,7 @@ GitHub-hosted jobs ──► gate (fail closed) ──► [Environment approval]
 | Layer | Mechanism | Why |
 |---|---|---|
 | Trigger | `workflow_dispatch` only; owner-only actor check; allowed refs | no PR/fork/`workflow_run`/schedule path can reach Lab-01 |
-| Gate | GitHub-hosted job; repo variable `LAB01_VALIDATION_ENABLED=='true'`; policy check | off by default; fails closed |
+| Gate | GitHub-hosted job; variables `LAB01_VALIDATION_ENABLED` and `LAB01_ENV_VERIFIED_BY_FOUNDER` both `'true'`; policy + integrity checks; API check that the Environment has reviewers (section 2) | off by default; fails closed |
 | Approval | Environment `lab01-readonly` with required reviewer + branch policy | founder taps *Approve* on iPhone |
 | Execution | Self-hosted runner as user `gvai-ci`, unit hardened (`NoNewPrivileges`, empty capability set, `InaccessiblePaths` for every STOP/protected path and Docker socket) | runner cannot gain root, Docker, or STOP authority |
 | Code on host | **No `actions/checkout` on Lab-01.** Only the root-owned `/usr/local/libexec/gvai-ci/lab01-readonly-collect` runs | PR/branch code never executes on the host |
@@ -47,8 +47,9 @@ read-only validator may exist under `.github/workflows/lab01-*`.
   or is in `root/sudo/adm/docker/lxd/disk/shadow/gvai-*`.
 - The collector only asks the kernel (`os.access`) whether `gvai-ci` is **denied** on
   `/etc/gvai-stop-gate`, `/var/lib/gvai-stop-gate`, `/etc/gvai-backend`, `/etc/gvai-runtime`,
-  `/etc/gvai-operator`, `/var/lib/gvai-operator`, `/etc/gvai-ingress`; it never opens or lists them. If any is
-  accessible the run **fails**.
+  `/etc/gvai-operator`, `/var/lib/gvai-operator`, `/etc/gvai-ingress`, and the STOP-gate/backend socket
+  directories `/run/gvai-stop-gate` and `/run/gvai-protected-backend`; it never opens or lists them. If any is
+  accessible the run **fails**. The runner unit also lists all of them in `InaccessiblePaths`.
 - The runner unit has no `Requires/Wants/BindsTo/PartOf/After` on any `gvai-*` workload unit, and
   nothing in the pipeline starts, stops, or reconfigures STOP-gate units.
 - No workflow uses `secrets.*`; CI files containing STOP-authority path/key tokens fail the policy check.
@@ -94,15 +95,18 @@ Everything is doable from a browser/iPhone. Use the **DigitalOcean web Droplet C
 Access → *Launch Droplet Console*) instead of PowerShell/SSH. This is the only time a shell is needed.
 
 **A. GitHub (iPhone Safari → github.com → repo → Settings)**
-1. *Environments → New environment* `lab01-readonly`: *Required reviewers* = yourself; *Deployment
-   branches* = selected branches `main` and `integration/advisory-launch-base`; no secrets.
+1. *Environments → New environment* `lab01-readonly` (**do this before step 4; GitHub auto-creates a
+   missing environment with no approval rules**): *Required reviewers* = yourself; *Allow
+   administrators to bypass* = **off**; *Deployment branches* = selected branches, exactly `main` and
+   `integration/advisory-launch-base`; no secrets. Then complete the manual checklist in section 8.
 2. Settings → Actions → General: fork PR workflows = require approval for all outside collaborators;
    default `GITHUB_TOKEN` = read-only.
 3. *Settings → Actions → Runners → New self-hosted runner* (Linux x64): copy the one-time
    registration token **only into the console in step B** (it expires in ~1 hour; never paste it in
    chat, issues, or a file in the repo). Use label `gvai-lab01-readonly`, and `--ephemeral`.
-4. Only when ready to run stage 1: Settings → Variables → `LAB01_VALIDATION_ENABLED` = `true`.
-   Set it back to `false` (or delete it) to switch the pipeline off instantly.
+4. Only when ready to run stage 1 (and after section 8 is complete): Settings → Variables →
+   `LAB01_ENV_VERIFIED_BY_FOUNDER` = `true` **and** `LAB01_VALIDATION_ENABLED` = `true`.
+   Set `LAB01_VALIDATION_ENABLED` back to `false` (or delete it) to switch the pipeline off instantly.
 
 **B. Lab-01 (Droplet Console, as root) - touches only `gvai-ci`, `/var/lib/gvai-ci`, `/usr/local/libexec/gvai-ci`, one unit file**
 ```
@@ -111,12 +115,20 @@ cd /tmp/gvai-review && git rev-parse HEAD            # must equal the SHA in the
 bash deploy/lab01_ci/host/bootstrap_lab01_ci.sh      # dry run: read the output
 bash deploy/lab01_ci/host/bootstrap_lab01_ci.sh --execute
 # download the runner tarball from the GitHub "New self-hosted runner" page into /var/lib/gvai-ci/runner,
-# extract as gvai-ci, then (as gvai-ci):  ./config.sh --url <repo> --token <ONE-TIME> --labels gvai-lab01-readonly --ephemeral --unattended
+# extract as gvai-ci, then (as gvai-ci):
+#   ./config.sh --url <repo> --token <ONE-TIME> --labels gvai-lab01-readonly --ephemeral --disableupdate --unattended --work /run/gvai-ci/work
 systemctl enable --now gvai-ci-runner      # only when ready
 ```
 The `gvai-ci` runner has no sudo, no Docker, no `gvai-*` group membership, and an empty capability set.
-Do **not** add it to `sudo`, `docker`, `adm`, or any `gvai-*` group. Ephemeral runners deregister after
-each job, so restart the unit to run again (or script re-registration later in a reviewed change).
+Do **not** add it to `sudo`, `docker`, `adm`, or any `gvai-*` group.
+
+**Runner state.** The job workspace and temp live in `/run/gvai-ci` (a runtime directory deleted when the
+unit stops); `--disableupdate` stops the runner replacing its own binaries; `--ephemeral` makes it take
+one job and deregister, so `systemctl restart` alone will not run another job. After **every** job (and
+before re-registering) reset persistent state: `systemctl stop gvai-ci-runner; rm -rf /var/lib/gvai-ci/runner/*`,
+then extract a fresh tarball (verify its published SHA-256) and register with a new one-time token. The
+files the runner owns in `/var/lib/gvai-ci` are still writable by a malicious job while it runs; this is
+reduced (ephemeral, reset, unprivileged, no secrets on the host for it to steal), not eliminated.
 
 Remove with: `systemctl disable --now gvai-ci-runner; rm /etc/systemd/system/gvai-ci-runner.service; rm -r /usr/local/libexec/gvai-ci; userdel gvai-ci`
 (and delete the runner in GitHub Settings).
@@ -143,3 +155,58 @@ AppArmor/STOP-gate activation remain explicit founder decisions.
 
 Collector `not_collected` items (firewall, AppArmor enforce state, sshd config, STOP acceptance run)
 need root or provider APIs. A green stage-1 run is readiness evidence for the unprivileged view only.
+
+## 8. Environment approval: manual verification (required, workflow stays disabled until done)
+
+GitHub creates an Environment with **no rules** if a job names one that does not exist, so approval
+could silently fail open. The gate job calls `scripts/verify_lab01_environment.py`, which fails the run
+unless the Environment exists with ≥1 required reviewer, administrator bypass off, and a custom branch
+allow-list limited to `main` / `integration/advisory-launch-base`. That check is a tripwire, **not a
+guarantee**: it needs `actions: read` on `GITHUB_TOKEN` (untested against a real `lab01-readonly`),
+reads settings only at gate time, and cannot see later edits. So the founder must also verify by hand,
+then set `LAB01_ENV_VERIFIED_BY_FOUNDER=true` (the gate refuses without it):
+
+1. Settings → Environments → `lab01-readonly` exists and was created by you, not auto-created.
+2. *Required reviewers* lists you (and a second person if available); *Allow administrators to bypass*
+   is off; *Deployment branches* = selected branches, exactly the two above; no secrets/variables on it.
+3. Run a first test with the Lab-01 runner **offline**: the `collect` job must pause at "Review
+   deployments"; Reject it. A job that starts without prompting means the environment is wrong; stop.
+4. Re-verify after any change to environments, collaborators, or the repository owner.
+
+Note `prevent_self_review` cannot be satisfied by a single-owner repo; approval is a deliberate-action
+gate, not two-person control, unless a second reviewer exists.
+
+## 9. Workflow integrity and required repository settings
+
+The threat: whoever can change the workflow, the policy checker, or the runner scripts on an allowed
+branch can make the Lab-01 job run different commands as `gvai-ci`. **CI cannot defend against that,
+because the attacker edits CI too. Nothing in CI is an independent security boundary.** What exists:
+
+| Control | Type | Independent of the author? |
+|---|---|---|
+| `.github/CODEOWNERS` (control files owned by `@willshacklett`) | Review routing | Only if a ruleset requires code-owner review |
+| `scripts/pipeline_security_check.py` (policy) | Lint / regression guard | No |
+| `deploy/lab01_ci/INTEGRITY.sha256` + `scripts/pipeline_integrity.py` | Tamper-evidence; digest printed in the run summary to compare with what you reviewed | No |
+| `pipeline-security` job summary listing changed control files | Reviewer aid | No |
+| Branch ruleset / protection (below) | GitHub-enforced | **Yes** |
+| Environment reviewers + branch allow-list | GitHub-enforced | **Yes** (if you review the SHA) |
+| Unprivileged `gvai-ci` user, DAC on STOP paths | Host-enforced | **Yes** |
+
+**Required founder configuration (not done by this PR):** Settings → Rules → Rulesets (or branch
+protection) for `main` and `integration/**`:
+- require a pull request, with **review from Code Owners** and dismissal of stale approvals;
+- require status checks `policy` (pipeline-security) and `test` (integration-tests) to pass, branch up to date;
+- block force pushes and deletions; restrict who can push; **do not allow bypass** (an admin bypass voids this);
+- optionally require signed commits.
+
+Limits you must accept or fix: GitHub does not let an author approve their own PR, so with a single
+owner, code-owner review needs a **second trusted account** (recommended) or a ruleset bypass, which
+reduces this to trust in one account. A compromised owner account defeats every GitHub-side control;
+use a hardware key/passkey and review the exact SHA in "Review deployments" before approving.
+
+## 10. Dependency pinning
+
+`PyYAML==6.0.2` is pinned exactly in `requirements-dev.txt` and every workflow `pip install`; actions are
+pinned to full commit SHAs. Not done: pip hash-pinning (`--require-hashes`) and pinning of the
+pre-existing unpinned dependencies; GitHub-hosted jobs install from PyPI. The Lab-01 host runs no
+`pip`; the collector is stdlib-only and installed from a reviewed file whose SHA-256 the bootstrap prints.

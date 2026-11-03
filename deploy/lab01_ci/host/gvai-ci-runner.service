@@ -11,14 +11,20 @@ User=gvai-ci
 Group=gvai-ci
 SupplementaryGroups=
 WorkingDirectory=/var/lib/gvai-ci/runner
+ExecStartPre=/usr/bin/mkdir -p -m 0700 /run/gvai-ci/tmp /run/gvai-ci/work
 ExecStart=/var/lib/gvai-ci/runner/run.sh
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
 KillMode=control-group
 ReadWritePaths=/var/lib/gvai-ci
+# Job workspace and temp live in a per-start runtime directory that is deleted when the unit stops.
+# Configure the runner with: --work /run/gvai-ci/work --ephemeral --disableupdate
+RuntimeDirectory=gvai-ci
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
 # Belt and braces: even a permission mistake cannot expose STOP authority or a container runtime.
-InaccessiblePaths=/etc/gvai-stop-gate /var/lib/gvai-stop-gate /etc/gvai-backend /etc/gvai-runtime /etc/gvai-operator /var/lib/gvai-operator /etc/gvai-ingress /var/run/docker.sock /run/docker.sock /root /home
+InaccessiblePaths=/etc/gvai-stop-gate /var/lib/gvai-stop-gate /etc/gvai-backend /etc/gvai-runtime /etc/gvai-operator /var/lib/gvai-operator /etc/gvai-ingress /run/gvai-stop-gate /run/gvai-protected-backend /var/run/docker.sock /run/docker.sock /root /home
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -42,7 +48,8 @@ UMask=0077
 TasksMax=256
 MemoryMax=1G
 LimitNOFILE=4096
-Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/gvai-ci/tmp
+Environment=TMPDIR=/run/gvai-ci/tmp
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/run/gvai-ci/tmp
 Environment=RUNNER_ALLOW_RUNASROOT=0
 
 [Install]
