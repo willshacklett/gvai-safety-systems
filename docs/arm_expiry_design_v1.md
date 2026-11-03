@@ -191,6 +191,101 @@ PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
   tests/test_arm_v2_authorization.py tests/test_experimental_stop_latch.py
 ```
 
+## Stage C1: disconnected STOP-epoch authority contract
+
+Base: `c5a7d67dc2cfd4ed86345fe7302d203277e0447a`.
+[`stop_generation_authority.py`](../gvai/stop_generation_authority.py) introduces
+`AuthoritySnapshot`, hash-chained `AuthorityEvent`, `AuthorityOutcome`,
+`StopGenerationAuthority`, `AuthorityPersistence` and
+`IndependentCheckpointVerifier`. The only adapter is
+`InMemoryAuthorityAdapter`: lock-protected atomic conditional updates, **not
+durable, independently owned or rollback-resistant storage**.
+
+`stop_epoch` begins at zero and advances exactly once for each newly accepted,
+authenticated V1 STOP identity. It is distinct from V1 command sequence and the
+journal's OPEN/operating generation; no existing signing bytes or journal
+semantics change. Revision counts all events, including administrative writer
+fencing. Every event binds authority/latch identity, revision, epoch, terminal
+state, writer identity/fence, command identity/content and the previous digest.
+History is capped at 256 events; counters at `2**53`. Exhaustion denies rather
+than wrapping or automatically compacting/resetting.
+
+The authority authenticates existing V1 STOP envelopes using configured public
+keys. ARM and wrong-latch/forged commands are rejected. STOP command identity
+is derived from signed `key_id:sequence`; exact retries are recognized throughout
+retained history, and conflicting content under that identity is rejected.
+A different signed STOP sequence is a new command, not a retry. A successful
+retry reports the current head/epoch, not a separate historical receipt.
+No clock is used for STOP. Terminal state becomes true on the first STOP and
+never becomes false; there is no reopen operation.
+
+`fence_writer(writer_id, expected_fence)` is a **trusted administrative**
+conditional rotation, not an authenticated network endpoint. New writer
+sessions must obtain a fresh fence; old fences, conflicting writers and racing
+updates are rejected. Fencing tokens are ordering values, not bearer
+authentication. Workload-controlled construction, keyrings, state, checkpoint
+providers or administrative access defeat the contract. These must eventually
+live under an independent supervisor identity and credentials.
+
+The atomic linearization point is the adapter's successful compare-and-swap
+of the complete expected snapshot to one verified appended event. A conflict
+requires a new read/retry; it does not certify that STOP was recorded.
+No authority operation or outcome is permission to execute:
+`deny_execution` is always true. Evidence fields are distinct:
+`requested` means authenticated STOP received; `recorded` means the reference
+adapter recorded/verified it; `durable`, `backend_notified` and
+`workload_terminated` always remain false in C1.
+
+Crash and disconnection contract:
+
+- Before atomic update: there may be no evidence; requester outcome is unknown.
+- Lost reply after update: exact retry on a recovered adapter recognizes the
+  command without incrementing again.
+- Throwing/unknown update: instance becomes sticky `commit_uncertain`; ordinary
+  retries/inspection do not clear it. Partial/corrupt history denies recovery.
+- Failed reads/checkpoint verification: deny and fault the instance, with
+  stable public reason codes rather than leaking provider exception details.
+- New instances must verify full identity, chain, transition invariants and
+  any independent checkpoint before accepting updates. Existing instances also
+  reject histories that do not extend the longest history observed.
+- Complete coherent rollback is **undetectable to a fresh instance without
+  a surviving independent checkpoint**. A checkpoint simulator in tests does
+  not implement that independence. Persistence must provide linearizable reads,
+  not cached snapshots, and guarantee that recovery has no outstanding delayed
+  updates before claiming a previously uncertain command absent.
+
+The checkpoint interface verifies a head; it does not advance one or provide
+a two-system durable commit protocol. Future persistence must define durable
+intent, commit/fsync barriers, independent checkpoint advancement, fencing,
+snapshot restore and operator recovery before any durable receipt is exposed.
+C1 does not solve storage-stall STOP latency, automatic failover or split-brain
+across independent storage systems. Unavailable recording must never substitute
+for independent backend cancellation/watchdog escalation.
+
+[`test_stop_generation_authority.py`](../tests/test_stop_generation_authority.py)
+covers authenticated retries, identity conflicts, writer rotation, simultaneous
+conditional updates, lost replies, partial commits, corrupt/stale history,
+checkpoint failures, exhaustion and coherent-rollback limitations. All keys
+are ephemeral. Production latch/gate/backend, journal, deployment and
+existing Stage A/B1/B2 behavior are unchanged.
+
+C1 validation: **44 passed**. Combined relevant regressions: **483 passed,
+1 skipped, 30 subtests passed**, with no remaining failures or XPASSes.
+The skip is the pre-existing root-only journal foreign-owner test; the current
+runtime cannot create foreign-owned files. An initial exhaustion test failed
+because reducing a shared numeric limit also invalidated revision validation;
+separate epoch/fence saturation limits corrected that interaction, and the
+complete selection passed afterward.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
+/opt/conda/bin/python -m pytest -p no:cacheprovider -q -rs \
+  tests/test_stop_generation_authority.py tests/test_arm_v2_authorization.py \
+  tests/test_arm_v2_freshness.py tests/test_arm_v2_stop_race.py \
+  tests/test_experimental_stop_latch.py tests/test_stop_generation_journal.py
+```
+
 ## Evidence and test interpretation
 
 [`test_arm_expiry_prototype.py`](../tests/test_arm_expiry_prototype.py) uses the
