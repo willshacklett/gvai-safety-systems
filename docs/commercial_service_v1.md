@@ -24,6 +24,16 @@ to a `CustomerIdentityVerifier`, such as `CustomerApiKeys`. The service does not
 accept an authorizer decision or identity object from the caller, nor does it
 implement another authorization path.
 
+The [durable advisory pilot backend](commercial_advisory_backend_v1.md) can also
+supply `PostgreSQLAdvisoryUsage`. The service's accounting protocol now calls
+`reserve_evaluation(credential, resource_id, request_id, payload)` with canonical
+immutable bytes of the validated evaluation request. Custom injected accounting
+adapters must implement this method plus `complete`; there is no unbound fallback.
+The existing `CommercialUsage` implements the method by retaining its legacy
+offline reservation behavior. PostgreSQL binds these bytes into the existing V1
+request digest, returning `conflict` when a reused ID has a different payload or
+resource. Neither path supplies controlled-execution authority.
+
 The in-process call is:
 
 ```python
@@ -142,15 +152,17 @@ Phase 6G adds the local-only authenticated HTTP adapter documented in
 bounded request parsing, and exposes evaluation only. This does not make the
 service suitable for remote, shared-host, paid, or customer traffic.
 
-The system still depends on process-local API-key and usage stores, trusted
-injected clocks, and trusted server-side ownership data. In-memory restart or
-replica boundaries can bypass quotas and revoke history. Clock rollback can
-still affect API-key validity. Allowance and attempt-accounting policy require
-founder approval; the $99/month price implies no unit count. Before any remote,
-shared-host, paid, or customer use, separately review and implement:
+The default wiring still uses process-local API-key and in-memory usage stores.
+Phase 6H.1 adds an experimental opt-in local SQLite usage ledger, but does not
+change these defaults or make authentication, key revocation, or ownership
+durable. In-memory restart or replica boundaries can bypass quotas; stale
+SQLite restoration and multi-host operation are not protected. Clock rollback
+can still affect API-key validity. Allowance and attempt-accounting policy
+require founder approval; the $99/month price implies no unit count. Before any
+remote, shared-host, paid, or customer use, separately review and implement:
 
-- Durable identity, ownership, API-key, revocation, and quota backends with
-  current reads and explicit transaction/idempotency guarantees.
+- Production-grade durable identity, ownership, API-key, revocation, and quota
+  backends with current reads and explicit transaction/idempotency guarantees.
 - Independently trusted account and key-management flows; customer request
   claims must never set tenant, role, capability, billing, or resource ownership.
 - TLS, credential-header handling, strict body and request limits, rate limits,
@@ -162,6 +174,13 @@ shared-host, paid, or customer use, separately review and implement:
   revocation-race behavior, with adversarial and distributed-backend tests.
 - Separate founder/security review before any routes, paid access, product
   claims, or launch.
+
+Phase 6H.2 adds an offline recovery-state contract only. The current schema has
+no authoritative projection cursor or production trusted-head provider; a
+test-only matching head cannot authorize evaluation. The supported
+`CommercialUsage` facade returns `accounting_failure` for SQLite-backed
+operations, so local SQLite remains storage-test infrastructure rather than an
+evaluation backend.
 
 The service accepts exact built-in `dict` and `list` inputs only. It copies at
 most the schema maximum plus one item per snapshot attempt and rejects observed

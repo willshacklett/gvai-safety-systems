@@ -6,8 +6,11 @@ Phase 6G adds an offline, loopback-only HTTP adapter in
 `gvai/commercial_http.py`. It wraps the existing
 `CommercialEvaluationService`; it is not a public service, production
 authentication system, billing integration, safety certification, or launch
-approval. No credential-issuance, usage, health, debug, or supervisor endpoint
-is exposed.
+approval. By default no credential-issuance, usage, health, debug, or supervisor
+endpoint is exposed. The explicitly assembled
+[private staging application](private_staging_v1.md) opts into authenticated
+usage and redacted liveness/readiness GET routes on the same loopback listener.
+It still exposes no provisioning, key-management, debug or supervisor route.
 
 The adapter binds only to `127.0.0.1`. It has no outbound network client and
 never calls workers, tools, or supervisor STOP operations. `ALLOW`, `QUALIFY`,
@@ -16,7 +19,7 @@ states `advisory_only: true` and `enforcement_applied: false`.
 
 ## Local API
 
-The only route is:
+The default adapter's only route is:
 
 ```http
 POST /v1/evaluations HTTP/1.1
@@ -158,6 +161,7 @@ internal authorization reasons are not exposed:
 | 404 | `not_found` | Unknown path. |
 | 405 | `method_not_allowed` | Non-POST method; response includes `Allow: POST`. |
 | 409 | `replay` | Request ID was already reserved or completed; no evaluation is repeated. |
+| 409 | `conflict` | The durable advisory backend found a different payload or resource under the same request ID. |
 | 413 | `request_too_large` | Body exceeds 16 KiB. |
 | 414 | `request_too_large` | Request line exceeds the stdlib 64 KiB parser bound. |
 | 415 | `unsupported_media_type` | Unsupported content type or content encoding. |
@@ -191,10 +195,15 @@ mapped to an authorization error or represented as a stop/enforcement action.
 - The handler cap and request deadline bound this prototype's local connection
   work; they are not production-grade rate limiting, per-client fairness,
   resource isolation, or a defense against host-level denial of service.
-- Process-local API-key revocation and quota state are non-durable. Restart,
-  multiple processes, or multiple hosts do not share these controls. The
-  service's existing reservation/replay semantics still apply within the
-  configured service object.
+- Current test/local wiring uses process-local API-key revocation and in-memory
+  quota state. An explicitly supplied SQLite usage store can preserve quota and
+  replay state across local restarts, but it does not persist authentication,
+  revocation, or ownership and is not a multi-host backend. The service's
+  reservation/replay semantics apply only within the configured store; no
+  in-memory fallback is allowed when an opt-in durable store fails.
+- Phase 6H.2 keeps SQLite out of the supported evaluation path: the recovery
+  state is diagnostic only, and the `CommercialUsage` facade denies SQLite-
+  backed operations until an independent atomic reservation authority exists.
 - No HTTP route invokes execution workers or supervisor controls. Existing
   evaluation of caller-reported effects remains advisory and does not invoke
   supervisor STOP.

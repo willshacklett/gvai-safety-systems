@@ -1,0 +1,49 @@
+[Unit]
+Description=GVAI private advisory backend (no controlled execution)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=gvai-api
+Group=gvai-api
+WorkingDirectory=/opt/gvai/current
+LoadCredential=runtime.json:/etc/gvai-runtime/runtime.json
+ExecStart=/opt/gvai/venv/bin/python -m gvai.private_staging --config %d/runtime.json serve
+ExecStartPost=/opt/gvai/venv/bin/python /opt/gvai/current/deploy/private_https/check_ready.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=40
+TimeoutStopSec=20
+KillSignal=SIGTERM
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+InaccessiblePaths=/etc/gvai-operator /etc/gvai-ingress /var/lib/gvai-operator
+TasksMax=64
+MemoryMax=512M
+LimitNOFILE=256
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

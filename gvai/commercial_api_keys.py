@@ -24,6 +24,29 @@ _CREDENTIAL = re.compile(re.escape(API_KEY_PREFIX) + r"([0-9a-f]{32})_([0-9a-f]{
 _DOMAIN = b"gvai-customer-api-key-v1\x00"
 
 
+def api_key_credential_material(
+    credential: object, verifier_secret: object
+) -> tuple[str, bytes] | None:
+    """Return the key ID and stored verifier for a well-formed customer key."""
+    if (
+        type(verifier_secret) is not bytes
+        or len(verifier_secret) < 32
+        or type(credential) is not str
+        or len(credential) != len(API_KEY_PREFIX) + 97
+    ):
+        return None
+    parsed = _CREDENTIAL.fullmatch(credential)
+    if parsed is None:
+        return None
+    try:
+        verifier = hmac.new(
+            verifier_secret, _DOMAIN + credential.encode("ascii"), hashlib.sha256
+        ).digest()
+    except (UnicodeEncodeError, ValueError):
+        return None
+    return parsed[1], verifier
+
+
 class ApiKeyOperationError(ValueError):
     """A trusted key-management operation failed without exposing its inputs."""
 

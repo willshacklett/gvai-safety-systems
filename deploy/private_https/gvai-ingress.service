@@ -1,0 +1,50 @@
+[Unit]
+Description=GVAI private mTLS advisory ingress
+Requires=gvai-advisory.service
+After=gvai-advisory.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=gvai-proxy
+Group=gvai-proxy
+RuntimeDirectory=gvai-ingress
+RuntimeDirectoryMode=0700
+LogsDirectory=gvai-ingress
+LogsDirectoryMode=0700
+ExecStartPre=/usr/sbin/nginx -t -q -c /opt/gvai/current/deploy/private_https/nginx.conf
+ExecStart=/usr/sbin/nginx -c /opt/gvai/current/deploy/private_https/nginx.conf -g "daemon off;"
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=15
+TimeoutStopSec=10
+KillSignal=SIGQUIT
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+InaccessiblePaths=/etc/gvai-runtime /etc/gvai-operator /var/lib/gvai-operator
+TasksMax=16
+MemoryMax=128M
+LimitNOFILE=256
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
