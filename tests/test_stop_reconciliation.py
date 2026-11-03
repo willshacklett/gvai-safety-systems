@@ -347,6 +347,97 @@ def test_issued_permit_refused_immediately_once_notice_arrives(rig):
 
 # ---- concurrency
 
+def test_stalled_arm_outlives_client_wait_then_stop_reconciles(rig, monkeypatch):
+    rig.arm_to(1)
+    args = {"x": 1}
+    permit = rig.gate.authorize("echo", eg.args_digest(args))["token"]
+    arm = signed(rig.arm, "arm-k1", 2, "arm")
+    stop = rig.stop(3)
+    entered, release, stop_waiting = (
+        threading.Event(), threading.Event(), threading.Event()
+    )
+    results, errors = {}, []
+    real_fsync = os.fsync
+    latch_lock = rig.gate._latch._lock
+    anchor_tmp = os.path.join(rig.state, "anchor.json.tmp")
+
+    class ObservedLock:
+        def __enter__(self):
+            if threading.current_thread() is stop_thread:
+                stop_waiting.set()
+            latch_lock.acquire()
+            return self
+
+        def __exit__(self, *exc):
+            latch_lock.release()
+
+    def blocked_fsync(fd):
+        if threading.current_thread() is arm_thread and not entered.is_set():
+            descriptor = os.fstat(fd)
+            pathname = os.stat(anchor_tmp)
+            if (descriptor.st_dev, descriptor.st_ino) == (
+                pathname.st_dev, pathname.st_ino
+            ):
+                entered.set()
+                assert release.wait(5), "anchor fsync release watchdog expired"
+        return real_fsync(fd)
+
+    def run(name, call):
+        try:
+            results[name] = call()
+        except BaseException as exc:
+            errors.append(exc)
+
+    arm_thread = threading.Thread(
+        target=run,
+        args=("arm", lambda: rig.gate.handle({"type": "command", "envelope": arm})),
+        daemon=True,
+    )
+    stop_thread = threading.Thread(
+        target=run, args=("stop", lambda: rig.client.submit_stop(stop)), daemon=True,
+    )
+    monkeypatch.setattr(rig.gate._latch, "_lock", ObservedLock())
+    monkeypatch.setattr(eg.os, "fsync", blocked_fsync)
+    try:
+        arm_thread.start()
+        assert entered.wait(5), "ARM did not reach anchor fsync"
+        # Model abandonment only: there is no socket timeout or cancellation here.
+        assert "arm" not in results
+        stop_thread.start()
+        assert stop_waiting.wait(5), "authenticated STOP did not reach latch lock"
+        assert latch_lock.locked()
+        assert results == {}
+        assert rig.pushes == []
+        assert not errors
+
+        rig.mono[0] = 3.01
+        denied = rig.backend.execute("echo", args, permit)
+        assert denied == {"ok": False, "reason": "gate_notice_stale"}
+        assert rig.backend.executed == []
+        assert results == {}
+    finally:
+        release.set()
+        for thread in (arm_thread, stop_thread):
+            if thread.ident is not None:
+                thread.join(5)
+        assert not arm_thread.is_alive() and not stop_thread.is_alive()
+    assert not errors, errors
+    assert results["arm"]["ok"] is True
+    assert results["stop"]["outcome"] == "STOP_RECORDED"
+    assert results["stop"]["backend_halt"] == "UNVERIFIED"
+    assert rig.gate._latch.head.sequence == 3
+    assert rig.gate._latch.status == sl.STATUS_STOPPED
+    assert not rig.gate._latch.permit().allowed
+    assert rig.backend._allowed is False
+    reconciled = rig.client.reconcile_stop(stop)
+    assert reconciled["ok"] is True
+    assert reconciled["verdict"] == "EXACT_APPLIED"
+    assert reconciled["stop_recorded"] is True
+    assert reconciled["head_digest"] == reconciled["submitted_digest"]
+    assert reconciled["head_digest"] == sl.parse_command(stop).digest()
+    assert reconciled["backend_halt"] == "UNVERIFIED"
+
+
 def test_concurrent_identical_stop_retries_are_idempotent(rig):
     rig.arm_to(1)
     env = rig.stop(2)
