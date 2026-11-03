@@ -2,8 +2,9 @@
 
 Base: `fb225cb6bf7707638f620cf465ce988cf3439b5f`.
 This is a reconstruction, **not recovery of lost commit `6ca9252`**.
-The original reconstruction added only tests and this document. Stage A now
-adds isolated ARM V2 parsing and signature verification. No deployment, Lab-01
+The original reconstruction added only tests and this document. Stage A adds
+isolated ARM V2 parsing/signature verification; Stage B1 adds isolated freshness
+validation. No deployment, Lab-01
 change, commercial staging change, or independent enforcement is claimed.
 
 ## Completed Stage A: isolated verification
@@ -43,6 +44,86 @@ ephemeral Ed25519 keys, including malformed fields, raw JSON, tampering,
 authority binding, cross-domain rejection, policy compatibility and absence
 of activation side effects. These are ordinary passing tests, not xfails.
 The reconstructed prototype and its enforcement xfails remain unchanged.
+
+## Completed Stage B1: isolated freshness validation
+
+Base: `b2be87298abf469d6e528be2d112e332b170ffba`.
+[`arm_v2_freshness.py`](../gvai/arm_v2_freshness.py) adds a separate
+`ArmV2FreshnessValidator`. Stage A parsing, signing and verification are
+unchanged. Call `validate(authorization)` only after Stage A authentication
+for the expected latch and pinned authority. A structurally valid dataclass
+is **not proof of authentication**; the freshness component does not reverify
+signatures and must never be exposed as an authentication endpoint.
+
+The trusted supervisor must configure three providers at construction:
+`TrustedClock.read()`, `StopGenerationAuthority.read()` and
+`TrustedClockHighWater.observe(now)`. No request-side current-time or generation
+argument is accepted. The authorization's signed generation is compared to
+the authority's reading, never treated as the authority's current value.
+Interfaces alone cannot prove independence: a compromised caller controlling
+construction/providers can lie. Providers must be scoped to the expected
+latch/trust domain and protected outside the workload. Do not expose their
+selection to an untrusted requestor.
+
+Clock and generation samples must be exact integers in `[0, 2**53]`; bool,
+float (including integral floats), null, malformed values, NaN and infinity
+deny. Any generation mismatch, including a future generation, denies.
+Validity uses `not_before <= now < not_after`. Generation zero is genesis.
+The configured high-water provider must atomically observe and record a valid
+clock sample, return false on sticky rollback, and fail explicitly if its state
+is corrupt/unavailable. Valid samples advance the mark even if generation or
+window checks subsequently deny. Equal samples are accepted. Rollback denial
+is sticky in the validator as well as the reference provider.
+
+`VolatileClockHighWater(initial)` is a lock-protected, in-process reference.
+Its initial mark must come from trusted configuration; it is not inferred from
+the authorization. Reusing the object preserves history across validator
+instances, but losing/recreating it loses history. **There is no restart-
+persistent or independent anti-rollback enforcement implemented.** A durable
+independent provider is required before such a claim. Clock/generation provider
+errors and invalid samples deny that call; only detected rollback is sticky.
+
+Stable decision codes:
+
+| Verdict | Reason |
+| --- | --- |
+| ALLOW | `freshness_passed` |
+| DENY | `invalid_authorization` |
+| DENY | `clock_unavailable`, `invalid_clock`, `clock_rollback` |
+| DENY | `high_water_unavailable`, `invalid_high_water_result` |
+| DENY | `generation_unavailable`, `invalid_generation` |
+| DENY | `stop_generation_mismatch` |
+| DENY | `authorization_premature`, `authorization_expired` |
+
+Provider exceptions are converted to explicit denial codes without exposing
+exception details. Bad provider configuration raises `ValueError`. Inputs are
+snapshotted and structurally revalidated; subclass inputs are rejected.
+`ALLOW` means **sampled freshness checks passed only**, not execution permission.
+No identity consumption, revocation, sequence enforcement or replay prevention
+is added. Repeated authentic authorization may pass again within its window
+and unchanged generation. Independently sampled time and generation are not an
+atomic authority transaction: STOP can advance or time can expire after a read.
+This module cannot close admission/commit/permit races and must not be used
+as a cached execution capability.
+
+[`test_arm_v2_freshness.py`](../tests/test_arm_v2_freshness.py) uses ephemeral
+signing keys and injected providers to cover real Stage A authentication,
+freshness boundaries, invalid inputs, failures, sticky rollback, shared-mark
+history, restart loss and replay/authentication limitations. Production latch,
+external gate, persistence, STOP sequencing, network and timeouts are untouched.
+There is no workload shutdown enforcement or Lab-01/staging change.
+
+Focused validation: **86 Stage B1 tests passed**, **148 Stage A tests passed**
+and **58 existing latch tests passed**; combined **292 passed**, with no failures,
+skips, expected failures or XPASSes. Run with the existing test runtime:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
+/opt/conda/bin/python -m pytest -p no:cacheprovider -q \
+  tests/test_arm_v2_freshness.py tests/test_arm_v2_authorization.py \
+  tests/test_experimental_stop_latch.py
+```
 
 ## Evidence and test interpretation
 
