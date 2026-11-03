@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.0.0",
+  "status": "blocked",
+  "purpose": "Offline prerequisite inventory for PR #18; not provisioning, workload, policy-load, merge, publication, or deployment authorization.",
+  "source": {
+    "inspected_checkout": "cd3be2180c70f0d1c9cc9f4c826ab7022d3f0979",
+    "design_revision": "f5b1032dc09ad55f882469b3eff8178c12ab523e",
+    "design_path": "docs/ubuntu_bwrap_reproduction.md",
+    "design_blob": "35fb2888f0a5e83c3cf3733259fa11d9da12c167",
+    "candidate_revision": "cf3c7713475d4a9db1647845027615311ae85b7d",
+    "authoritative_experiment_revision": null,
+    "phase_v_checkpoint": "249d82131cea27e6d3f70fcba0ab00db2a61ce7a",
+    "phase_v_status": "unavailable",
+    "reconciliation": "Checkpoint absent from available local commit objects and unresolved by read-only GitHub commit lookup. This does not prove global nonexistence. The design and candidate revisions are references, not administrator-approved experiment inputs."
+  },
+  "target_claims": {
+    "classification": "operator_supplied_not_verified",
+    "ubuntu": "24.04.5",
+    "kernel": "6.8.0-147-generic",
+    "architecture": "x86_64",
+    "bubblewrap_reported_version": "0.9.0",
+    "apparmor_parser_reported_version": "4.0.1",
+    "python": "3.12",
+    "warning": "Values transcribed from the pinned design, not authenticated image/package pins or independently inspected host properties."
+  },
+  "requirements": [
+    {
+      "id": "base-image",
+      "required_evidence": "Exact image URL/release, architecture, image SHA-256, authenticated checksum/signature evidence, and boot configuration.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "hypervisor",
+      "required_evidence": "Exact QEMU/KVM version, executable/package hashes, CPU model, immutable base and disposable overlay identity; no shared-kernel substitute.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "kernel",
+      "required_evidence": "Exact kernel package/build, authenticated package checksums, matching source/config and Ubuntu patches; a release string alone is insufficient.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "bubblewrap",
+      "required_evidence": "Full distribution revision, binary/source-package hashes, build flags, patches, linked libc/libselinux versions and authenticated package provenance.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "apparmor",
+      "required_evidence": "Full package revision, parser configuration, ABI 4.0 includes, kernel feature tree and domain/stack support; parser version is not kernel LSM identity.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "reviewed-source",
+      "required_evidence": "Administrator-approved experiment revision and authenticated source artifact digest; reconcile Phase V or explicitly approve its exclusion. Reference revisions alone do not select an authoritative experiment.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "policy-provenance",
+      "required_evidence": "Reviewed policy source/compiled hashes, compiler/includes, actual loaded-policy provenance and enforcing labels; separately identify restored baseline and unchanged candidate, one-rule launcher diff and identical worker hashes.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "python-dependencies",
+      "required_evidence": "Exact interpreter/package hashes and complete resolved dependency wheel closure with authenticated origin; lower-bound requirements are not a lock.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "provisioning-inputs",
+      "required_evidence": "Root-owned input artifact hashes, signed Ubuntu archive snapshot/package closure, reviewed build commands/logs, read-only input-media identity and no-secret inventory.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "administrator-export",
+      "required_evidence": "Separately authorized, sanitized administrator export: complete audit serial groups and loss counters, UTC/monotonic bounds, boot identity, PID/start-time/label/exit/stderr correlation, installed binary/package/kernel identity and loaded-policy provenance. Do not retrieve from DigitalOcean.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "independent-ownership",
+      "required_evidence": "Independent administrator verifies root ownership/non-worker-writability of source, environment, policies, inputs and control state; workload identity UID/GID 1000 has no sudo, privilege groups, credentials or approval rights.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    },
+    {
+      "id": "emergency-recovery",
+      "required_evidence": "Independent administrator reviews authenticated serial-console access and an external stop/recovery procedure, with separately authorized recovery verification evidence. No unauthenticated console, embedded credentials, or unloading policy under workers.",
+      "status": "missing",
+      "verified_pin": null,
+      "evidence_sha256": null
+    }
+  ],
+  "review": {
+    "status": "pending_independent_human_review",
+    "approval_evidence": null,
+    "rule": "The governed agent cannot approve inputs, change enforcement authority, or clear readiness blockers. All missing pins/evidence and human review block readiness."
+  },
+  "boundaries": {
+    "provisioning_authorized": false,
+    "policy_loading_authorized": false,
+    "workloads_authorized": false,
+    "digitalocean_access_authorized": false,
+    "publication_authorized": false,
+    "host_acceptance_verified": false,
+    "independent_cancellation_verified": false,
+    "emergency_recovery_verified": false
+  },
+  "completion_rule": "This version only records a blocked inventory. Complete authenticated pins and sanitized administrator evidence, then obtain independent human review in a successor revision; never substitute guessed versions, latest, worker self-report, or passing mocks. A different package set is a mechanism experiment, not host-equivalent acceptance.",
+  "preservation_rule": "Never let the thing behind the switch own the switch. Preserve default-deny model egress, encrypted storage, authentication/authorization, human approvals, auditability, external shutdown, and Linux isolation. Do not weaken controls to fill prerequisites."
+}

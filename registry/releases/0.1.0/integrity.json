@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "release_version": "0.1.0",
+  "algorithm": "sha256",
+  "publisher_authenticated": false,
+  "warning": "Checksums alone do not authenticate the publisher. Obtain the expected manifest digest through an independently trusted review or release channel.",
+  "files": [
+    {
+      "path": "registry/schema/registry-1.0.0.schema.json",
+      "sha256": "8e17a1872a63e9e48a15bb5a66c63596fc0ff58511be7868e87d069e28d3bcf1"
+    },
+    {
+      "path": "registry/releases/0.1.0/registry.json",
+      "sha256": "8ed207e3645bdc7126873288a913d6a27cb8e14e167bd2224cb26efecef3952a"
+    }
+  ]
+}
