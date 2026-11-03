@@ -257,7 +257,8 @@ Crash and disconnection contract:
 The checkpoint interface verifies a head; it does not advance one or provide
 a two-system durable commit protocol. Future persistence must define durable
 intent, commit/fsync barriers, independent checkpoint advancement, fencing,
-snapshot restore and operator recovery before any durable receipt is exposed.
+snapshot restore and operator recovery before any independently anchored
+commitment receipt is exposed. C2 adds local-only durability evidence separately.
 C1 does not solve storage-stall STOP latency, automatic failover or split-brain
 across independent storage systems. Unavailable recording must never substitute
 for independent backend cancellation/watchdog escalation.
@@ -284,6 +285,152 @@ PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
   tests/test_stop_generation_authority.py tests/test_arm_v2_authorization.py \
   tests/test_arm_v2_freshness.py tests/test_arm_v2_stop_race.py \
   tests/test_experimental_stop_latch.py tests/test_stop_generation_journal.py
+```
+
+## Stage C2: disconnected local filesystem persistence
+
+Base: `c9ae35ba2bba76f7b7a9350d16b23837c115b638`.
+[`stop_authority_filesystem.py`](../gvai/stop_authority_filesystem.py) adds
+`FilesystemAuthorityAdapter` and strict bounded snapshot codecs. The approved
+C1 extensions expose shared `validate_authority_snapshot` and an optional
+`LocallyDurableAuthorityPersistence.locally_durable(snapshot)` evidence query.
+Existing C1 in-memory results remain nondurable; signed V1 commands, event
+digests, STOP epochs, fencing, and journal OPEN generations are unchanged.
+The earlier C1 description of always-false durability applies to its reference
+adapter, not the new local persistence evidence.
+
+### Provisioning and trust
+
+An operator explicitly provisions an empty, private, already durably created
+directory. Provisioning creates `authority.lock` and canonical `authority.json`
+with exclusive creation, file fsync and directory fsync; it never overwrites
+or automatically reinitializes missing state. Partial provisioning requires
+operator investigation. Existing records are validated with pinned identities
+and STOP public keys on every startup/read/update, including signature, full
+chain, terminal-state, epoch, revision and fencing transitions.
+
+The directory must be owned by the adapter UID with mode 0700; files must be
+regular, singly linked, owned by that UID with mode 0600. Opens use directory
+FD-relative paths and no-follow flags; FIFO/symlink/hardlink substitutions and
+lock-inode changes deny. A lifetime nonblocking exclusive `flock` permits one
+writer session; an in-process mutex serializes its load/CAS calls. A competing
+adapter fails startup rather than becoming a second writer. These protections
+assume a trusted local Linux filesystem and protected parent directories:
+they do **not** protect against same-UID/root/kernel compromise. Advisory locks
+do not constrain noncooperating writers. NFS/distributed filesystems are not
+supported.
+
+### Write ordering and linearization
+
+1. Verify current state against complete expected snapshot and observed history.
+2. Validate the one-event append; encode canonical UTF-8-compatible ASCII JSON,
+   exact fields, duplicate rejection and bounded history/file size (512 KiB).
+3. Exclusively create `authority.intent` containing the proposed snapshot;
+   write fully, fsync it, then fsync its directory entry.
+4. Exclusively create/write `authority.pending`; fsync that file.
+5. Atomically replace `authority.json` with pending; fsync the parent directory.
+6. Read back the exact replacement bytes.
+7. Remove intent; fsync the directory again.
+8. Revalidate/read back and synchronize current state before returning APPLIED.
+
+Read validation, file synchronization and exact readback retain the same
+descriptor. The pending-file descriptor stays open through atomic replacement,
+cleanup, final validation and acknowledgement. Before and after readback and
+at synchronization/replacement/acknowledgement boundaries, the authority pathname
+must identify that descriptor's device/inode; both must remain regular files
+with the required owner, mode and single link. Identical bytes on a substituted
+inode are not sufficient. Symlinks, FIFO/type changes, identity-check failures
+and inconsistent readback poison the adapter without affirmative evidence.
+
+Atomic replacement is the visibility linearization point. A confirmed local
+durable acknowledgement requires completed file/directory barriers and
+readback, not merely successful rename. Failures poison the adapter and fault
+the authority; no subsequent ordinary call clears an uncertain instance.
+Directory fsync errors or unsupported operations deny without a weaker fallback.
+No background writer survives an acknowledged adapter operation.
+
+The optional evidence query is bound to the exact synchronized snapshot,
+not a static `durable=True` capability flag. It is **historical evidence that
+the latest confirmed snapshot completed local synchronization**, not a proof
+that storage is currently unchanged. It deliberately does not reread disk.
+Unobserved external mutation cannot erase the historical synchronization event;
+a subsequent load detects corruption/substitution and invalidates evidence.
+New updates, observed faults and close invalidate prior evidence; stale,
+mismatched or wrong-type snapshot queries cannot receive affirmative evidence.
+Only a verified recorded STOP
+can produce `AuthorityOutcome.durable=True`. Exact retries after restart
+validate and resynchronize stored state before reporting this local evidence.
+`requested`, `recorded`, local `durable`, `backend_notified` and
+`workload_terminated` remain distinct. No backend integration or execution
+permission is introduced.
+
+### Recovery matrix
+
+| Failure/crash point | Restart behavior |
+| --- | --- |
+| Before intent exists | Verify earlier state; request outcome remains unknown until reconciliation/retry |
+| During intent/pending writes or synchronization | Leftover evidence denies startup; no automatic cleanup |
+| After replacement, before its directory synchronization | Intent remains; deny even if the new file looks valid |
+| Replacement synchronized, intent still present | Conservative incomplete-commit denial; no durable success exposed |
+| Intent removed, cleanup sync interrupted | If intent reappears, deny; otherwise validate/resync current state before local durable evidence |
+| Completed barriers, reply lost | Old instance faults; fresh session verifies state and recognizes exact retry |
+| Missing/truncated/corrupt/inconsistent history or failed readback | Deny startup/operation; never reset to genesis |
+
+An incomplete commit is not automatically resolved from the proposed intent:
+an independent operator recovery procedure is required. Before durable intent,
+there may be no STOP evidence on restart. Verifying older local state does not
+prove that no request was received, and `inspect` remains denial-shaped rather
+than permission. No automatic reopen or failover exists.
+
+### Stall and independence limits
+
+Filesystem calls and fsync can stall indefinitely. This adapter is synchronous,
+disconnected, and must **not** be called while holding application ARM/admission/
+permit locks. Its writer-session and state mutexes serialize persistence only;
+the existing disconnected C1 authority serializes its own STOP operations.
+No application authorization lock is connected here. Future integration must
+isolate persistence work and provide an independent STOP/watchdog escalation
+path. There is no bounded STOP latency or cancellation of blocked syscalls.
+
+**Local persistence is not independent coherent-rollback resistance.** A fresh
+instance can accept a valid old snapshot after all local evidence is restored;
+tests explicitly demonstrate this limitation. Stage C3 must implement
+independently retained checkpoints and their advancement/recovery protocol.
+Local `durable=True` must never be interpreted as that stronger guarantee.
+Trusted key custody, OS identity isolation, storage-controller/fsync behavior
+and parent-directory ownership require separate deployment evidence.
+
+Tests use temporary local files, injected syscall/phase failures and hard
+subprocess exits (public keys only), not physical power removal. These establish
+logic/process-restart behavior, **not real power-loss durability** or host
+shutdown guarantees. No live latch/gate/backend, deployment, Lab-01, staging,
+network protocol or timeout is changed.
+
+Descriptor/pathname hardening narrows substitution races but is not a security
+boundary against same-UID/root processes capable of mutating files or descriptors.
+Recreating a fresh adapter after a coherent valid-file substitution still cannot
+establish independent history. If detected failure leaves intent/pending files,
+restart continues to deny. After cleanup, restart still verifies/resynchronizes
+the remaining local state; it cannot retroactively infer an unrecorded attack.
+
+Verified hardened C2 selection: **76 passed**; together with C1, **120 passed**.
+Expanded C2/C1/ARM/latch/journal/prototype
+regressions: **586 passed, 1 skipped, 24 strict xfailed, 30 subtests passed**,
+with no failures or XPASSes. The skip is the existing root-only journal
+foreign-owner test; the 24 expected failures are unchanged prototype enforcement
+requirements. Existing C1 tests are unchanged and still pass.
+Added deterministic tests include identical-byte inode replacement, retained
+pending pathname substitution, descriptor rebinding, symlink/FIFO substitution,
+failed identity verification, and historical/mismatched/invalidated evidence.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
+/opt/conda/bin/python -m pytest -p no:cacheprovider -q -rs \
+  tests/test_stop_authority_filesystem.py tests/test_stop_generation_authority.py \
+  tests/test_arm_v2_authorization.py tests/test_arm_v2_freshness.py \
+  tests/test_arm_v2_stop_race.py tests/test_experimental_stop_latch.py \
+  tests/test_stop_generation_journal.py tests/test_arm_expiry_prototype.py
 ```
 
 ## Evidence and test interpretation

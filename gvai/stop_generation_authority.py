@@ -1,4 +1,4 @@
-"""Disconnected STOP-epoch contract. No durable adapter or workload enforcement."""
+"""Disconnected STOP-epoch contract; local durability is optional evidence."""
 
 from __future__ import annotations
 
@@ -141,12 +141,69 @@ class AuthorityPersistence(Protocol):
     ) -> str: ...
 
 
+class LocallyDurableAuthorityPersistence(AuthorityPersistence, Protocol):
+    """Optional exact-head local evidence, not independent rollback resistance.
+
+    True is historical evidence that this exact validated snapshot completed
+    local synchronization. It is not proof that storage is currently unchanged;
+    stale/mismatched heads and invalidated evidence must not receive True.
+    Exceptions or invalid results must not become durable acknowledgements.
+    """
+
+    def locally_durable(self, snapshot: AuthoritySnapshot) -> bool: ...
+
+
+def validate_authority_snapshot(
+    snapshot: AuthoritySnapshot, authority_id: str, latch_id: str,
+    keys: StopLatchKeyring, *, seen: tuple[AuthorityEvent, ...] = (),
+) -> None:
+    if type(snapshot) is not AuthoritySnapshot:
+        raise ValueError("corrupt_history")
+    snapshot = AuthoritySnapshot(snapshot.authority_id, snapshot.latch_id, snapshot.events)
+    if (snapshot.authority_id, snapshot.latch_id) != (authority_id, latch_id):
+        raise ValueError("authority_identity_mismatch")
+    epoch, fence, terminal, writer, digest = 0, 0, False, None, GENESIS_DIGEST
+    commands: set[str] = set()
+    for revision, event in enumerate(snapshot.events, 1):
+        AuthorityEvent(**vars(event))
+        if (
+            (event.authority_id, event.latch_id) != (authority_id, latch_id)
+            or event.revision != revision or event.previous_digest != digest
+            or event.event_digest != _event_digest(event)
+        ):
+            raise ValueError("corrupt_history")
+        if event.kind == "fence":
+            if (
+                event.writer_fence != fence + 1 or event.stop_epoch != epoch
+                or event.terminal != terminal
+            ):
+                raise ValueError("inconsistent_revision")
+            writer, fence = event.writer_id, event.writer_fence
+        else:
+            command = parse_command(command_envelope(event.command))
+            identity = f"{command.key_id}:{command.sequence}"
+            if (
+                command.command_type != COMMAND_STOP
+                or command.latch_id != latch_id or not keys.verify(command)
+                or event.command_id != identity or identity in commands
+                or event.writer_id != writer or event.writer_fence != fence
+                or event.stop_epoch != epoch + 1 or not event.terminal
+            ):
+                raise ValueError("inconsistent_stop_history")
+            epoch, terminal = event.stop_epoch, True
+            commands.add(identity)
+        digest = event.event_digest
+    if snapshot.events[:len(seen)] != seen:
+        raise ValueError("history_rollback_or_fork")
+
+
 class IndependentCheckpointVerifier(Protocol):
     """Future rollback-resistant, independent head verification.
 
     True must attest history against the current independent checkpoint, not a
-    caller-supplied/local copy. Persistence must advance that checkpoint before
-    claiming durability. This read-only interface does not implement advancement.
+    caller-supplied/local copy. Stage C3 must advance that checkpoint before
+    claiming independent rollback-resistant commitment. Local durability alone
+    does not make that claim. This interface does not implement advancement.
     """
 
     def verify(self, snapshot: AuthoritySnapshot) -> bool: ...
@@ -182,7 +239,7 @@ class InMemoryAuthorityAdapter:
 
 @dataclass(frozen=True)
 class AuthorityOutcome:
-    """Evidence, not execution permission. No backend or durability integration."""
+    """Evidence, not permission. Durable means local persistence evidence only."""
 
     reason: str
     requested: bool = False
@@ -222,47 +279,9 @@ class StopGenerationAuthority:
         self._lock = Lock()
 
     def _validate(self, snapshot: AuthoritySnapshot) -> None:
-        if type(snapshot) is not AuthoritySnapshot:
-            raise ValueError("corrupt_history")
-        snapshot = AuthoritySnapshot(snapshot.authority_id, snapshot.latch_id, snapshot.events)
-        if (snapshot.authority_id, snapshot.latch_id) != (self._authority_id, self._latch_id):
-            raise ValueError("authority_identity_mismatch")
-        epoch, fence, terminal, writer, digest = 0, 0, False, None, GENESIS_DIGEST
-        commands: set[str] = set()
-        for revision, event in enumerate(snapshot.events, 1):
-            # Revalidate even malformed objects constructed by test fault injection.
-            AuthorityEvent(**vars(event))
-            if (
-                (event.authority_id, event.latch_id) !=
-                (self._authority_id, self._latch_id)
-                or event.revision != revision or event.previous_digest != digest
-                or event.event_digest != _event_digest(event)
-            ):
-                raise ValueError("corrupt_history")
-            if event.kind == "fence":
-                if (
-                    event.writer_fence != fence + 1 or event.stop_epoch != epoch
-                    or event.terminal != terminal
-                ):
-                    raise ValueError("inconsistent_revision")
-                writer, fence = event.writer_id, event.writer_fence
-            else:
-                command = parse_command(command_envelope(event.command))
-                identity = f"{command.key_id}:{command.sequence}"
-                if (
-                    command.command_type != COMMAND_STOP
-                    or command.latch_id != self._latch_id
-                    or not self._keys.verify(command)
-                    or event.command_id != identity or identity in commands
-                    or event.writer_id != writer or event.writer_fence != fence
-                    or event.stop_epoch != epoch + 1 or not event.terminal
-                ):
-                    raise ValueError("inconsistent_stop_history")
-                epoch, terminal = event.stop_epoch, True
-                commands.add(identity)
-            digest = event.event_digest
-        if snapshot.events[:len(self._seen)] != self._seen:
-            raise ValueError("history_rollback_or_fork")
+        validate_authority_snapshot(
+            snapshot, self._authority_id, self._latch_id, self._keys, seen=self._seen,
+        )
 
     def _load(self) -> AuthoritySnapshot:
         snapshot = self._persistence.load()
@@ -277,11 +296,19 @@ class StopGenerationAuthority:
         self, reason: str, snapshot: AuthoritySnapshot | None = None,
         *, requested: bool = False, recorded: bool = False,
     ) -> AuthorityOutcome:
+        durable = False
+        if recorded and snapshot is not None:
+            evidence = getattr(self._persistence, "locally_durable", None)
+            if evidence is not None:
+                durable = evidence(snapshot)
+                if type(durable) is not bool:
+                    raise ValueError("invalid_durability_evidence")
         return AuthorityOutcome(
             reason, requested, recorded,
             snapshot.stop_epoch if snapshot else None,
             snapshot.revision if snapshot else None,
             snapshot.writer_fence if snapshot else None,
+            durable=durable,
         )
 
     def inspect(self) -> AuthorityOutcome:
