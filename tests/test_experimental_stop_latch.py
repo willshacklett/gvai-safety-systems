@@ -263,8 +263,27 @@ def test_verifier_and_service_layer_cannot_sign():
     attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     assert "Ed25519PrivateKey" not in names | attrs
     assert not {"sign", "generate", "private_bytes", "from_private_bytes"} & attrs
-    public = [n for n in dir(latch) if not n.startswith("_")]
-    assert not [n for n in public if "sign" in n.lower() and n != "signature"]
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("cryptography")
+        for alias in node.names
+    }
+    assert imported == {"InvalidSignature", "Ed25519PublicKey"}
+    assert not [
+        n for n in ast.walk(tree)
+        if isinstance(n, (ast.Import, ast.ImportFrom))
+        and (getattr(n, "module", None) or "").startswith("cryptography")
+        and getattr(n, "module", "") not in {
+            "cryptography.exceptions",
+            "cryptography.hazmat.primitives.asymmetric.ed25519",
+        }
+    ]
+    assert not [
+        n for n in dir(latch)
+        if not n.startswith("_") and "sign" in n.lower()
+        and n not in {"InvalidSignature"}
+    ]
     assert not hasattr(StopLatchVerifier, "reset")
     assert not hasattr(StopLatchVerifier, "clear")
     assert not hasattr(StopLatchVerifier, "unstop")
@@ -478,10 +497,15 @@ def test_file_rollback_before_stop_is_detected(supervisor, tmp_path):
     path = tmp_path / "latch.json"
     gate = StopLatchGate(make_verifier(supervisor), FileStopLatchSource(str(path)))
     first, second = supervisor.chain(2)
+    write(path, first.to_wire())
+    assert gate.require_run("reserve").allowed
     write(path, second.to_wire())
-    assert gate.require_run("reserve")
+    assert gate.require_run("reserve").allowed
     write(path, first.to_wire())
     assert gate.require_run("reserve").reason is LatchReason.ROLLED_BACK
+    assert gate.require_run("evaluate").reason is LatchReason.ROLLED_BACK
+    write(path, second.to_wire())
+    assert gate.require_run("evaluate").allowed
 
 
 def test_source_exception_and_invalid_operation_deny(supervisor):
@@ -676,11 +700,63 @@ def test_concurrent_rollback_and_advance_race_is_monotonic(supervisor):
         list(pool.map(verifier.check, shuffled))
     high = verifier._high_sequence
     assert 1 <= high <= 40
-    for record in records:
-        decision = verifier.check(record).reason
-        if record.sequence < high:
-            assert decision is LatchReason.ROLLED_BACK
-        elif record.sequence == high:
-            assert decision is LatchReason.RUN_LEASE_VALID
-        else:
-            assert decision is LatchReason.SEQUENCE_GAP
+
+    # Probe against fresh verifiers anchored at the observed mark so the
+    # assertions below cannot advance the state under test.
+    def anchored():
+        if high == 0:
+            return make_verifier(supervisor)
+        return make_verifier(supervisor, anchor=LatchAnchor(high, records[high - 1].record_hash()))
+
+    for record in records[: high - 1]:
+        assert anchored().check(record).reason is LatchReason.ROLLED_BACK
+    assert anchored().check(records[high - 1]).reason is LatchReason.RUN_LEASE_VALID
+    if high < 40:
+        assert anchored().check(records[high]).reason is LatchReason.RUN_LEASE_VALID
+    if high + 1 < 40:
+        assert anchored().check(records[high + 1]).reason is LatchReason.SEQUENCE_GAP
+    assert verifier._high_sequence == high
+
+
+def test_concurrent_in_order_submission_reaches_the_full_chain(supervisor):
+    records = supervisor.chain(40)
+    verifier = make_verifier(supervisor)
+    lock = threading.Lock()
+    cursor = [0]
+    results = []
+
+    def worker():
+        while True:
+            with lock:
+                if cursor[0] >= len(records):
+                    return
+                record = records[cursor[0]]
+                cursor[0] += 1
+                # Submission order is fixed under the lock; the verifier's own lock
+                # is what is being exercised by the concurrent callers.
+                results.append((record.sequence, verifier.check(record).allowed))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(ok for _, ok in results) and len(results) == 40
+    assert verifier._high_sequence == 40
+    assert verifier.check(records[0]).reason is LatchReason.ROLLED_BACK
+
+
+def test_concurrent_duplicate_next_link_has_exactly_one_advance(supervisor):
+    first, second = supervisor.chain(2)
+    verifier = make_verifier(supervisor)
+    assert verifier.check(first)
+    barrier = threading.Barrier(24)
+
+    def run(_):
+        barrier.wait()
+        return verifier.check(second).allowed
+
+    with ThreadPoolExecutor(24) as pool:
+        results = list(pool.map(run, range(24)))
+    assert all(results) and verifier._high_sequence == 2
+    assert verifier.check(first).reason is LatchReason.ROLLED_BACK
