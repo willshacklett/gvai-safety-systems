@@ -151,14 +151,13 @@ def rig():
 
 
 @pytest.fixture
-def gate(rig, monkeypatch):
+def gate(rig, monkeypatch, tmp_path):
     """Use the real GateCore constructor/logic, replacing all file state."""
     monkeypatch.setattr(eg, "FileTrustedAnchor", lambda path: rig.anchor)
     monkeypatch.setattr(eg, "FileCommandStore", lambda path: rig.store)
     monkeypatch.setattr(eg, "_load_or_create_gate_seed", lambda path: b"\x03" * 32)
-    # The existing worktree directory is not created or used for persistence.
     core = eg.GateCore(
-        "/workspaces/gvai-arm-expiry-v1",
+        str(tmp_path / "gate"),
         LATCH,
         {"stop-k1": public_bytes(rig.stop_key)},
         {"arm-k1": public_bytes(rig.arm_key)},
@@ -167,6 +166,12 @@ def gate(rig, monkeypatch):
     )
     rig.latch = core._latch
     return core
+
+
+def test_gate_fixture_uses_temporary_directory(gate, tmp_path):
+    state_dir = tmp_path / "gate"
+    assert state_dir.is_dir()
+    assert list(state_dir.iterdir()) == []
 
 
 @contextmanager
