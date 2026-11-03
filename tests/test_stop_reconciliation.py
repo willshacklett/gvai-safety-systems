@@ -379,3 +379,93 @@ def test_concurrent_conflicting_stops_only_one_wins(rig):
     assert sorted(results.values()) == ["accepted", "conflicting_command"]
     verdicts = {rig.client.reconcile_stop(e)["verdict"] for e in (a, b)}
     assert verdicts == {"EXACT_APPLIED", "CONFLICT"}
+
+
+# ---- review fixes (adversarial regressions)
+
+def _files(rig):
+    return [os.path.join(rig.state, n) for n in ("anchor.json", "store.json")]
+
+
+def test_coherent_rollback_to_older_stop_while_live_latch_is_armed_is_not_exact(rig):
+    rig.arm_to(1)
+    old = rig.stop(2)
+    assert rig.client.submit_stop(old)["outcome"] == "STOP_RECORDED"
+    saved = [open(f).read() for f in _files(rig)]
+    rig.gate._latch._status = sl.STATUS_ARMED  # live latch re-armed at a newer head
+    rig.gate._latch._head = sl.AnchorHead(3, "ab" * 32)
+    for f, data in zip(_files(rig), saved):
+        open(f, "w").write(data)  # attacker restores the older, valid, coherent pair
+    r = rig.client.reconcile_stop(old)
+    assert r["verdict"] == "UNVERIFIABLE" and r["ok"] is False and r["stop_recorded"] is False
+
+
+def test_coherent_rollback_below_live_head_is_unverifiable(rig):
+    rig.arm_to(1)
+    assert rig.client.submit_stop(rig.stop(2))["outcome"] == "STOP_RECORDED"
+    older = [open(f).read() for f in _files(rig)]
+    arm3 = signed(rig.arm, "arm-k1", 3, "arm")
+    assert rig.gate.handle({"type": "command", "envelope": arm3})["ok"]
+    stop4 = rig.stop(4)
+    assert rig.client.submit_stop(stop4)["outcome"] == "STOP_RECORDED"
+    for f, data in zip(_files(rig), older):
+        open(f, "w").write(data)
+    for env in (rig.stop(2), stop4):
+        r = rig.client.reconcile_stop(env)
+        assert r["verdict"] == "UNVERIFIABLE" and r["stop_recorded"] is False
+
+
+def test_store_substituted_with_other_valid_stop_is_unverifiable(rig):
+    rig.arm_to(1)
+    mine = rig.stop(2)
+    assert rig.client.submit_stop(mine)["outcome"] == "STOP_RECORDED"
+    other = rig.stop(2, "stop2", "stop-k2")
+    with open(os.path.join(rig.state, "store.json"), "w") as fh:
+        json.dump(other, fh)
+    for env in (mine, other):
+        r = rig.client.reconcile_stop(env)
+        assert r["verdict"] == "UNVERIFIABLE" and r["stop_recorded"] is False
+    assert rig.client.submit_stop(mine)["outcome"] != "ALREADY_APPLIED"
+
+
+@pytest.mark.parametrize("seq, expect_ok, verdict", [
+    (3, False, "NOT_APPLIED"), (2, True, "EXACT_APPLIED"), (1, False, "SUPERSEDED_UNVERIFIED"),
+])
+def test_ok_is_true_only_for_exact_applied(rig, seq, expect_ok, verdict):
+    rig.arm_to(1)
+    assert rig.client.submit_stop(rig.stop(2))["outcome"] == "STOP_RECORDED"
+    r = rig.client.reconcile_stop(rig.stop(seq))
+    assert (r["ok"], r["verdict"], r["stop_recorded"]) == (expect_ok, verdict, expect_ok)
+    conflict = rig.client.reconcile_stop(rig.stop(2, "stop2", "stop-k2"))
+    assert conflict["verdict"] == "CONFLICT" and conflict["ok"] is False
+
+
+def test_unauthenticated_rejections_reveal_no_latch_state(rig):
+    rig.arm_to(1)
+    attacker = Ed25519PrivateKey.generate()
+    for env in (signed(attacker, "stop-k1", 2, "stop"),
+                signed(attacker, "stop-k1", 2, "stop", latch_id="other-latch")):
+        r = rig.gate.reconcile(env)
+        assert r["reason"] == "authentication_failed"
+        assert r["status"] == "" and r["head_sequence"] is None
+
+
+def test_reconcile_concurrent_with_apply_only_sees_consistent_verdicts(rig):
+    rig.arm_to(1)
+    env = rig.stop(2)
+    seen, barrier = [], threading.Barrier(5)
+
+    def reader():
+        barrier.wait()
+        for _ in range(50):
+            seen.append(rig.gate.reconcile(env)["verdict"])
+
+    def writer():
+        barrier.wait()
+        rig.gate.handle({"type": "command", "envelope": env})
+
+    ts = [threading.Thread(target=reader) for _ in range(4)] + [threading.Thread(target=writer)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert set(seen) <= {"NOT_APPLIED", "EXACT_APPLIED"}
+    assert rig.gate.reconcile(env)["verdict"] == "EXACT_APPLIED"

@@ -232,13 +232,15 @@ class GateCore:
         }
 
     def reconcile(self, envelope: object) -> dict:
-        """Read-only STOP reconciliation; ``ok`` means the query was answered.
+        """Read-only STOP reconciliation. ``ok`` is true only for EXACT_APPLIED;
+        ``answered`` says whether the query could be evaluated at all.
 
         It never asserts that the backend halted: that needs independent evidence.
         """
         r = self._latch.reconcile(envelope)
         return {
-            "ok": r.answered,
+            "ok": r.answered and r.verdict == "EXACT_APPLIED",
+            "answered": r.answered,
             "verdict": r.verdict,
             "status": r.status,
             "reason": r.reason,

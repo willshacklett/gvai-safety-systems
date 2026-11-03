@@ -252,7 +252,8 @@ class ReconcileResult:
 
     ``verdict`` is EXACT_APPLIED only when the complete identity of the
     submitted command equals the durable record (anchor and store agree).
-    ``answered`` is False when the query itself could not be evaluated.
+    ``answered`` is False when the query itself could not be evaluated. Only
+    EXACT_APPLIED means a STOP is recorded; other answered verdicts are not.
     """
 
     answered: bool
@@ -401,16 +402,17 @@ class StopLatch:
             return ReconcileResult(False, "UNVERIFIABLE", self.status, "internal_error")
 
     def _reconcile(self, envelope: object) -> ReconcileResult:
+        # Authenticate first; nothing about the latch is revealed before that.
         try:
             command = parse_command(envelope)
         except ValueError as exc:
-            return ReconcileResult(False, "REJECTED", self.status, str(exc))
-        if command.latch_id != self._latch_id:
-            return ReconcileResult(False, "REJECTED", self.status, "wrong_latch")
-        if command.command_type != COMMAND_STOP:
-            return ReconcileResult(False, "REJECTED", self.status, "not_a_stop_command")
+            return ReconcileResult(False, "REJECTED", "", str(exc))
         if not self._keyring.verify(command):
-            return ReconcileResult(False, "REJECTED", self.status, "authentication_failed")
+            return ReconcileResult(False, "REJECTED", "", "authentication_failed")
+        if command.latch_id != self._latch_id:
+            return ReconcileResult(False, "REJECTED", "", "wrong_latch")
+        if command.command_type != COMMAND_STOP:
+            return ReconcileResult(False, "REJECTED", "", "not_a_stop_command")
         submitted = command.digest()
         with self._lock:
             status = self._status
@@ -434,10 +436,21 @@ class StopLatch:
                     )
                 except Exception:
                     durable_ok = False
-            if status == STATUS_FAULT or not durable_ok:
+            reason = None
+            if status == STATUS_FAULT:
+                reason = self._fault_reason or "latch_fault"
+            elif not durable_ok:
+                reason = "durable_record_inconsistent"
+            elif head != self._head:
+                # The files no longer match what this live latch applied (rollback or substitution).
+                reason = (
+                    "anchor_rollback_detected"
+                    if head.sequence < self._head.sequence
+                    else "anchor_diverged"
+                )
+            if reason is not None:
                 return ReconcileResult(
-                    False, "UNVERIFIABLE", status, self._fault_reason or "durable_record_inconsistent",
-                    head.sequence, head.digest, submitted,
+                    False, "UNVERIFIABLE", status, reason, head.sequence, head.digest, submitted
                 )
             if command.sequence > head.sequence:
                 verdict = "NOT_APPLIED"
@@ -445,6 +458,11 @@ class StopLatch:
                 verdict = "EXACT_APPLIED" if submitted == head.digest else "CONFLICT"
             else:
                 verdict = "SUPERSEDED_UNVERIFIED"
+            if verdict == "EXACT_APPLIED" and status != STATUS_STOPPED:
+                return ReconcileResult(
+                    False, "UNVERIFIABLE", status, "live_status_not_stopped",
+                    head.sequence, head.digest, submitted,
+                )
             return ReconcileResult(
                 True, verdict, status, verdict.lower(), head.sequence, head.digest, submitted
             )

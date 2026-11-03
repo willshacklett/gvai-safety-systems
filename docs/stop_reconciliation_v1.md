@@ -27,7 +27,9 @@ processing after the client gives up, so a STOP may be applied, not applied, or 
 3. **Backend execution actually halted**: never claimed. Every reply carries `backend_halt: "UNVERIFIED"`.
    `backend_notice: acknowledged` is only the backend's own reply to a message.
 
-`ok` on a `reconcile` reply means the query was answered, not that a STOP exists; use `verdict`/`stop_recorded`.
+On a `reconcile` reply `ok` is true only for `EXACT_APPLIED`; `answered` says whether the query was evaluated. Always use `verdict`. No verdict other than a later signed ARM is permission to resume execution.
+
+Review fixes: `reconcile` now also requires the durable record to equal the live latch head (rollback/substitution of anchor and store together gives `UNVERIFIABLE`, never `EXACT_APPLIED`), and authenticates before revealing any status.
 
 ## Residual execution window (documented, unchanged)
 
@@ -48,6 +50,6 @@ Code facts (`experimental_external_gate.py`): token TTL `DEFAULT_TOKEN_TTL = 5.0
 - Tests are in-process fault injection (`tests/test_stop_reconciliation.py`); real-socket timing and Linux I/O stalls are untested.
 - `EXACT_APPLIED` proves the gate's local files hold the command, not that the backend stopped, and local files cannot detect a coherent rollback of the anchor and store together.
 - Only the head is stored: an older STOP superseded by a newer command can never be proven, hence `SUPERSEDED_UNVERIFIED`.
-- Anyone holding a signed STOP envelope and control-socket access can query; the query changes nothing. The control socket is protected only by same-UID simulation here.
+- Anyone holding any valid signed STOP envelope (even a superseded one) and control-socket access can read the head sequence and digest indefinitely; the query changes nothing. Each `already_applied` retry re-sends a notice (synchronous push, up to 1.0 s, counter increments): a DoS-only concern, unchanged. The control socket is protected only by same-UID simulation here.
 - A crash before the anchor advance leaves no trace (`NOT_APPLIED` is "as of this read"; the command may still be in flight).
 - No journal integration, no restart-persistent generation semantics, no independent halt evidence.
