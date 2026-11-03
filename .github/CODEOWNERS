@@ -1,0 +1,14 @@
+# Code owners for files that can reach, configure, or weaken the Lab-01 pipeline and STOP authority.
+# CODEOWNERS only has effect when a branch ruleset / protection requires review from code owners
+# (see docs/lab01_secure_deployment_pipeline_v1.md). The file alone enforces nothing.
+/.github/                                  @willshacklett
+/deploy/lab01_ci/                          @willshacklett
+/deploy/stop_gate/                         @willshacklett
+/gvai/external_gate_service.py             @willshacklett
+/scripts/pipeline_security_check.py        @willshacklett
+/scripts/pipeline_integrity.py             @willshacklett
+/scripts/verify_lab01_evidence.py          @willshacklett
+/scripts/verify_lab01_environment.py       @willshacklett
+/tests/test_lab01_ci_pipeline.py           @willshacklett
+/docs/lab01_secure_deployment_pipeline_v1.md @willshacklett
+/requirements-dev.txt                      @willshacklett
