@@ -7,7 +7,6 @@ whether a backend process actually halted.
 """
 
 import json
-import inspect
 import os
 import threading
 from contextlib import contextmanager
@@ -75,6 +74,8 @@ class Rig:
             self.gate.gate_public_key, LATCH, {"echo": lambda a, c: a},
             notice_max_age=3.0, clock=lambda: self.now[0], monotonic=lambda: self.mono[0],
         )
+        # Test-only previously authorized session; production has no rearm API.
+        self.backend._recovery_inhibited = False
         self.pushes = []
         self.deliver_notices = True
         self.ack = True
@@ -443,16 +444,7 @@ def test_stalled_arm_outlives_client_wait_then_stop_reconciles(rig, monkeypatch)
     assert reconciled["backend_halt"] == "UNVERIFIED"
 
 
-# ---- I7A proposed independent backend veto (not implemented safety guarantees)
-
-class PendingBackendVetoContract(Exception):
-    """Only absence of the proposed production interface is expected."""
-
-
-pending_backend_veto = pytest.mark.xfail(
-    strict=True, raises=PendingBackendVetoContract,
-    reason="I7B pending: independently authenticated sticky backend STOP veto",
-)
+# ---- I7A independent backend veto contracts, implemented in I7B
 
 
 def veto_backend(rig, operations=None, *, existing_session=True):
@@ -462,9 +454,6 @@ def veto_backend(rig, operations=None, *, existing_session=True):
     test seam represents authorization established BEFORE the scenario begins;
     no test clears it after STOP or on a replacement backend.
     """
-    parameters = inspect.signature(eg.BackendCore).parameters
-    if "stop_keys" not in parameters:
-        raise PendingBackendVetoContract("BackendCore configured stop_keys missing")
     backend = eg.BackendCore(
         rig.gate.gate_public_key, LATCH,
         operations or {"echo": lambda a, c: a},
@@ -472,8 +461,6 @@ def veto_backend(rig, operations=None, *, existing_session=True):
         clock=lambda: rig.now[0], monotonic=lambda: rig.mono[0],
         notice_max_age=3.0,
     )
-    if not callable(getattr(backend, "submit_stop_veto", None)):
-        raise PendingBackendVetoContract("BackendCore.submit_stop_veto missing")
     assert backend._recovery_inhibited is True
     if existing_session:
         backend._recovery_inhibited = False
@@ -482,8 +469,8 @@ def veto_backend(rig, operations=None, *, existing_session=True):
 
 def assert_veto_ack(reply):
     assert reply == {
-        "ok": True, "execution_denied": True,
-        "durable_stop": "UNKNOWN", "process_termination": "UNVERIFIED",
+        "ok": True, "outcome": "VETO_DENIAL_CONFIRMED", "execution_denied": True,
+        "durable_stop_recording": "UNKNOWN", "backend_termination": "UNVERIFIED",
     }
 
 
@@ -551,7 +538,6 @@ def test_i7a_storage_stall_harness_preserves_current_behavior(rig, monkeypatch, 
     assert rig.gate._latch.status == sl.STATUS_ARMED
 
 
-@pending_backend_veto
 @pytest.mark.parametrize("boundary", ["read", "write", "fsync", "replace"])
 @pytest.mark.parametrize("ordering", ["arm_first", "stop_first", "simultaneous"])
 @pytest.mark.parametrize("stop_sequence", [2, 3])
@@ -634,7 +620,6 @@ def test_i7a_veto_denies_and_cancels_without_waiting_for_arm(
     assert len(results) == 1 and results[0]["ok"] is False
 
 
-@pending_backend_veto
 @pytest.mark.parametrize("case", [
     "wrong_target", "arm", "wrong_role", "bad_signature", "tampered", "unknown_key",
 ])
@@ -663,7 +648,6 @@ def test_i7a_invalid_stop_cannot_change_backend_authority(rig, case):
     assert backend.execute("echo", {}, token)["ok"]
 
 
-@pending_backend_veto
 @pytest.mark.parametrize("notice_kind", ["delayed", "higher_counter", "new_boot"])
 def test_i7a_notices_and_signed_stop_replay_never_clear_veto(rig, notice_kind):
     rig.arm_to(1)
@@ -684,7 +668,6 @@ def test_i7a_notices_and_signed_stop_replay_never_clear_veto(rig, notice_kind):
     assert rig.client.reconcile_stop(stop)["stop_recorded"] is False
 
 
-@pending_backend_veto
 def test_i7a_replacement_backend_denies_ordinary_armed_gate_notices(rig):
     rig.arm_to(1)
     backend = veto_backend(rig)
@@ -698,7 +681,6 @@ def test_i7a_replacement_backend_denies_ordinary_armed_gate_notices(rig):
     assert rig.gate._latch.status == sl.STATUS_ARMED
 
 
-@pending_backend_veto
 @pytest.mark.parametrize("delivery", ["lost_request", "lost_reply", "abandoned_caller"])
 def test_i7a_transport_ambiguity_is_not_veto_cancellation(rig, monkeypatch, delivery):
     rig.arm_to(1)
@@ -730,8 +712,8 @@ def test_i7a_transport_ambiguity_is_not_veto_cancellation(rig, monkeypatch, deli
                 if delivery == "lost_reply":
                     assert delivered.wait(5), "server waited for ARM persistence"
                 # The caller abandons without joining or cancelling the server.
-            caller_view = {"execution_denied": "UNKNOWN", "durable_stop": "UNKNOWN",
-                           "process_termination": "UNVERIFIED"}
+            caller_view = {"execution_denied": "UNKNOWN", "durable_stop_recording": "UNKNOWN",
+                           "backend_termination": "UNVERIFIED"}
             assert caller_view["execution_denied"] == "UNKNOWN"
             if delivery == "lost_request":
                 worker.start()  # Explicit retry; no automatic recovery implied.
@@ -751,6 +733,100 @@ def test_i7a_transport_ambiguity_is_not_veto_cancellation(rig, monkeypatch, deli
     assert backend.execute("echo", {}, fresh)["reason"] == "stop_veto"
     assert_veto_ack(backend.submit_stop_veto(stop))
     assert rig.client.reconcile_stop(stop)["verdict"] == "NOT_APPLIED"
+
+
+def test_i7b_veto_has_no_gate_or_filesystem_dependency(rig, monkeypatch):
+    rig.arm_to(1)
+    backend = veto_backend(rig)
+    assert backend.apply_notice(rig.gate.notice())["ok"]
+    token = rig.gate.authorize("echo", eg.args_digest({}))["token"]
+    stop = rig.stop(2)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("independent backend veto accessed gate or filesystem")
+
+    done, errors = threading.Event(), []
+
+    def submit():
+        try:
+            assert_veto_ack(backend.submit_stop_veto(stop))
+            assert backend.execute("echo", {}, token)["reason"] == "stop_veto"
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=submit, daemon=True)
+    with monkeypatch.context() as patch:
+        for name in ("open", "read", "write", "fsync", "replace", "stat"):
+            patch.setattr(os, name, forbidden)
+        patch.setattr(rig.gate._transaction, "load", forbidden)
+        patch.setattr(rig.gate._latch, "permit", forbidden)
+        try:
+            with rig.gate._latch._lock, rig.gate._lock:
+                worker.start()
+                assert done.wait(5), "veto waited for a gate-held lock"
+        finally:
+            worker.join(5)
+        assert not worker.is_alive()
+        assert not errors, errors
+
+
+@pytest.mark.parametrize("reply", [
+    COMM, {"ok": False, "reason": "internal_error"}, {"ok": True},
+    {"ok": False, "reason": "bad_reply"}, {},
+    {"ok": False, "reason": "malformed_request"},
+    {"ok": False, "reason": []},
+])
+def test_i7b_client_never_infers_nonapplication_from_uncertain_reply(monkeypatch, reply):
+    client = eg.BackendStopClient("unused-local-socket")
+    monkeypatch.setattr(client, "request", lambda message: reply)
+    assert client.submit_stop_veto({}) == {
+        "ok": False, "outcome": "UNKNOWN", "execution_denied": "UNKNOWN",
+        "durable_stop_recording": "UNKNOWN", "backend_termination": "UNVERIFIED",
+    }
+
+
+def test_i7b_ingress_separates_request_roles_and_ignores_supplied_keys(rig):
+    backend = veto_backend(rig)
+    stop = rig.stop(2)
+    message = {"type": "stop_veto", "envelope": stop}
+    for role in (eg.SERVICE_BACKEND_REQUESTS, eg.NOTICE_BACKEND_REQUESTS):
+        assert backend.handle(message, role)["reason"] == "request_not_permitted"
+    assert backend._stop_veto is False
+    for kind in ("notice", "execute", "audit", "command", "authorize"):
+        assert backend.handle({"type": kind}, eg.STOP_BACKEND_REQUESTS) == {
+            "ok": False, "reason": "request_not_permitted",
+        }
+    attacker = Ed25519PrivateKey.generate()
+    forged = signed(attacker, "stop-k1", 2, "stop")
+    reply = backend.handle(
+        {"type": "stop_veto", "envelope": forged,
+         "stop_keys": {"stop-k1": pub(attacker).hex()}},
+        eg.STOP_BACKEND_REQUESTS,
+    )
+    assert reply["reason"] == "authentication_failed"
+    assert backend._stop_veto is False
+    assert_veto_ack(backend.handle(message, eg.STOP_BACKEND_REQUESTS))
+
+
+@pytest.mark.parametrize("case", ["gate_key", "duplicate_key", "bad_id", "bad_key"])
+def test_i7b_rejects_unsafe_stop_key_configuration(rig, case):
+    keys = {
+        "gate_key": {"stop": rig.gate.gate_public_key},
+        "duplicate_key": {"a": pub(rig.stop1), "b": pub(rig.stop1)},
+        "bad_id": {"!": pub(rig.stop1)},
+        "bad_key": {"stop": b"short"},
+    }[case]
+    with pytest.raises(sl.StopLatchConfigError):
+        eg.BackendCore(rig.gate.gate_public_key, LATCH, {}, stop_keys=keys)
+
+
+def test_i7b_unconfigured_stop_authority_cannot_install_veto(rig):
+    backend = eg.BackendCore(rig.gate.gate_public_key, LATCH, {})
+    assert backend.submit_stop_veto(rig.stop(2))["reason"] == "authentication_failed"
+    assert backend._stop_veto is False
+    assert backend._recovery_inhibited is True
 
 
 def test_concurrent_identical_stop_retries_are_idempotent(rig):

@@ -7,7 +7,8 @@ Three roles, separated by *process* boundaries:
   tokens only while armed, and pushes signed head notices to the backend.
 * Backend: the protected resource. Executes an operation only with a valid
   gate token, cancels in-flight operations when the gate stops or goes silent,
-  and denies everything if it has not recently heard from the gate.
+  and supports an independently authenticated STOP-only veto. Startup remains
+  recovery-inhibited; there is no production rearm interface.
 * Commercial service: holds NO signing keys and NO anchor access. It can only
   ask the gate for permits and present them to the backend.
 
@@ -38,6 +39,7 @@ from gvai.experimental_stop_latch import (
     StopLatch,
     StopLatchKeyring,
 )
+from gvai import experimental_stop_latch as sl
 from gvai.gate_transaction import GateTransaction
 
 SEPARATION_MODEL = "simulated_process_separation_same_uid"
@@ -55,6 +57,7 @@ SERVICE_GATE_REQUESTS = frozenset({"authorize", "status"})
 CONTROL_GATE_REQUESTS = frozenset({"command", "status", "reconcile"})
 SERVICE_BACKEND_REQUESTS = frozenset({"execute", "audit"})
 NOTICE_BACKEND_REQUESTS = frozenset({"notice"})
+STOP_BACKEND_REQUESTS = frozenset({"stop_veto"})
 
 
 def _canon(obj: Mapping[str, object]) -> bytes:
@@ -322,8 +325,10 @@ class _ActiveOp:
 
 
 class BackendCore:
-    """Protected resource logic. Holds only the gate PUBLIC key.
+    """Protected resource logic. Holds gate and configured STOP PUBLIC keys only.
 
+    Starts recovery-inhibited, with no production rearm interface. Independently
+    configured STOP keys can install a sticky veto without gate or storage I/O.
     Operations are ``fn(args, cancel_event)``. They should poll ``cancel_event``;
     on STOP, gate silence, or epoch change the event is set. An operation that
     ignores it past ``interrupt_deadline`` is abandoned and ``hard_kill`` is
@@ -340,12 +345,26 @@ class BackendCore:
         monotonic: Callable[[], float] = time.monotonic,
         interrupt_deadline: float = DEFAULT_INTERRUPT_DEADLINE,
         hard_kill: Optional[Callable[[str], None]] = None,
+        *,
+        stop_keys: Optional[Mapping[str, bytes]] = None,
     ) -> None:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import (
             Ed25519PublicKey,
         )
 
         self._pub = Ed25519PublicKey.from_public_bytes(gate_public_key)
+        self._stop_keys: dict[str, Ed25519PublicKey] = {}
+        seen = {bytes(gate_public_key)}
+        for key_id, raw in (stop_keys or {}).items():
+            if type(key_id) is not str or not sl._IDENTIFIER.fullmatch(key_id):
+                raise sl.StopLatchConfigError("invalid_key_id")
+            if not isinstance(raw, (bytes, bytearray)) or len(raw) != 32:
+                raise sl.StopLatchConfigError("invalid_public_key")
+            raw = bytes(raw)
+            if raw in seen:
+                raise sl.StopLatchConfigError("public_key_reused_from_other_purpose")
+            seen.add(raw)
+            self._stop_keys[key_id] = Ed25519PublicKey.from_public_bytes(raw)
         self._key_id = "gate-" + hashlib.sha256(gate_public_key).hexdigest()[:16]
         self._latch_id = latch_id
         self._ops = dict(operations)
@@ -358,6 +377,8 @@ class BackendCore:
         self._lock = threading.Lock()
         self._seq = -1
         self._allowed = False
+        self._stop_veto = False
+        self._recovery_inhibited = True
         self._notice_at: Optional[float] = None
         self._boot_id: Optional[str] = None
         self._counter = -1
@@ -369,6 +390,35 @@ class BackendCore:
         self._started_at = clock()
         self._watchdog_stop = threading.Event()
         self.executed: list = []
+
+    def submit_stop_veto(self, envelope: object) -> dict:
+        """Authenticate denial only; never consult the gate or persistence."""
+        try:
+            command = sl.parse_command(envelope)
+        except ValueError as exc:
+            return {"ok": False, "reason": str(exc)}
+        if command.latch_id != self._latch_id:
+            return {"ok": False, "reason": "wrong_latch"}
+        if command.command_type != sl.COMMAND_STOP:
+            return {"ok": False, "reason": "not_a_stop_command"}
+        key = self._stop_keys.get(command.key_id)
+        if key is None:
+            return {"ok": False, "reason": "authentication_failed"}
+        from cryptography.exceptions import InvalidSignature
+
+        try:
+            key.verify(command.signature, command.signing_bytes())
+        except InvalidSignature:
+            return {"ok": False, "reason": "authentication_failed"}
+        with self._lock:
+            self._stop_veto = True
+            self._allowed = False
+            self._cancel_active_locked()
+        return {
+            "ok": True, "outcome": "VETO_DENIAL_CONFIRMED",
+            "execution_denied": True, "durable_stop_recording": "UNKNOWN",
+            "backend_termination": "UNVERIFIED",
+        }
 
     def _verify(self, domain: bytes, body: Mapping[str, object]) -> bool:
         sig = body.get("signature")
@@ -433,7 +483,10 @@ class BackendCore:
                     return {"ok": False, "reason": "notice_rollback"}
                 self._boot_id, self._counter = boot, ctr
                 self._seq = seq
-                self._allowed = notice["allowed"] and notice["status"] == "armed"
+                self._allowed = (
+                    not self._stop_veto and not self._recovery_inhibited
+                    and notice["allowed"] and notice["status"] == "armed"
+                )
                 self._notice_at = self._mono()
                 if self._allowed:
                     self._cancel_active_locked(keep_sequence=seq)
@@ -468,6 +521,10 @@ class BackendCore:
             ):
                 return {"ok": False, "reason": "token_malformed"}
             with self._lock:
+                if self._stop_veto:
+                    return {"ok": False, "reason": "stop_veto"}
+                if self._recovery_inhibited:
+                    return {"ok": False, "reason": "recovery_inhibited"}
                 now = self._clock()
                 if self._notice_at is None:
                     return {"ok": False, "reason": "no_gate_notice"}
@@ -497,7 +554,8 @@ class BackendCore:
 
         def work() -> None:
             try:
-                box["result"] = self._ops[operation](dict(args), active.cancel)
+                if not active.cancel.is_set():
+                    box["result"] = self._ops[operation](dict(args), active.cancel)
             except Exception:
                 box["error"] = True
             finally:
@@ -512,11 +570,11 @@ class BackendCore:
                     self.hard_kills.append(operation)
                     self._hard_kill("uncooperative_operation")
                     return {"ok": False, "reason": "interrupted_uncooperative"}
-            if active.cancel.is_set():
-                return {"ok": False, "reason": "interrupted_by_stop"}
-            if "error" in box:
-                return {"ok": False, "reason": "operation_failed"}
             with self._lock:
+                if active.cancel.is_set() or self._stop_veto or self._recovery_inhibited:
+                    return {"ok": False, "reason": "interrupted_by_stop"}
+                if "error" in box:
+                    return {"ok": False, "reason": "operation_failed"}
                 self.executed.append((operation, dict(args)))
             return {"ok": True, "result": box["result"]}
         finally:
@@ -532,6 +590,8 @@ class BackendCore:
             return {"ok": False, "reason": "request_not_permitted"}
         if kind == "notice":
             return self.apply_notice(message)
+        if kind == "stop_veto":
+            return self.submit_stop_veto(message.get("envelope"))
         if kind == "execute":
             return self.execute(message.get("operation"), message.get("args"), message.get("token"))
         if kind == "audit":
@@ -704,18 +764,22 @@ def backend_process_main(config: dict, ready_conn) -> None:
         notice_max_age=config.get("notice_max_age", DEFAULT_NOTICE_MAX_AGE),
         interrupt_deadline=config.get("interrupt_deadline", DEFAULT_INTERRUPT_DEADLINE),
         hard_kill=lambda reason: os._exit(70),
+        stop_keys={k: bytes.fromhex(v) for k, v in config.get("stop_keys", {}).items()},
     )
     core.start_watchdog()
     service = path_listener(config["socket"])
     notice = path_listener(config["notice_socket"])
+    listeners = [
+        (service, lambda m: core.handle(m, SERVICE_BACKEND_REQUESTS)),
+        (notice, lambda m: core.handle(m, NOTICE_BACKEND_REQUESTS)),
+    ]
+    if config.get("stop_socket"):
+        listeners.append((
+            path_listener(config["stop_socket"]),
+            lambda m: core.handle(m, STOP_BACKEND_REQUESTS),
+        ))
     ready_conn.send_bytes(b"{}")
-    serve_many(
-        [
-            (service, lambda m: core.handle(m, SERVICE_BACKEND_REQUESTS)),
-            (notice, lambda m: core.handle(m, NOTICE_BACKEND_REQUESTS)),
-        ],
-        threading.Event(),
-    )
+    serve_many(listeners, threading.Event())
 
 
 class _Client:
@@ -813,6 +877,36 @@ class BackendClient(_Client):
 
     def audit(self) -> dict:
         return self.request({"type": "audit"})
+
+
+class BackendStopClient(_Client):
+    """Local STOP-only ingress; lost replies never imply non-application."""
+
+    def submit_stop_veto(self, envelope: Mapping[str, object]) -> dict:
+        reply = self.request({"type": "stop_veto", "envelope": dict(envelope)})
+        confirmed = {
+            "ok": True, "outcome": "VETO_DENIAL_CONFIRMED",
+            "execution_denied": True, "durable_stop_recording": "UNKNOWN",
+            "backend_termination": "UNVERIFIED",
+        }
+        if reply == confirmed and reply.get("ok") is True and reply.get("execution_denied") is True:
+            return reply
+        reason = reply.get("reason")
+        if reply.get("ok") is False and type(reason) is str and reason in {
+            "malformed_envelope", "unsupported_version", "invalid_sequence",
+            "invalid_identifier", "invalid_signature_encoding",
+            "unknown_command_type", "wrong_latch", "not_a_stop_command",
+            "authentication_failed", "request_not_permitted",
+        }:
+            return {
+                "ok": False, "outcome": "REJECTED", "reason": reason,
+                "execution_denied": "UNKNOWN", "durable_stop_recording": "UNKNOWN",
+                "backend_termination": "UNVERIFIED",
+            }
+        return {
+            "ok": False, "outcome": "UNKNOWN", "execution_denied": "UNKNOWN",
+            "durable_stop_recording": "UNKNOWN", "backend_termination": "UNVERIFIED",
+        }
 
 
 class GatedService:

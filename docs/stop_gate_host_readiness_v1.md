@@ -3,6 +3,15 @@
 Status: experimental, **not deployed, not activated**. Builds on PR #43 (external gate).
 Principle: never let the thing behind the switch own the switch.
 
+## I7B safety restriction
+
+Backend startup is now unconditionally recovery-inhibited, with no production
+rearm interface. Ordinary gate ARM/notices do not make a new backend executable.
+The measurements below are historical/test-session evidence, not evidence that
+the current entrypoints can be activated for protected work. The separate
+STOP-only ingress is local-experiment-only and has no deployment configuration.
+See [I7B contract and limitations](external_stop_gate_v1.md#i7b-independent-backend-stop-only-veto).
+
 ## What this milestone adds
 
 - Split sockets by privilege: `service` (authorize/status or execute/audit), `control` (signed
@@ -33,8 +42,9 @@ written to JSON when `GVAI_LATENCY_REPORT` is set.
 
 DENY on: missing/invalid/replayed/rolled-back authority, gate unreachable, socket missing,
 timeouts, torn or garbage anchor/store files, wrong epoch, expired or pre-restart permit,
-and wrong socket for the request type. Gate loss cancels in-flight work. Gate restart resumes
-only from durable state; an anchor/store disagreement is a sticky `fault`.
+and wrong socket for the request type. Gate loss cancels in-flight work. Clean gate restart retains sequence history
+but begins STOPPED; an unresolved transaction or anchor/store disagreement
+faults. Backend restart remains recovery-inhibited regardless of gate state.
 
 ## What the Cloud harness proves, and what it does not
 

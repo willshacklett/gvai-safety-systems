@@ -299,7 +299,7 @@ def test_acceptance_detects_open_control_socket_and_group_membership(sim):
 
 
 @needs_root
-def test_api_user_end_to_end_gets_signature_but_never_the_credential(sim):
+def test_api_user_cannot_clear_backend_startup_inhibition(sim):
     script = (
         "import sys,json;sys.path[:0]=[%r,%r];"
         "from gvai import experimental_external_gate as eg;"
@@ -308,12 +308,14 @@ def test_api_user_end_to_end_gets_signature_but_never_the_credential(sim):
     ) % (sim._p("site"), sim._p("src"), sim.sock["gate_service"], sim.sock["backend_service"])
     r = sh("runuser", "-u", USERS["api"], "--", PY, "-c", script)
     out = json.loads(r.stdout)
-    assert out["ok"] and len(out["result"]["mac"]) == 32
+    assert out == {"ok": False, "reason": "recovery_inhibited"}
     assert sim.credential.hex() not in r.stdout and sim.credential not in r.stdout.encode()
     sim.stop(2)
     r = sh("runuser", "-u", USERS["api"], "--", PY, "-c", script)
     assert json.loads(r.stdout)["ok"] is False
     sim.arm(3)
+    r = sh("runuser", "-u", USERS["api"], "--", PY, "-c", script)
+    assert json.loads(r.stdout) == {"ok": False, "reason": "recovery_inhibited"}
 
 
 @needs_root

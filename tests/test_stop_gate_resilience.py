@@ -162,7 +162,7 @@ def test_gate_restart_with_rolled_back_state_stays_denied(dep):
     assert dep.control().status()["status"] == "fault"
 
 
-def test_backend_restart_refuses_pre_restart_permits(dep):
+def test_backend_restart_remains_recovery_inhibited(dep):
     dep.arm(1)
     used = dep.gate().authorize("echo", {"x": 1})["token"]
     assert dep.backend().execute("echo", {"x": 1}, used)["ok"]
@@ -171,10 +171,10 @@ def test_backend_restart_refuses_pre_restart_permits(dep):
     dep.start_backend()
     time.sleep(0.4)
     b = dep.backend()
-    assert b.execute("echo", {"x": 1}, used)["reason"] == "token_predates_backend_start"
-    assert b.execute("echo", {"x": 2}, unused)["reason"] == "token_predates_backend_start"
+    assert b.execute("echo", {"x": 1}, used)["reason"] == "recovery_inhibited"
+    assert b.execute("echo", {"x": 2}, unused)["reason"] == "recovery_inhibited"
     assert b.audit()["executed"] == []
-    assert dep.service().call("echo", {"x": 3})["ok"]
+    assert dep.service().call("echo", {"x": 3})["reason"] == "recovery_inhibited"
 
 
 def test_backend_without_notices_denies_after_restart(dep):
