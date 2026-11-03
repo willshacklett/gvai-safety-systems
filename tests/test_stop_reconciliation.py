@@ -7,8 +7,10 @@ whether a backend process actually halted.
 """
 
 import json
+import inspect
 import os
 import threading
+from contextlib import contextmanager
 
 import pytest
 
@@ -439,6 +441,316 @@ def test_stalled_arm_outlives_client_wait_then_stop_reconciles(rig, monkeypatch)
     assert reconciled["head_digest"] == reconciled["submitted_digest"]
     assert reconciled["head_digest"] == sl.parse_command(stop).digest()
     assert reconciled["backend_halt"] == "UNVERIFIED"
+
+
+# ---- I7A proposed independent backend veto (not implemented safety guarantees)
+
+class PendingBackendVetoContract(Exception):
+    """Only absence of the proposed production interface is expected."""
+
+
+pending_backend_veto = pytest.mark.xfail(
+    strict=True, raises=PendingBackendVetoContract,
+    reason="I7B pending: independently authenticated sticky backend STOP veto",
+)
+
+
+def veto_backend(rig, operations=None, *, existing_session=True):
+    """Model a previously admitted session, never provide a production rearm API.
+
+    Configured veto backends must start recovery-inhibited. Clearing this private
+    test seam represents authorization established BEFORE the scenario begins;
+    no test clears it after STOP or on a replacement backend.
+    """
+    parameters = inspect.signature(eg.BackendCore).parameters
+    if "stop_keys" not in parameters:
+        raise PendingBackendVetoContract("BackendCore configured stop_keys missing")
+    backend = eg.BackendCore(
+        rig.gate.gate_public_key, LATCH,
+        operations or {"echo": lambda a, c: a},
+        stop_keys={"stop-k1": pub(rig.stop1), "stop-k2": pub(rig.stop2)},
+        clock=lambda: rig.now[0], monotonic=lambda: rig.mono[0],
+        notice_max_age=3.0,
+    )
+    if not callable(getattr(backend, "submit_stop_veto", None)):
+        raise PendingBackendVetoContract("BackendCore.submit_stop_veto missing")
+    assert backend._recovery_inhibited is True
+    if existing_session:
+        backend._recovery_inhibited = False
+    return backend
+
+
+def assert_veto_ack(reply):
+    assert reply == {
+        "ok": True, "execution_denied": True,
+        "durable_stop": "UNKNOWN", "process_termination": "UNVERIFIED",
+    }
+
+
+@contextmanager
+def arm_storage_stall(rig, monkeypatch, boundary, start_barrier=None):
+    """Hold only the ARM worker; STOP must finish without releasing this event."""
+    entered, release, finished = (threading.Event() for _ in range(3))
+    result, errors = [], []
+    worker = None
+
+    def block():
+        entered.set()
+        assert release.wait(5), "ARM stall deadlock guard expired"
+
+    def run():
+        try:
+            if start_barrier is not None:
+                start_barrier.wait(5)
+            result.append(rig.gate.handle_command(signed(rig.arm, "arm-k1", 2, "arm")))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    transaction = rig.gate._transaction
+    if boundary == "read":
+        original = transaction._read
+
+        def read(*args, **kwargs):
+            if threading.current_thread() is worker and not entered.is_set():
+                block()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(transaction, "_read", read)
+    else:
+        name = {"write": "write", "fsync": "fsync", "replace": "replace"}[boundary]
+        original = getattr(os, name)
+
+        def syscall(*args, **kwargs):
+            if threading.current_thread() is worker and not entered.is_set():
+                block()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(os, name, syscall)
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(5), "ARM never reached selected persistence boundary"
+        assert not finished.is_set()
+        yield finished
+    finally:
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive(), "ARM did not leave released storage stall"
+        assert not errors, errors
+        assert len(result) == 1 and result[0]["ok"] is True
+
+
+@pytest.mark.parametrize("boundary", ["read", "write", "fsync", "replace"])
+def test_i7a_storage_stall_harness_preserves_current_behavior(rig, monkeypatch, boundary):
+    rig.arm_to(1)
+    with arm_storage_stall(rig, monkeypatch, boundary) as finished:
+        assert not finished.is_set()
+    assert rig.gate._latch.head.sequence == 2
+    assert rig.gate._latch.status == sl.STATUS_ARMED
+
+
+@pending_backend_veto
+@pytest.mark.parametrize("boundary", ["read", "write", "fsync", "replace"])
+@pytest.mark.parametrize("ordering", ["arm_first", "stop_first", "simultaneous"])
+@pytest.mark.parametrize("stop_sequence", [2, 3])
+def test_i7a_veto_denies_and_cancels_without_waiting_for_arm(
+    rig, monkeypatch, boundary, ordering, stop_sequence,
+):
+    rig.arm_to(1)
+    started, cancelled, finish_operation = (threading.Event() for _ in range(3))
+
+    def operation(args, cancel):
+        started.set()
+        assert cancel.wait(5), "independent STOP did not cancel active work"
+        cancelled.set()
+        assert finish_operation.wait(5), "operation cleanup guard expired"
+        return args
+
+    backend = veto_backend(rig, {"echo": operation})
+    assert backend.apply_notice(rig.gate.notice())["ok"]
+    token = rig.gate.authorize("echo", eg.args_digest({"x": 1}))["token"]
+    assert token["issued_at"] <= rig.now[0] < token["expires_at"]
+    results, errors = [], []
+
+    def execute():
+        try:
+            results.append(backend.execute("echo", {"x": 1}, token))
+        except BaseException as exc:
+            errors.append(exc)
+
+    active = threading.Thread(target=execute, daemon=True)
+    active.start()
+    stop = rig.stop(stop_sequence)
+    acked, go = threading.Event(), threading.Barrier(2)
+    replies = []
+
+    def stop_worker():
+        try:
+            if ordering == "simultaneous":
+                go.wait(5)
+            replies.append(backend.submit_stop_veto(stop))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            acked.set()
+
+    stopper = threading.Thread(target=stop_worker, daemon=True)
+    try:
+        assert started.wait(5), "baseline operation never started"
+        if ordering == "stop_first":
+            stopper.start()
+            assert acked.wait(5)
+        if ordering == "simultaneous":
+            stopper.start()
+        with arm_storage_stall(
+            rig, monkeypatch, boundary,
+            start_barrier=go if ordering == "simultaneous" else None,
+        ) as arm_finished:
+            if ordering == "arm_first":
+                stopper.start()
+            assert acked.wait(5), "STOP acknowledgement waited for ARM storage"
+            assert not errors, errors
+            assert_veto_ack(replies[0])
+            assert cancelled.wait(5), "cancellation waited for ARM storage"
+            assert not arm_finished.is_set()
+            assert backend.execute("echo", {"x": 1}, token) == {
+                "ok": False, "reason": "stop_veto",
+            }
+            assert rig.mono[0] == 0.0 and rig.now[0] == 1000.0
+        # A late ARM can commit locally but must never override the backend veto.
+        assert rig.gate._latch.status == sl.STATUS_ARMED
+        assert backend.apply_notice(rig.gate.notice())["ok"]
+        fresh = rig.gate.authorize("echo", eg.args_digest({"x": 2}))["token"]
+        assert backend.execute("echo", {"x": 2}, fresh)["reason"] == "stop_veto"
+    finally:
+        finish_operation.set()
+        active.join(5)
+        if stopper.ident is not None:
+            stopper.join(5)
+        assert not active.is_alive() and not stopper.is_alive()
+    assert not errors, errors
+    assert len(results) == 1 and results[0]["ok"] is False
+
+
+@pending_backend_veto
+@pytest.mark.parametrize("case", [
+    "wrong_target", "arm", "wrong_role", "bad_signature", "tampered", "unknown_key",
+])
+def test_i7a_invalid_stop_cannot_change_backend_authority(rig, case):
+    rig.arm_to(1)
+    backend = veto_backend(rig)
+    notice = rig.gate.notice()
+    assert backend.apply_notice(notice)["ok"]
+    stop = rig.stop(2)
+    if case == "wrong_target":
+        stop = signed(rig.stop1, "stop-k1", 2, "stop", "other-latch")
+    elif case == "arm":
+        stop = signed(rig.arm, "arm-k1", 2, "arm")
+    elif case == "wrong_role":
+        stop = signed(rig.arm, "arm-k1", 2, "stop")
+    elif case == "bad_signature":
+        stop["signature"] = "not-a-signature"
+    elif case == "tampered":
+        stop["sequence"] = 3
+    else:
+        stop = signed(rig.stop1, "unknown-key", 2, "stop")
+    before = (backend._allowed, backend._seq, backend._counter, backend._recovery_inhibited)
+    assert backend.submit_stop_veto(stop)["ok"] is False
+    assert (backend._allowed, backend._seq, backend._counter, backend._recovery_inhibited) == before
+    token = rig.gate.authorize("echo", eg.args_digest({}))["token"]
+    assert backend.execute("echo", {}, token)["ok"]
+
+
+@pending_backend_veto
+@pytest.mark.parametrize("notice_kind", ["delayed", "higher_counter", "new_boot"])
+def test_i7a_notices_and_signed_stop_replay_never_clear_veto(rig, notice_kind):
+    rig.arm_to(1)
+    rig.arm_to(2)
+    backend = veto_backend(rig)
+    assert backend.apply_notice(rig.gate.notice())["ok"]
+    delayed = rig.gate.notice()  # Valid, previously unseen, still fresh.
+    stop = rig.stop(1)  # Historical STOP is deliberately deny-only, not recorded.
+    assert_veto_ack(backend.submit_stop_veto(stop))
+    assert_veto_ack(backend.submit_stop_veto(stop))
+    if notice_kind == "new_boot":
+        rig.gate._boot_id = "another-gate-boot"
+    notice = delayed if notice_kind == "delayed" else rig.gate.notice()
+    backend.apply_notice(notice)  # Rejection or receipt must both preserve denial.
+    token = rig.gate.authorize("echo", eg.args_digest({}))["token"]
+    assert backend.execute("echo", {}, token)["reason"] == "stop_veto"
+    assert rig.gate._latch.status == sl.STATUS_ARMED
+    assert rig.client.reconcile_stop(stop)["stop_recorded"] is False
+
+
+@pending_backend_veto
+def test_i7a_replacement_backend_denies_ordinary_armed_gate_notices(rig):
+    rig.arm_to(1)
+    backend = veto_backend(rig)
+    assert backend.apply_notice(rig.gate.notice())["ok"]
+    assert_veto_ack(backend.submit_stop_veto(rig.stop(2)))
+    replacement = veto_backend(rig, existing_session=False)
+    replacement.apply_notice(rig.gate.notice())
+    token = rig.gate.authorize("echo", eg.args_digest({}))["token"]
+    assert replacement.execute("echo", {}, token)["reason"] == "recovery_inhibited"
+    assert replacement._recovery_inhibited is True
+    assert rig.gate._latch.status == sl.STATUS_ARMED
+
+
+@pending_backend_veto
+@pytest.mark.parametrize("delivery", ["lost_request", "lost_reply", "abandoned_caller"])
+def test_i7a_transport_ambiguity_is_not_veto_cancellation(rig, monkeypatch, delivery):
+    rig.arm_to(1)
+    backend = veto_backend(rig)
+    assert backend.apply_notice(rig.gate.notice())["ok"]
+    stop = rig.stop(3)
+    token = rig.gate.authorize("echo", eg.args_digest({}))["token"]
+    delivered, response_release = threading.Event(), threading.Event()
+    errors, replies = [], []
+
+    def server():
+        try:
+            replies.append(backend.submit_stop_veto(stop))
+            delivered.set()
+            assert response_release.wait(5), "response-loss model cleanup expired"
+        except BaseException as exc:
+            errors.append(exc)
+            delivered.set()
+
+    worker = threading.Thread(target=server, daemon=True)
+    with arm_storage_stall(rig, monkeypatch, "fsync") as arm_finished:
+        try:
+            # Logical loss/abandonment only; no claim about real socket timeouts.
+            if delivery == "lost_request":
+                assert backend.execute("echo", {}, token)["ok"]
+                token = None
+            else:
+                worker.start()
+                if delivery == "lost_reply":
+                    assert delivered.wait(5), "server waited for ARM persistence"
+                # The caller abandons without joining or cancelling the server.
+            caller_view = {"execution_denied": "UNKNOWN", "durable_stop": "UNKNOWN",
+                           "process_termination": "UNVERIFIED"}
+            assert caller_view["execution_denied"] == "UNKNOWN"
+            if delivery == "lost_request":
+                worker.start()  # Explicit retry; no automatic recovery implied.
+            assert delivered.wait(5), "server waited for ARM persistence"
+            assert not errors, errors
+            assert_veto_ack(replies[0])
+            assert not arm_finished.is_set()
+            if token is not None:
+                assert backend.execute("echo", {}, token)["reason"] == "stop_veto"
+        finally:
+            response_release.set()
+            if worker.ident is not None:
+                worker.join(5)
+            assert not worker.is_alive()
+    assert not errors, errors
+    fresh = rig.gate.authorize("echo", eg.args_digest({}))["token"]
+    assert backend.execute("echo", {}, fresh)["reason"] == "stop_veto"
+    assert_veto_ack(backend.submit_stop_veto(stop))
+    assert rig.client.reconcile_stop(stop)["verdict"] == "NOT_APPLIED"
 
 
 def test_concurrent_identical_stop_retries_are_idempotent(rig):
