@@ -1,0 +1,51 @@
+name: lab01-rollback
+
+# INACTIVE TEMPLATE - not loaded by GitHub (outside .github/workflows). See lab01-staging-deploy
+# for the activation rules. Scope when activated: lab01_stage.py rollback + backup-verify only.
+# Never stops/starts services, never deletes users, never touches STOP-authority paths.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type ROLLBACK to confirm"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: lab01-host-access
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      ACTIVATED: ${{ vars.LAB01_ROLLBACK_ACTIVATED }}
+      INPUT_CONFIRM: ${{ inputs.confirm }}
+      ACTOR: ${{ github.actor }}
+      OWNER: ${{ github.repository_owner }}
+      REF: ${{ github.ref }}
+    steps:
+      - name: Fail closed
+        run: |
+          set -euo pipefail
+          [[ "$ACTIVATED" == "true" ]] || { echo "::error::rollback workflow is not activated"; exit 1; }
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::owner only"; exit 1; }
+          [[ "$REF" == "refs/heads/main" ]] || { echo "::error::main only"; exit 1; }
+          [[ "$INPUT_CONFIRM" == "ROLLBACK" ]] || { echo "::error::confirmation mismatch"; exit 1; }
+
+  rollback:
+    needs: gate
+    runs-on: [self-hosted, linux, x64, gvai-lab01-deploy]
+    timeout-minutes: 15
+    environment: lab01-rollback
+    permissions: {}
+    steps:
+      - name: Rollback staged files (hash-checked, keeps backups)
+        run: /usr/local/libexec/gvai-ci/stage-wrapper rollback
+      - name: Verify backups intact
+        run: /usr/local/libexec/gvai-ci/stage-wrapper backup-verify

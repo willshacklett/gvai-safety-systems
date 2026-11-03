@@ -1,0 +1,54 @@
+name: lab01-host-validation
+
+# INACTIVE TEMPLATE - not loaded by GitHub (outside .github/workflows). Stage 3: root-requiring host
+# validation (aa-status, systemd-analyze security, stop-gate acceptance, firewall state).
+# Root-level evidence can NOT be gathered by the unprivileged stage-1 runner, so this needs a
+# separate, root-owned, read-only wrapper that does not exist yet (every run fails closed) and a
+# dedicated security review. Even a pass here is evidence, not a claim of host security.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: lab01-host-access
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      ACTIVATED: ${{ vars.LAB01_HOST_VALIDATION_ACTIVATED }}
+      ACTOR: ${{ github.actor }}
+      OWNER: ${{ github.repository_owner }}
+      REF: ${{ github.ref }}
+    steps:
+      - name: Fail closed
+        run: |
+          set -euo pipefail
+          [[ "$ACTIVATED" == "true" ]] || { echo "::error::host validation is not activated"; exit 1; }
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::owner only"; exit 1; }
+          [[ "$REF" == "refs/heads/main" ]] || { echo "::error::main only"; exit 1; }
+
+  host_validate:
+    needs: gate
+    runs-on: [self-hosted, linux, x64, gvai-lab01-hostval]
+    timeout-minutes: 15
+    environment: lab01-host-validation
+    permissions: {}
+    steps:
+      - name: Run root-owned read-only host validator (never prints secrets)
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/local/libexec/gvai-ci/hostval-wrapper --output "$RUNNER_TEMP/lab01-hostval.json"
+      - name: Upload evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lab01-hostval-evidence
+          path: ${{ runner.temp }}/lab01-hostval.json
+          retention-days: 14
+          if-no-files-found: error
