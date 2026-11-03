@@ -2,8 +2,47 @@
 
 Base: `fb225cb6bf7707638f620cf465ce988cf3439b5f`.
 This is a reconstruction, **not recovery of lost commit `6ca9252`**.
-Only tests and this document are added. No production ARM V2, deployment,
-Lab-01 change, commercial staging change, or independent enforcement is claimed.
+The original reconstruction added only tests and this document. Stage A now
+adds isolated ARM V2 parsing and signature verification. No deployment, Lab-01
+change, commercial staging change, or independent enforcement is claimed.
+
+## Completed Stage A: isolated verification
+
+Implementation base: `f6e0fe741bdf0d9245a838685cb38d8d9a28626b`.
+[`experimental_stop_latch.py`](../gvai/experimental_stop_latch.py) now provides:
+
+- Frozen, construction-validated `ArmV2Authorization`, `arm_v2_signing_bytes`,
+  `parse_arm_v2` and `arm_v2_envelope`. Version 2 and command type ARM are fixed
+  by the model. Signing bytes include every unsigned field and the V2 domain.
+  Production provides no private-key signing API.
+- `parse_authorization_command(..., require_arm_v2=False)` accepts V2 ARM and
+  V1 commands; `require_arm_v2=True` rejects legacy ARM but retains V1 STOP.
+  This is a **parser policy**, not production enforcement.
+- `decode_authorization_command` accepts only nonempty bytes up to 4096 bytes,
+  decodes strict UTF-8, rejects duplicate keys and nonfinite JSON constants,
+  and requires exact canonical JSON bytes (sorted keys, ASCII escaping, compact
+  separators, no trailing whitespace). Mapping input may be reordered; it
+  cannot detect duplicates already discarded by an upstream decoder.
+- `ArmV2Keyring` retains inherited V1 verification unchanged and adds
+  `verify_arm_v2(..., expected_latch_id=...)`. Separate V2 public keys are pinned
+  through `ArmV2VerificationKey` to explicit authority/trust-domain identities.
+  Reused V1 key IDs, key bytes, forbidden keys and duplicate V2 key bytes fail
+  configuration. Invalid API input raises explicit errors; signature or target/
+  binding mismatches return false.
+
+STOP generation is an exact integer in `[0, 2**53]`; zero denotes genesis.
+Validity bounds use the same range, with strict `not_before < not_after`.
+Verification authenticates these fields but **does not check current time,
+current generation, identity consumption, revocation or permission to run**.
+The live latch still uses its unchanged V1 parser, digest, activation, store
+and permit logic; it rejects V2 envelopes. No networking or timeout is changed.
+
+[`test_arm_v2_authorization.py`](../tests/test_arm_v2_authorization.py) exercises
+production parsing, canonical serialization and signature verification with
+ephemeral Ed25519 keys, including malformed fields, raw JSON, tampering,
+authority binding, cross-domain rejection, policy compatibility and absence
+of activation side effects. These are ordinary passing tests, not xfails.
+The reconstructed prototype and its enforcement xfails remain unchanged.
 
 ## Evidence and test interpretation
 
@@ -52,6 +91,8 @@ Passing signature tests prove that the **test-defined** canonical V2 bytes bind
 expiration, authority, trust domain, generation, authorization identity,
 sequence and latch identity. V1 rejects tampered V2 envelopes as malformed:
 this is explicitly **not evidence of a production V2 signature verifier**.
+Stage A's separate tests now cover that verifier directly; this paragraph
+describes the unchanged reconstruction tests, not Stage A coverage.
 
 ## Proposed signed ARM V2 authorization
 
@@ -81,9 +122,9 @@ Proposed time format: exact integer epoch seconds in `[0, 2**53]`,
 NaN and infinity, both in signed fields and clock readings. Admission and permit
 are valid only for `not_before <= trusted_now < not_after`. Equality at expiration
 denies; equality at not-before is valid. Tests cover both valid wire boundaries
-and denied legacy time-contract boundaries. Invalid signed-window parsing,
-authority revocation, clock high-water restart and backend integration remain
-future production acceptance tests, not proven by this reconstruction.
+and denied legacy time-contract boundaries. Stage A covers invalid signed-window parsing. Authority revocation, clock
+high-water restart and backend integration remain future production acceptance
+tests, not proven by this reconstruction or Stage A.
 
 ## Independent trusted authority and STOP generation
 
@@ -160,8 +201,9 @@ contiguous. Never infer expiration from request arrival, local metadata or a
 client's timeout. Preserve V1 behavior only in an explicitly separate legacy
 mode; deny downgrade in configured V2 mode. STOP must remain available via an
 explicitly authenticated compatibility policy. The current code has **no V2
-enforcement mode**: a paired passing legacy observation and strict expected
-failure record this requirement without pretending it is configured today.
+enforcement mode** (the Stage A parser policy is disconnected): a paired
+passing legacy observation and strict expected failure record this requirement
+without pretending it is configured today.
 
 ## Crash recovery and delayed-commit ambiguity
 
@@ -213,5 +255,14 @@ PYTHONPATH=/usr/local/py-utils/venvs/pytest/lib/python3.14/site-packages \
 ```
 
 Expected failures are a requirements ledger, not a release gate proving V2
-security. No production code, deployment configuration or Lab-01 artifacts
-should change as part of this prototype.
+security. The original reconstruction made no production changes.
+
+Stage A validation adds `tests/test_arm_v2_authorization.py` to the same focused
+command above. Only isolated authorization APIs are added to production code;
+deployment configuration and Lab-01 artifacts remain out of scope.
+
+Verified Stage A results: 148 Stage A cases passed, 58 existing latch cases
+passed, and the reconstructed prototype retained 27 passes and 24 strict
+expected failures. Combined: **233 passed, 24 xfailed**, with no failures,
+skips or XPASSes. All original latch functions, classes and module assignments
+were also compared against the Stage A base via AST and remained unchanged.
