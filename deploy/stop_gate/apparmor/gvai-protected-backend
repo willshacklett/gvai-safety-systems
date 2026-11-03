@@ -1,0 +1,22 @@
+# NOT LOADED. Draft profile; syntax-check on the host and use complain mode first.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile gvai-protected-backend /opt/gvai/venv/bin/python* flags=(attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/python>
+  deny capability,
+  deny network inet,
+  deny network inet6,
+  network unix stream,
+  deny ptrace,
+  deny signal,
+  /opt/gvai/** r,
+  /etc/gvai-backend/backend.json r,
+  /run/credentials/gvai-protected-backend.service/downstream r,
+  /run/gvai-protected-backend/* rw,
+  deny /etc/gvai-stop-gate/** rwklx,
+  deny /var/lib/gvai-stop-gate/** rwklx,
+  deny /etc/gvai-runtime/** rwklx,
+  deny /var/lib/gvai-operator/** rwklx,
+}

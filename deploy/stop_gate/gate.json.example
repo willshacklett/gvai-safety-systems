@@ -1,0 +1,10 @@
+{
+  "state_dir": "/var/lib/gvai-stop-gate",
+  "latch_id": "REPLACE_WITH_LATCH_ID",
+  "stop_keys": {"stop-k1": "REPLACE_WITH_STOP_PUBLIC_KEY_HEX"},
+  "arm_keys": {"arm-k1": "REPLACE_WITH_ARM_PUBLIC_KEY_HEX"},
+  "operations": ["downstream_sign"],
+  "token_ttl": 5.0,
+  "heartbeat_interval": 0.5,
+  "backend_notice_socket": "/run/gvai-protected-backend/notice.sock"
+}

@@ -1,0 +1,6 @@
+{
+  "gate_public_key": "REPLACE_WITH_OUTPUT_OF_gate-pubkey",
+  "latch_id": "REPLACE_WITH_LATCH_ID",
+  "notice_max_age": 3.0,
+  "interrupt_deadline": 1.0
+}
