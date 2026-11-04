@@ -12,6 +12,11 @@ the current entrypoints can be activated for protected work. The separate
 STOP-only ingress is local-experiment-only and has no deployment configuration.
 See [I7B contract and limitations](external_stop_gate_v1.md#i7b-independent-backend-stop-only-veto).
 
+The [I8B disposable-VM acceptance contract](disposable_stop_veto_acceptance_v1.md)
+defines separate admission, persistence and termination evidence requirements
+and mandatory teardown. It is a test-only plan, not authorization to activate
+these units or follow the older Lab-01 runbook.
+
 ## What this milestone adds
 
 - Split sockets by privilege: `service` (authorize/status or execute/audit), `control` (signed
