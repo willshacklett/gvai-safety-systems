@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import unescape
 from html.parser import HTMLParser
 import json
 from pathlib import Path
@@ -340,8 +341,9 @@ class PublicSiteTests(unittest.TestCase):
                 "Business Inquiry - Request a Demonstration",
             "Government - Request a Technical Briefing":
                 "Government Inquiry - Request a Technical Briefing",
+            "Discuss the Advisory Pilot": "Advisory Pilot Inquiry",
         }
-        self.assertEqual(len(self.parser.mail_links), 5)
+        self.assertEqual(len(self.parser.mail_links), 6)
         for link in self.parser.mail_links:
             with self.subTest(href=link["href"]):
                 parsed = urlsplit(link["href"])
@@ -359,9 +361,57 @@ class PublicSiteTests(unittest.TestCase):
         for label in expected_subjects:
             self.assertEqual(
                 sum(link["text"].strip() == label for link in self.parser.mail_links),
-                2,
-                "Each audience card and the contact section must offer its inquiry.",
+                1 if label == "Discuss the Advisory Pilot" else 2,
+                "Each inquiry must appear in its intended sections.",
             )
+
+    def test_pilot_offer_is_reachable_bounded_and_advisory_only(self) -> None:
+        self.assertIn("advisory-pilot", self.parser.navigation_anchors)
+        section = re.search(
+            r'<section[^>]+id="advisory-pilot"[^>]*>(.*?)</section>',
+            self.page, re.DOTALL,
+        )
+        self.assertIsNotNone(section)
+        content = section.group(1)
+        for required in (
+            "Invite-Only Advisory Pilot", "ALLOW", "QUALIFY", "BLOCK",
+            "caller-supplied telemetry", "finite evaluation allowance",
+            "Keys expire and can be revoked", "one-time API-key delivery",
+            "Each newly reserved attempt consumes one unit",
+            "Exact request-ID retries do not run the evaluator again",
+            "Paid subscriptions are not available", "access is not activated",
+            "Advisory is not enforcement", "independently enforce shutdown",
+            "remains experimental", "Authorization header",
+            "POST /v1/evaluations",
+        ):
+            self.assertIn(required, content)
+
+    def test_pilot_json_matches_checked_in_contract_examples(self) -> None:
+        for name, document in (
+            ("request", "commercial_http_v1.md"),
+            ("response", "commercial_service_v1.md"),
+        ):
+            with self.subTest(example=name):
+                example = re.search(
+                    rf'<code id="pilot-{name}">(.*?)</code>', self.page, re.DOTALL,
+                )
+                self.assertIsNotNone(example)
+                actual = json.loads(unescape(example.group(1)))
+                contract = (REPOSITORY_ROOT / "docs" / document).read_text(encoding="utf-8")
+                expected = json.loads(re.search(
+                    r"```json\n(.*?)\n```", contract, re.DOTALL,
+                ).group(1))
+                self.assertEqual(actual, expected)
+
+    def test_pilot_examples_are_keyboard_accessible_and_width_bounded(self) -> None:
+        for name in ("request", "response"):
+            self.assertIn(
+                f'<pre tabindex="0" aria-labelledby="pilot-{name}-title">',
+                self.page,
+            )
+        self.assertIn("minmax(min(100%, 340px), 1fr)", self.styles)
+        self.assertRegex(self.styles, r"\.pilot-example pre\s*\{[^}]*overflow: auto")
+        self.assertIn(".pilot-example pre:focus-visible", self.styles)
 
     def test_contact_is_accessible_disclosed_and_reachable(self) -> None:
         self.assertIn("contact", self.parser.navigation_anchors)
@@ -464,6 +514,10 @@ class PublicSiteTests(unittest.TestCase):
         )
         with TemporaryDirectory() as temporary:
             output = prepare_site(Path(temporary) / "site")
+            self.assertEqual((output / "index.html").read_bytes(),
+                             (REPOSITORY_ROOT / "index.html").read_bytes())
+            self.assertIn('id="advisory-pilot"',
+                          (output / "index.html").read_text(encoding="utf-8"))
             published = {
                 path.relative_to(output).as_posix()
                 for path in output.rglob("*")
