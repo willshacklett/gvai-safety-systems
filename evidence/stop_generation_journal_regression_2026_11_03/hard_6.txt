@@ -1,0 +1,56 @@
+....ssss................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+................................................................................................. [ 41%]
+....................................FF.................................. [ 51%]
+........................................................................ [ 60%]
+...................................................ssssssssssssssss..................................................................... [ 78%]
+..................................................................... [ 88%]
+................................................... [ 94%]
+.......................................                            [100%]
+=================================== FAILURES ===================================
+______________ test_live_anchor_tamper_is_detected_not_prevented _______________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe9b81aac90>
+
+    def test_live_anchor_tamper_is_detected_not_prevented(dep):
+        # Same-UID simulation: the file CAN be written; the gate detects it and denies.
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:341: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe9b81aac90>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+__________________________ test_gate_down_means_deny ___________________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fe9b8199ee0>
+
+    def test_gate_down_means_deny(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:352: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fe9b8199ee0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_live_anchor_tamper_is_detected_not_prevented
+FAILED tests/test_experimental_external_gate.py::test_gate_down_means_deny - ...
+2 failed, 730 passed, 20 skipped, 157 subtests passed in 46.45s

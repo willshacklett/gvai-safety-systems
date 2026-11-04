@@ -1,0 +1,11 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0473, "run": "2", "pid": 5407, "role": "?", "t": 1793721115.2711, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0492, "run": "2", "pid": 5407, "role": "backend", "t": 1793721115.273, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.057, "run": "2", "pid": 5407, "role": "backend", "t": 1793721115.2809, "thr": "MainThread"}
+{"ev": "counters", "c": {}, "load": 0.2275390625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721116.2817, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.2275390625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721117.2915, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.2275390625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721118.2922, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.2275390625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721119.293, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.2275390625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721120.303, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.36962890625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721121.313, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.36962890625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721122.3131, "thr": "diag-watch"}
+{"ev": "counters", "c": {}, "load": 0.36962890625, "run": "2", "pid": 5407, "role": "backend", "t": 1793721123.323, "thr": "diag-watch"}

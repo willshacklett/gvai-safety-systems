@@ -1,0 +1,29 @@
+.....F...........................                                        [100%]
+=================================== FAILURES ===================================
+__________________ test_omitting_verifier_call_cannot_bypass ___________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7fddd19f91f0>
+
+    def test_omitting_verifier_call_cannot_bypass(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:194: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../diag2/diagplugin2.py:123: in arm
+    return orig_arm(self, seq)
+           ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7fddd19f91f0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_omitting_verifier_call_cannot_bypass
+1 failed, 32 passed in 22.45s

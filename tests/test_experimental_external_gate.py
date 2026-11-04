@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -33,6 +34,19 @@ def signed(key, key_id, seq, kind, latch_id=LATCH):
     }
 
 
+class PreviouslyAuthorizedBackend(eg.BackendCore):
+    """Test-only preexisting session, not a production recovery interface."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._recovery_inhibited = False
+
+
+def existing_session_backend_main(config, ready_conn):
+    with patch.object(eg, "BackendCore", PreviouslyAuthorizedBackend):
+        eg.backend_process_main(config, ready_conn)
+
+
 class Deployment:
     """Gate and backend as real child processes (simulated separation only)."""
 
@@ -46,7 +60,9 @@ class Deployment:
         self.control_sock = os.path.join(self.dir, "gc.sock")
         self.backend_sock = os.path.join(self.dir, "b.sock")
         self.notice_sock = os.path.join(self.dir, "bn.sock")
+        self.stop_sock = os.path.join(self.dir, "bs.sock")
         self.state = os.path.join(self.dir, "state")
+        eg.GateTransaction.provision(self.state, LATCH)
         self.procs, self.gate_proc, self.gate_pub = [], None, None
         self.clients = []
         if with_gate:
@@ -85,17 +101,21 @@ class Deployment:
     def kill_backend(self):
         self.backend_proc.kill()
         self.backend_proc.join(5)
-        for path in (self.backend_sock, self.notice_sock):
+        for path in (self.backend_sock, self.notice_sock, self.stop_sock):
             if os.path.exists(path):
                 os.unlink(path)
 
-    def start_backend(self):
+    def start_backend(self, existing_session=None):
+        if existing_session is None:
+            existing_session = not hasattr(self, "backend_proc")
         cfg = {
             "gate_public_key": self.gate_pub, "latch_id": LATCH,
             "socket": self.backend_sock, "notice_socket": self.notice_sock,
             "notice_max_age": self.notice_max_age, "interrupt_deadline": self.interrupt_deadline,
+            "stop_socket": self.stop_sock, "stop_keys": {"stop-k1": pub(self.stop_key).hex()},
         }
-        self.backend_proc, _ = self._spawn(eg.backend_process_main, cfg)
+        target = existing_session_backend_main if existing_session else eg.backend_process_main
+        self.backend_proc, _ = self._spawn(target, cfg)
 
     def gate(self):
         c = eg.GateClient(self.gate_sock)
@@ -114,6 +134,11 @@ class Deployment:
 
     def notice_channel(self):
         c = eg.BackendClient(self.notice_sock)
+        self.clients.append(c)
+        return c
+
+    def stop_channel(self):
+        c = eg.BackendStopClient(self.stop_sock)
         self.clients.append(c)
         return c
 
@@ -162,6 +187,26 @@ def test_declared_models_are_simulation_only():
 def test_gate_runs_in_separate_process(dep):
     assert dep.gate_proc.pid != os.getpid() and dep.backend_proc.pid != os.getpid()
     assert dep.gate_proc.pid != dep.backend_proc.pid
+
+
+def test_local_stop_ingress_denies_without_a_running_gate(dep):
+    dep.arm(1)
+    token = dep.gate().authorize("echo", {})["token"]
+    stop = signed(dep.stop_key, "stop-k1", 2, "stop")
+    message = {"type": "stop_veto", "envelope": stop}
+    for channel in (dep.backend(), dep.notice_channel()):
+        assert channel.request(message)["reason"] == "request_not_permitted"
+    mode = os.stat(dep.stop_sock).st_mode & 0o777
+    assert mode == 0o600
+    dep.kill_gate()
+    expected = {
+        "ok": True, "outcome": "VETO_DENIAL_CONFIRMED", "execution_denied": True,
+        "durable_stop_recording": "UNKNOWN", "backend_termination": "UNVERIFIED",
+    }
+    assert dep.stop_channel().submit_stop_veto(stop) == expected
+    assert dep.stop_channel().submit_stop_veto(stop) == expected
+    assert dep.backend().execute("echo", {}, token)["reason"] == "stop_veto"
+    assert dep.backend_proc.is_alive()  # A denial acknowledgement is not exit evidence.
 
 
 def test_fresh_deployment_denies(dep):
@@ -298,6 +343,8 @@ def test_gate_restart_preserves_state_and_key(dep):
     dep.start_gate()
     assert dep.gate_pub == pub_before
     time.sleep(0.4)
+    assert not dep.service().call("echo", {"x": 1})["ok"]
+    dep.arm(2)
     assert dep.service().call("echo", {"x": 1})["ok"]
 
 
@@ -333,7 +380,7 @@ def test_store_rollback_between_restarts_faults(dep):
     open(os.path.join(dep.state, "store.json"), "w").write(saved)
     dep.start_gate()
     time.sleep(0.3)
-    assert dep.gate().status()["reason"] == "store_rollback_detected"
+    assert dep.gate().status()["status"] == "fault"
 
 
 def test_live_anchor_tamper_is_detected_not_prevented(dep):
@@ -460,6 +507,7 @@ def cores(tmp_path):
     stop, arm = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     now = [1000.0]
     mono = [0.0]
+    eg.GateTransaction.provision(str(tmp_path / "s"), LATCH)
     gate = eg.GateCore(
         str(tmp_path / "s"), LATCH, {"stop-k1": pub(stop)}, {"arm-k1": pub(arm)},
         frozenset({"echo"}), clock=lambda: now[0],
@@ -468,6 +516,7 @@ def cores(tmp_path):
         gate.gate_public_key, LATCH, {"echo": lambda a, c: a},
         notice_max_age=3.0, clock=lambda: now[0], monotonic=lambda: mono[0],
     )
+    backend._recovery_inhibited = False  # Test-only previously authorized session.
     return gate, backend, stop, arm, now, mono
 
 
@@ -486,6 +535,7 @@ def test_backend_rejects_old_boot_notice_after_gate_restart(cores, tmp_path):
     gate, backend, stop, arm, *_ = cores
     old = gate.notice()
     assert backend.apply_notice(old)["ok"]
+    gate.close()
     gate2 = eg.GateCore(
         str(tmp_path / "s"), LATCH, {"stop-k1": pub(stop)}, {"arm-k1": pub(arm)}, frozenset({"echo"})
     )

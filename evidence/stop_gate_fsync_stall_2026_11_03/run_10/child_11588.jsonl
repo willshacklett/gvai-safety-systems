@@ -1,0 +1,21 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.1558, "run": "10", "pid": 11588, "role": "?", "t": 1793721215.8929, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.1592, "run": "10", "pid": 11588, "role": "gate", "t": 1793721215.8963, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.1766, "run": "10", "pid": 11588, "role": "gate", "t": 1793721215.9137, "thr": "MainThread"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.203125, "run": "10", "pid": 11588, "role": "gate", "t": 1793721216.8966, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.203125, "run": "10", "pid": 11588, "role": "gate", "t": 1793721217.8975, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.203125, "run": "10", "pid": 11588, "role": "gate", "t": 1793721218.8997, "thr": "diag-watch"}
+{"ev": "scheduler_stall", "overshoot": 0.0595, "run": "10", "pid": 11588, "role": "gate", "t": 1793721219.2535, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.203125, "run": "10", "pid": 11588, "role": "gate", "t": 1793721219.9001, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.203125, "run": "10", "pid": 11588, "role": "gate", "t": 1793721220.9101, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.26708984375, "run": "10", "pid": 11588, "role": "gate", "t": 1793721221.9108, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.26708984375, "run": "10", "pid": 11588, "role": "gate", "t": 1793721222.9112, "thr": "diag-watch"}
+{"ev": "counters", "c": {"anchor_lock_wait": [2, 0.00044, 0.00049], "anchor_lock_hold:_read_locked": [2, 0.00028, 0.00029], "notice_push:heartbeat": [1, 0.00228, 0.00228]}, "load": 1.26708984375, "run": "10", "pid": 11588, "role": "gate", "t": 1793721223.9121, "thr": "diag-watch"}
+{"ev": "fsync", "dt": 8.54169, "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.5357, "thr": "Thread-4 (conn_loop)"}
+{"ev": "anchor_lock_hold:op", "dt": 8.54256, "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.536, "thr": "Thread-4 (conn_loop)"}
+{"ev": "fsync", "dt": 0.00277, "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.5389, "thr": "Thread-4 (conn_loop)"}
+{"ev": "store_save", "dt": 0.00296, "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.539, "thr": "Thread-4 (conn_loop)"}
+{"ev": "latch_apply", "dt": 8.54614, "accepted": true, "reason": "accepted", "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.539, "thr": "Thread-4 (conn_loop)"}
+{"ev": "gate_handle:status", "dt": 6.54265, "ok": true, "reason": "armed", "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.5398, "thr": "Thread-5 (conn_loop)"}
+{"ev": "gate_handle:command", "dt": 8.54765, "ok": true, "reason": "accepted", "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.5405, "thr": "Thread-4 (conn_loop)"}
+{"ev": "notice_push:control", "dt": 0.00181, "ok": true, "reason": null, "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.5424, "thr": "Thread-4 (conn_loop)"}
+{"ev": "control_handler_total", "dt": 8.54995, "run": "10", "pid": 11588, "role": "gate", "t": 1793721224.5429, "thr": "Thread-4 (conn_loop)"}

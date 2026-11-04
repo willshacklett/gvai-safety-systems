@@ -1,0 +1,29 @@
+.............F...................                                        [100%]
+=================================== FAILURES ===================================
+___________________ test_forged_notice_cannot_reopen_backend ___________________
+
+dep = <test_experimental_external_gate.Deployment object at 0x7f1ec9f5a4e0>
+
+    def test_forged_notice_cannot_reopen_backend(dep):
+>       dep.arm(1)
+
+tests/test_experimental_external_gate.py:278: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../diag2/diagplugin2.py:123: in arm
+    return orig_arm(self, seq)
+           ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_experimental_external_gate.Deployment object at 0x7f1ec9f5a4e0>
+seq = 1
+
+    def arm(self, seq):
+        r = self.control().submit_command(signed(self.arm_key, "arm-k1", seq, "arm"))
+>       assert r["ok"], r
+E       AssertionError: {'ok': False, 'reason': 'communication_failure'}
+E       assert False
+
+tests/test_experimental_external_gate.py:125: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_experimental_external_gate.py::test_forged_notice_cannot_reopen_backend
+1 failed, 32 passed in 18.65s

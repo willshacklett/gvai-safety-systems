@@ -1,0 +1,4 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0484, "run": "2", "pid": 5376, "role": "?", "t": 1793721114.2515, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0506, "run": "2", "pid": 5376, "role": "backend", "t": 1793721114.2537, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0585, "run": "2", "pid": 5376, "role": "backend", "t": 1793721114.2617, "thr": "MainThread"}
+{"ev": "scheduler_stall", "overshoot": 0.0993, "run": "2", "pid": 5376, "role": "backend", "t": 1793721114.9832, "thr": "diag-watch"}

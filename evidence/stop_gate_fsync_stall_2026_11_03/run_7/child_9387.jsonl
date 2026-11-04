@@ -1,0 +1,4 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0411, "run": "7", "pid": 9387, "role": "?", "t": 1793721190.3591, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0428, "run": "7", "pid": 9387, "role": "gate", "t": 1793721190.3607, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0546, "run": "7", "pid": 9387, "role": "gate", "t": 1793721190.3725, "thr": "MainThread"}
+{"ev": "gate_handle:status", "dt": 1e-05, "ok": true, "reason": "latched_stop", "run": "7", "pid": 9387, "role": "gate", "t": 1793721190.448, "thr": "Thread-5 (conn_loop)"}

@@ -35,10 +35,110 @@ _FIELDS = frozenset(
     {"version", "latch_id", "sequence", "command_type", "key_id", "signature"}
 )
 _ROLE_FOR_COMMAND = {COMMAND_STOP: "stop", COMMAND_ARM: "arm"}
+ARM_V2_DOMAIN = b"GVAI-ARM-AUTHORIZATION-V2\n"
+ARM_V2_MAX_INTEGER = 2**53
+ARM_V2_MAX_JSON_BYTES = 4096
+_ARM_V2_FIELDS = _FIELDS | {
+    "authority_id", "trust_domain", "authorization_id", "stop_generation",
+    "not_before", "not_after",
+}
 
 
 class StopLatchConfigError(ValueError):
     pass
+
+
+def _arm_v2_identifier(value: object) -> bool:
+    return type(value) is str and _IDENTIFIER.fullmatch(value) is not None
+
+
+def _arm_v2_integer(value: object, minimum: int = 0) -> bool:
+    return type(value) is int and minimum <= value <= ARM_V2_MAX_INTEGER
+
+
+@dataclass(frozen=True)
+class ArmV2Authorization:
+    """Authenticated fields only; this object conveys no permission to run."""
+
+    latch_id: str
+    sequence: int
+    key_id: str
+    authority_id: str
+    trust_domain: str
+    authorization_id: str
+    stop_generation: int
+    not_before: int
+    not_after: int
+    signature: bytes
+
+    def __post_init__(self) -> None:
+        if not all(_arm_v2_identifier(value) for value in (
+            self.latch_id, self.key_id, self.authority_id,
+            self.trust_domain, self.authorization_id,
+        )):
+            raise ValueError("invalid_identifier")
+        if not _arm_v2_integer(self.sequence, 1):
+            raise ValueError("invalid_sequence")
+        if not _arm_v2_integer(self.stop_generation):
+            raise ValueError("invalid_stop_generation")
+        if not (
+            _arm_v2_integer(self.not_before) and _arm_v2_integer(self.not_after)
+            and self.not_before < self.not_after
+        ):
+            raise ValueError("invalid_validity_window")
+        if type(self.signature) is not bytes or len(self.signature) != 64:
+            raise ValueError("invalid_signature_encoding")
+
+    def signing_bytes(self) -> bytes:
+        return arm_v2_signing_bytes(self)
+
+
+def _arm_v2_body(authorization: ArmV2Authorization) -> dict[str, object]:
+    return {
+        "version": 2, "command_type": COMMAND_ARM,
+        "latch_id": authorization.latch_id, "sequence": authorization.sequence,
+        "key_id": authorization.key_id, "authority_id": authorization.authority_id,
+        "trust_domain": authorization.trust_domain,
+        "authorization_id": authorization.authorization_id,
+        "stop_generation": authorization.stop_generation,
+        "not_before": authorization.not_before, "not_after": authorization.not_after,
+    }
+
+
+def _authorization_json(envelope: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        envelope, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True, allow_nan=False,
+    ).encode("ascii")
+
+
+def arm_v2_signing_bytes(authorization: ArmV2Authorization) -> bytes:
+    return ARM_V2_DOMAIN + _authorization_json(_arm_v2_body(authorization))
+
+
+def arm_v2_envelope(authorization: ArmV2Authorization) -> dict[str, object]:
+    return dict(_arm_v2_body(authorization), signature=authorization.signature.hex())
+
+
+def parse_arm_v2(envelope: object) -> ArmV2Authorization:
+    if not isinstance(envelope, Mapping) or set(envelope) != _ARM_V2_FIELDS:
+        raise ValueError("malformed_envelope")
+    if type(envelope["version"]) is not int or envelope["version"] != 2:
+        raise ValueError("unsupported_version")
+    if type(envelope["command_type"]) is not str or envelope["command_type"] != COMMAND_ARM:
+        raise ValueError("unknown_command_type")
+    signature = envelope["signature"]
+    if type(signature) is not str or _SIG_HEX.fullmatch(signature) is None:
+        raise ValueError("invalid_signature_encoding")
+    return ArmV2Authorization(
+        latch_id=envelope["latch_id"], sequence=envelope["sequence"],
+        key_id=envelope["key_id"], authority_id=envelope["authority_id"],
+        trust_domain=envelope["trust_domain"],
+        authorization_id=envelope["authorization_id"],
+        stop_generation=envelope["stop_generation"],
+        not_before=envelope["not_before"], not_after=envelope["not_after"],
+        signature=bytes.fromhex(signature),
+    )
 
 
 @dataclass(frozen=True)
@@ -176,6 +276,56 @@ def command_envelope(command: StopCommand) -> dict:
     }
 
 
+def parse_authorization_command(
+    envelope: object, *, require_arm_v2: bool = False,
+) -> StopCommand | ArmV2Authorization:
+    """Disconnected parser policy. Never invoked by the live latch."""
+    if type(require_arm_v2) is not bool:
+        raise ValueError("invalid_parser_policy")
+    if isinstance(envelope, Mapping) and type(envelope.get("version")) is int:
+        if envelope["version"] == 2:
+            return parse_arm_v2(envelope)
+    command = parse_command(envelope)
+    if require_arm_v2 and command.command_type == COMMAND_ARM:
+        raise ValueError("legacy_arm_rejected")
+    return command
+
+
+def decode_authorization_command(
+    raw: object, *, require_arm_v2: bool = False,
+) -> StopCommand | ArmV2Authorization:
+    """Decode bounded canonical UTF-8 JSON, without transport integration."""
+    if type(raw) is not bytes or not 0 < len(raw) <= ARM_V2_MAX_JSON_BYTES:
+        raise ValueError("invalid_json_size_or_type")
+
+    def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate_json_key")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError("invalid_json_constant")
+
+    try:
+        envelope = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=unique,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("malformed_json") from exc
+    command = parse_authorization_command(envelope, require_arm_v2=require_arm_v2)
+    canonical = (
+        arm_v2_envelope(command) if isinstance(command, ArmV2Authorization)
+        else command_envelope(command)
+    )
+    if raw != _authorization_json(canonical):
+        raise ValueError("noncanonical_json")
+    return command
+
+
 class StopLatchKeyring:
     """Public verification keys only, split by role.
 
@@ -232,6 +382,77 @@ class StopLatchKeyring:
 
 
 @dataclass(frozen=True)
+class ArmV2VerificationKey:
+    authority_id: str
+    trust_domain: str
+    public_key: bytes
+
+    def __post_init__(self) -> None:
+        if not (
+            _arm_v2_identifier(self.authority_id)
+            and _arm_v2_identifier(self.trust_domain)
+        ):
+            raise StopLatchConfigError("invalid_authority_binding")
+        if type(self.public_key) is not bytes or len(self.public_key) != 32:
+            raise StopLatchConfigError("invalid_public_key")
+
+
+class ArmV2Keyring(StopLatchKeyring):
+    """Separate V2 keys and pinned identities; inherited V1 verification unchanged."""
+
+    def __init__(
+        self,
+        stop_keys: Mapping[str, bytes],
+        arm_keys: Mapping[str, bytes],
+        v2_keys: Mapping[str, ArmV2VerificationKey],
+        forbidden_public_keys: Iterable[bytes] = (),
+    ) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        forbidden = tuple(forbidden_public_keys)
+        super().__init__(stop_keys, arm_keys, forbidden)
+        if not v2_keys:
+            raise StopLatchConfigError("v2_keys_required")
+        seen = {bytes(raw) for raw in (*stop_keys.values(), *arm_keys.values(), *forbidden)}
+        self._v2_keys: dict[str, tuple[str, str, Ed25519PublicKey]] = {}
+        for key_id, binding in v2_keys.items():
+            if not _arm_v2_identifier(key_id):
+                raise StopLatchConfigError("invalid_key_id")
+            if key_id in self._keys:
+                raise StopLatchConfigError("key_id_shared_across_versions")
+            if not isinstance(binding, ArmV2VerificationKey):
+                raise StopLatchConfigError("invalid_authority_binding")
+            if binding.public_key in seen:
+                raise StopLatchConfigError("public_key_reused_from_other_purpose")
+            seen.add(binding.public_key)
+            self._v2_keys[key_id] = (
+                binding.authority_id, binding.trust_domain,
+                Ed25519PublicKey.from_public_bytes(binding.public_key),
+            )
+
+    def verify_arm_v2(
+        self, authorization: ArmV2Authorization, *, expected_latch_id: str,
+    ) -> bool:
+        from cryptography.exceptions import InvalidSignature
+
+        if not _arm_v2_identifier(expected_latch_id):
+            raise ValueError("invalid_latch_id")
+        if not isinstance(authorization, ArmV2Authorization):
+            raise ValueError("invalid_authorization_type")
+        entry = self._v2_keys.get(authorization.key_id)
+        if entry is None or (
+            authorization.latch_id != expected_latch_id
+            or (authorization.authority_id, authorization.trust_domain) != entry[:2]
+        ):
+            return False
+        try:
+            entry[2].verify(authorization.signature, authorization.signing_bytes())
+        except InvalidSignature:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
 class LatchDecision:
     allowed: bool
     status: str
@@ -244,6 +465,31 @@ class CommandResult:
     status: str
     reason: str
     gap_detected: bool = False
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    """Read-only answer about one submitted STOP envelope.
+
+    ``verdict`` is EXACT_APPLIED only when the complete identity of the
+    submitted command equals the durable record (anchor and store agree).
+    ``answered`` is False when the query itself could not be evaluated. Only
+    EXACT_APPLIED means a STOP is recorded; other answered verdicts are not.
+    """
+
+    answered: bool
+    verdict: str
+    status: str
+    reason: str
+    head_sequence: Optional[int] = None
+    head_digest: Optional[str] = None
+    submitted_digest: Optional[str] = None
+
+
+class TransactionPersistence(Protocol):
+    def load(self) -> object: ...
+
+    def commit(self, command: StopCommand) -> None: ...
 
 
 class StopLatch:
@@ -266,6 +512,7 @@ class StopLatch:
         keyring: StopLatchKeyring,
         anchor: TrustedAnchor,
         store: Optional[CommandStore] = None,
+        transaction: Optional[TransactionPersistence] = None,
     ) -> None:
         if not isinstance(latch_id, str) or not _IDENTIFIER.fullmatch(latch_id):
             raise StopLatchConfigError("invalid_latch_id")
@@ -273,6 +520,7 @@ class StopLatch:
         self._keyring = keyring
         self._anchor = anchor
         self._store = store if store is not None else InMemoryCommandStore()
+        self._transaction = transaction
         self._lock = threading.Lock()
         self._head = GENESIS_HEAD
         self._status = STATUS_STOPPED
@@ -301,6 +549,8 @@ class StopLatch:
 
     def _load(self) -> None:
         try:
+            if self._transaction is not None:
+                self._transaction.load()
             anchor_head = self._anchor.read()
             envelope = self._store.load()
         except Exception:
@@ -328,7 +578,9 @@ class StopLatch:
             return
         self._head = head
         self._status = (
-            STATUS_ARMED if command.command_type == COMMAND_ARM else STATUS_STOPPED
+            STATUS_ARMED
+            if command.command_type == COMMAND_ARM and self._transaction is None
+            else STATUS_STOPPED
         )
 
     def permit(self) -> LatchDecision:
@@ -337,6 +589,8 @@ class StopLatch:
             try:
                 if self._status == STATUS_FAULT:
                     return LatchDecision(False, STATUS_FAULT, self._fault_reason)
+                if self._transaction is not None:
+                    self._transaction.load()
                 if self._status == STATUS_STOPPED:
                     return LatchDecision(False, STATUS_STOPPED, "latched_stop")
                 try:
@@ -355,6 +609,102 @@ class StopLatch:
                 return LatchDecision(True, STATUS_ARMED, "armed")
             except Exception:
                 return LatchDecision(False, STATUS_FAULT, "internal_error")
+
+    def _durable_record_matches(self, command: StopCommand, head: AnchorHead) -> bool:
+        """True only if the anchor and the stored, re-verified command both equal ``command``."""
+        try:
+            if self._transaction is not None:
+                self._transaction.load()
+            if self._anchor.read() != head:
+                return False
+            stored = parse_command(self._store.load())
+        except Exception:
+            return False
+        return (
+            stored.latch_id == self._latch_id
+            and self._keyring.verify(stored)
+            and stored.digest() == command.digest()
+            and AnchorHead(stored.sequence, stored.digest()) == head
+        )
+
+    def reconcile(self, envelope: object) -> ReconcileResult:
+        """Read-only: relate a submitted signed STOP to the durable record. Never raises.
+
+        Requires a parseable, correctly signed STOP for this latch, so it is
+        never an unauthenticated oracle. It changes no state.
+        """
+        try:
+            return self._reconcile(envelope)
+        except Exception:
+            return ReconcileResult(False, "UNVERIFIABLE", self.status, "internal_error")
+
+    def _reconcile(self, envelope: object) -> ReconcileResult:
+        # Authenticate first; nothing about the latch is revealed before that.
+        try:
+            command = parse_command(envelope)
+        except ValueError as exc:
+            return ReconcileResult(False, "REJECTED", "", str(exc))
+        if not self._keyring.verify(command):
+            return ReconcileResult(False, "REJECTED", "", "authentication_failed")
+        if command.latch_id != self._latch_id:
+            return ReconcileResult(False, "REJECTED", "", "wrong_latch")
+        if command.command_type != COMMAND_STOP:
+            return ReconcileResult(False, "REJECTED", "", "not_a_stop_command")
+        submitted = command.digest()
+        with self._lock:
+            status = self._status
+            try:
+                if self._transaction is not None:
+                    self._transaction.load()
+                head = self._anchor.read()
+                envelope_now = self._store.load()
+            except Exception:
+                return ReconcileResult(
+                    False, "UNVERIFIABLE", status, "anchor_or_store_unavailable",
+                    submitted_digest=submitted,
+                )
+            if envelope_now is None:
+                durable_ok = head == GENESIS_HEAD
+            else:
+                try:
+                    stored = parse_command(envelope_now)
+                    durable_ok = (
+                        stored.latch_id == self._latch_id
+                        and self._keyring.verify(stored)
+                        and AnchorHead(stored.sequence, stored.digest()) == head
+                    )
+                except Exception:
+                    durable_ok = False
+            reason = None
+            if status == STATUS_FAULT:
+                reason = self._fault_reason or "latch_fault"
+            elif not durable_ok:
+                reason = "durable_record_inconsistent"
+            elif head != self._head:
+                # The files no longer match what this live latch applied (rollback or substitution).
+                reason = (
+                    "anchor_rollback_detected"
+                    if head.sequence < self._head.sequence
+                    else "anchor_diverged"
+                )
+            if reason is not None:
+                return ReconcileResult(
+                    False, "UNVERIFIABLE", status, reason, head.sequence, head.digest, submitted
+                )
+            if command.sequence > head.sequence:
+                verdict = "NOT_APPLIED"
+            elif command.sequence == head.sequence:
+                verdict = "EXACT_APPLIED" if submitted == head.digest else "CONFLICT"
+            else:
+                verdict = "SUPERSEDED_UNVERIFIED"
+            if verdict == "EXACT_APPLIED" and status != STATUS_STOPPED:
+                return ReconcileResult(
+                    False, "UNVERIFIABLE", status, "live_status_not_stopped",
+                    head.sequence, head.digest, submitted,
+                )
+            return ReconcileResult(
+                True, verdict, status, verdict.lower(), head.sequence, head.digest, submitted
+            )
 
     def apply(self, envelope: object) -> CommandResult:
         """Verify and apply a signed command. Never raises."""
@@ -388,6 +738,15 @@ class StopLatch:
                 )
                 return CommandResult(False, STATUS_FAULT, self._fault_reason)
             if command.sequence <= current.sequence:
+                if (
+                    command.command_type == COMMAND_STOP
+                    and command.sequence == current.sequence
+                ):
+                    if command.digest() == current.digest:
+                        if self._durable_record_matches(command, current):
+                            return CommandResult(False, self._status, "already_applied")
+                        return CommandResult(False, self._status, "stale_or_replayed")
+                    return CommandResult(False, self._status, "conflicting_command")
                 return CommandResult(False, self._status, "stale_or_replayed")
 
             gap = command.sequence != current.sequence + 1
@@ -395,6 +754,16 @@ class StopLatch:
                 return CommandResult(False, self._status, "sequence_gap")
 
             new_head = AnchorHead(command.sequence, command.digest())
+            if self._transaction is not None:
+                try:
+                    self._transaction.commit(command)
+                except Exception:
+                    self._fault("persistence_unknown")
+                    return CommandResult(False, STATUS_FAULT, "persistence_unknown", gap)
+                self._head = new_head
+                self._status = STATUS_STOPPED if command.command_type == COMMAND_STOP else STATUS_ARMED
+                self._gap_detected = self._gap_detected or (gap and command.command_type == COMMAND_STOP)
+                return CommandResult(True, self._status, "accepted", gap)
             try:
                 advanced = self._anchor.compare_and_advance(current, new_head)
             except Exception:

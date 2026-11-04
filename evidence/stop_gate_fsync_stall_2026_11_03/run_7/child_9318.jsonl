@@ -1,0 +1,4 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0423, "run": "7", "pid": 9318, "role": "?", "t": 1793721187.9879, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.044, "run": "7", "pid": 9318, "role": "gate", "t": 1793721187.9896, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0568, "run": "7", "pid": 9318, "role": "gate", "t": 1793721188.0024, "thr": "MainThread"}
+{"ev": "gate_handle:status", "dt": 7e-05, "ok": true, "reason": "store_rollback_detected", "run": "7", "pid": 9318, "role": "gate", "t": 1793721188.3038, "thr": "Thread-4 (conn_loop)"}

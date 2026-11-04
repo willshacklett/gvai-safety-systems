@@ -98,8 +98,11 @@ def test_replayed_stop_rejected_without_state_change(armed):
     env, latch = armed
     stop = env.cmd(2, "stop")
     assert latch.apply(stop).accepted
-    assert latch.apply(stop).reason == "stale_or_replayed"
+    # Reconciliation V1: an identical retry is recognised, never newly accepted.
+    replay = latch.apply(stop)
+    assert not replay.accepted and replay.reason == "already_applied"
     assert env.anchor.read().sequence == 2
+    assert latch.apply(env.cmd(1, "stop")).reason == "stale_or_replayed"
 
 
 def test_rearm_requires_contiguous_sequence(armed):

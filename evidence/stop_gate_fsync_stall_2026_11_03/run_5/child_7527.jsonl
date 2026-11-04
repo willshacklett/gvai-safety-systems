@@ -1,0 +1,3 @@
+{"ev": "child_boot", "py_start_to_hooks": 0.0418, "run": "5", "pid": 7527, "role": "?", "t": 1793721163.0568, "thr": "MainThread"}
+{"ev": "main_enter", "since_boot": 0.0435, "run": "5", "pid": 7527, "role": "backend", "t": 1793721163.0586, "thr": "MainThread"}
+{"ev": "ready_sent", "since_boot": 0.0496, "run": "5", "pid": 7527, "role": "backend", "t": 1793721163.0647, "thr": "MainThread"}
