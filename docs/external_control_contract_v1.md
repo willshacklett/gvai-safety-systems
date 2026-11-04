@@ -41,6 +41,45 @@ The state interface requires `consume_if_active` to atomically check issuer/comm
 
 `InMemoryExternalControlState` uses a process-local lock and records the highest wall-clock second it has observed. If a later state operation supplies an earlier time, it rejects with `clock_rollback` before pruning or consuming IDs. It continues rejecting lower times until the clock catches up to that high-water mark. This prevents a forward clock step from pruning an ID and a subsequent rollback from reopening that ID's replay window. It only supports threads sharing that one object and is not safe for multiple processes, replicas, restarts, or production persistence. A production backend must implement atomic consumption, revocation, and rollback-resistant expiry across every verifier instance; this repository does not provide such a backend or claim distributed replay protection.
 
+## Supervisor execution boundary
+
+Command authorization alone does not stop a process. `GVTrustedSupervisor`
+in `gvai/supervisor.py` connects its `shutdown(envelope)` method to cancellation.
+The trusted supervisor owns execution
+authorization, the active process handle, an irreversible shutdown latch, and
+the decision to promote disposable output. Applications requiring actual
+shutdown must use this execution boundary rather than treating a policy
+decision as cancellation evidence.
+
+The supervisor authenticates and consumes the command before latching
+shutdown. Rejected commands do not request cancellation; an independent audit
+storage failure still causes a fail-closed stop. A valid shutdown also latches
+when no worker is running, and a later execution cannot clear that latch.
+Worker completion messages cannot reset control state or authorize promotion.
+Start registration and promotion are serialized against the latch; work
+promoted before shutdown is not rolled back.
+
+Cancellation evidence comes from parent-side signaling and process-exit
+confirmation, not worker-reported events. Audit evidence must distinguish
+command acceptance, cancellation attempts, confirmed exit, and failures; keys
+and authentication signatures do not belong in audit records. If cancellation
+or auditing fails, shutdown remains latched and output cannot be promoted.
+Configure the executor's `audit_root` for file-backed evidence; without it,
+evidence is process-local only. Wait confirmation concerns the Bubblewrap
+process; descendant cleanup additionally relies on the PID namespace,
+parent-death behavior, process-group signaling, and no-spawn seccomp boundary.
+
+The execution boundary retains the existing fixed worker action set,
+namespace isolation, seccomp restrictions, environment filtering, and refusal
+to fall back when sandbox enforcement is unavailable. It does not accept
+arbitrary Python, shell commands, plugins, or worker-supplied authority.
+
+The one-second acceptance criterion is measured using authenticated shutdown
+of a running sandbox on a Linux host supporting the actual enforcement
+boundary. Unit tests with simulated processes are race and logic tests only.
+Unavailable enforcement must produce explicit security-critical skips, not a
+claim that the shutdown latency or OS containment has been verified.
+
 ## Limitations
 
-HMAC is symmetric authentication, not a public-key signature. Every verifier holding a key can also forge commands; use a separately controlled issuer/verifier key boundary and do not expose verifier keys to workloads. The legacy `shutdown_requested` Boolean remains in the method signatures for call compatibility, but `True` is denied without halting; it is not an authenticated shutdown mechanism. External requests must use `GVRuntimePolicy.evaluate_command` or `GVExternalControlPlane.evaluate_command`. Trusted parent supervisor code may use the explicit `evaluate_internal_shutdown` methods for immediate emergency stops. These APIs are only separated from workload authority by the documented parent/child process boundary; Python does not enforce caller identity within a process. V1 has no transport, endpoint, account identity, key-management service, durable revocation database, automatic process termination, or distributed transaction. Authorization is not evidence that a supervisor has stopped a worker. No production readiness or Railway capability is implied.
+HMAC is symmetric authentication, not a public-key signature. Every verifier holding a key can also forge commands; use a separately controlled issuer/verifier key boundary and do not expose verifier keys to workloads. The legacy `shutdown_requested` Boolean remains in the method signatures for call compatibility, but `True` is denied without halting; it is not an authenticated shutdown mechanism. `GVRuntimePolicy.evaluate_command` and `GVExternalControlPlane.evaluate_command` remain authorization-only APIs; use the trusted supervisor for cancellation. Trusted parent code may use the explicit emergency-stop APIs, but must not expose them to workers. These APIs are only separated from workload authority by the documented parent/child process boundary; Python does not enforce caller identity within a process. V1 has no transport, endpoint, account identity, key-management service, durable revocation database, or distributed transaction. Process-local shutdown and audit evidence are not durable cross-restart or distributed guarantees. No production readiness or Railway capability is implied.
