@@ -114,6 +114,15 @@ or activate billing.
 The static GVAI Safety Systems public website foundation and local preview instructions are documented in
 [`docs/public_website_foundation.md`](docs/public_website_foundation.md).
 
+The [isolated commercial PostgreSQL baseline](docs/commercial_advisory_base_v1.md)
+adds durable advisory accounting, tenant-scoped usage and operator-only pilot
+onboarding. It does not activate subscriptions, deploy a service or enforce
+customer-workload shutdown.
+
+The [test-mode Stripe subscription implementation](docs/stripe_subscriptions_test_v1.md)
+adds operator-only Checkout/portal management, signed webhook reconciliation and
+separate paid-period accounting. It is not live billing or customer-launch approval.
+
 ---
 
 # V2 — Agent Safety
