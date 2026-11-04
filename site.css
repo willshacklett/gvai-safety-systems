@@ -378,6 +378,7 @@ h1 {
 
 .mission,
 .intelligence,
+.advisory-pilot,
 .contact {
   padding-top: 94px;
   padding-bottom: 96px;
@@ -405,6 +406,7 @@ h1 {
 .mission-grid h2,
 .section-title,
 .intelligence-heading h2,
+.advisory-pilot h2,
 .documentation h2,
 .contact h2 {
   margin-bottom: 0;
@@ -612,6 +614,56 @@ h1 {
   margin: 22px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.advisory-pilot {
+  border-top: 1px solid var(--rule);
+}
+
+.advisory-pilot h2 {
+  margin: 18px 0 24px;
+}
+
+.pilot-intro {
+  max-width: 780px;
+  font-size: 18px;
+}
+
+.pilot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 28px;
+  margin: 32px 0;
+}
+
+.pilot-grid > div {
+  min-width: 0;
+}
+
+.advisory-pilot h3 {
+  font-size: 26px;
+}
+
+.advisory-pilot li {
+  margin-bottom: 12px;
+}
+
+.pilot-example pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--white);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.pilot-example pre:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
 }
 
 .documentation {
@@ -841,6 +893,7 @@ h1 {
 
   .mission,
   .intelligence,
+  .advisory-pilot,
   .contact {
     padding-top: 64px;
     padding-bottom: 66px;
@@ -855,6 +908,7 @@ h1 {
   .mission-grid h2,
   .section-title,
   .intelligence-heading h2,
+  .advisory-pilot h2,
   .documentation h2,
   .contact h2 {
     font-size: 34px;
