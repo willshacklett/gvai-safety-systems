@@ -17,12 +17,13 @@ customer identity, quota, and evaluation authority.
 
 ## Trusted construction and request contract
 
-Trusted server code constructs `CommercialEvaluationService` with an existing
-`CommercialUsage` instance. That usage facade is constructed with the existing
-`CommercialAuthorizer` and trusted usage store. The authorizer is already wired
-to a `CustomerIdentityVerifier`, such as `CustomerApiKeys`. The service does not
-accept an authorizer decision or identity object from the caller, nor does it
-implement another authorization path.
+Trusted server code constructs `CommercialEvaluationService` with the
+`AdvisoryEvaluationUsage` accounting protocol. The offline `CommercialUsage`
+implementation retains the existing authorizer and in-memory store.
+The [PostgreSQL implementation](commercial_advisory_backend_v1.md) authenticates,
+authorizes and reserves atomically in the database, binding the canonical
+validated payload as well as request and project IDs. Neither implementation
+accepts customer-supplied identity or entitlement decisions.
 
 The in-process call is:
 
@@ -67,12 +68,13 @@ Successful evaluation response:
 Authorization denials return `outcome: "denied"` and
 `reason: "authorization_denied"`; quota, missing-policy, clock-rollback, and
 other non-replay quota denials return `reason: "quota_denied"`. A repeated
-request ID returns `reason: "replay"` and never re-enters evaluation. Invalid
-evaluation payloads return `reason: "invalid_request"`. Accounting outages and
-unexpected evaluator failures return `outcome: "error"` with the fixed reasons
+request ID returns `reason: "replay"` and never re-enters evaluation. Reuses
+with changed payload/project return `reason: "conflict"` under durable
+accounting. Invalid evaluation payloads return `reason: "invalid_request"`.
+Accounting outages and unexpected evaluator failures return `outcome: "error"` with the fixed reasons
 `accounting_failure` or `evaluation_failure`. These responses include neither
-credential data nor exception details. A future HTTP adapter must map internal
-authorization reasons to uniform public errors to avoid resource enumeration.
+credential data nor exception details. The HTTP adapter maps authorization
+denials to uniform public errors to avoid resource enumeration.
 
 An advisory evaluation whose decision is `BLOCK` still has
 `outcome: "evaluated"` and `reason: "evaluated"`; it is not an authorization or
@@ -85,7 +87,8 @@ result.
 1. The service copies and validates a bounded strict v1 evaluation request. No
    caller-supplied tenant or role is accepted. Invalid payloads do not reserve
    quota.
-2. `CommercialUsage.reserve` performs fresh verification and authorization via
+2. `reserve_evaluation` performs fresh verification and authorization. The
+   offline `CommercialUsage` implementation delegates to `reserve` via
    `CommercialAuthorizer`, which checks current credential state, capability,
    resource ownership, tenant equality, resource kind, and expiry. The tenant
    comes only from verified server-side identity and ownership data.
@@ -142,7 +145,7 @@ Phase 6G adds the local-only authenticated HTTP adapter documented in
 bounded request parsing, and exposes evaluation only. This does not make the
 service suitable for remote, shared-host, paid, or customer traffic.
 
-The system still depends on process-local API-key and usage stores, trusted
+The offline implementation still depends on process-local API-key and usage stores, trusted
 injected clocks, and trusted server-side ownership data. In-memory restart or
 replica boundaries can bypass quotas and revoke history. Clock rollback can
 still affect API-key validity. Allowance and attempt-accounting policy require

@@ -471,8 +471,8 @@ def test_revocation_after_reservation_does_not_cancel_in_flight_attempt(service_
     evaluations = []
 
     class RevokeAfterReserve:
-        def reserve(self, *args):
-            reservation = usage.reserve(*args)
+        def reserve_evaluation(self, *args):
+            reservation = usage.reserve_evaluation(*args)
             assert keys.revoke(issued.key_id)
             return reservation
 
@@ -493,6 +493,51 @@ def test_revocation_after_reservation_does_not_cancel_in_flight_attempt(service_
     assert ledger.counts["2026-10"] == 1
     reservation = next(iter(ledger.reservations.values()))
     assert reservation.state.value == "reserved"
+
+
+def test_service_passes_canonical_immutable_payload_to_accounting(service_fixture):
+    _, usage, _, _, _, credential, _ = service_fixture
+    import json
+
+    payloads = []
+
+    class BoundUsage:
+        def reserve_evaluation(self, credential, resource_id, request_id, payload):
+            payloads.append(payload)
+            return usage.reserve_evaluation(credential, resource_id, request_id, payload)
+
+        def complete(self, *args, **kwargs):
+            return usage.complete(*args, **kwargs)
+
+    service = CommercialEvaluationService(BoundUsage())
+    assert evaluate(service, credential).reason is ServiceReason.EVALUATED
+    assert len(payloads) == 1 and type(payloads[0]) is bytes
+    request = json.loads(payloads[0])
+    assert request == {
+        "version": "v1", "request_id": "request-1",
+        "telemetry": valid_telemetry(), "reported_effects": [],
+    }
+    assert payloads[0] == json.dumps(
+        request, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    ).encode("ascii")
+
+
+def test_payload_conflict_does_not_call_evaluator(service_fixture):
+    _, _, _, _, _, credential, _ = service_fixture
+    from gvai.commercial_usage import UsageReason, UsageResult
+    from unittest.mock import Mock
+
+    class ConflictingUsage:
+        def reserve_evaluation(self, *args):
+            return UsageResult(UsageReason.CONFLICT)
+
+        def complete(self, *args, **kwargs):
+            raise AssertionError("Conflicting input must not reach completion.")
+
+    evaluator = Mock()
+    service = CommercialEvaluationService(ConflictingUsage(), evaluator=evaluator)
+    assert evaluate(service, credential).reason is ServiceReason.CONFLICT
+    evaluator.assert_not_called()
 
 
 def test_api_does_not_accept_caller_tenant_or_role_claims(service_fixture):

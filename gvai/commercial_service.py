@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from enum import Enum
 from itertools import islice
+import json
 from math import isfinite
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
-from gvai.commercial_usage import CommercialUsage, UsageReason, UsageResult
+from gvai.commercial_usage import UsageReason, UsageResult
 from gvai.evaluation import (
     EVALUATION_VERSION,
     EvaluationResult,
@@ -96,6 +97,7 @@ class ServiceReason(str, Enum):
     AUTHORIZATION_DENIED = "authorization_denied"
     QUOTA_DENIED = "quota_denied"
     REPLAY = "replay"
+    CONFLICT = "conflict"
     ACCOUNTING_FAILURE = "accounting_failure"
     EVALUATION_FAILURE = "evaluation_failure"
 
@@ -115,12 +117,24 @@ class CommercialServiceResponse:
         return response
 
 
+class AdvisoryEvaluationUsage(Protocol):
+    """Accounting only; never controlled-execution or signed grant authority."""
+
+    def reserve_evaluation(
+        self, credential: object, resource_id: str, request_id: str, payload: bytes
+    ) -> UsageResult: ...
+
+    def complete(
+        self, credential: object, resource_id: str, request_id: str, *, succeeded: bool
+    ) -> UsageResult: ...
+
+
 class CommercialEvaluationService:
-    """Offline advisory evaluation orchestration; never grants execution authority."""
+    """Advisory evaluation orchestration; never grants execution authority."""
 
     def __init__(
         self,
-        usage: CommercialUsage,
+        usage: AdvisoryEvaluationUsage,
         *,
         evaluator: Callable[[object], EvaluationResult] = evaluate_request,
     ) -> None:
@@ -142,7 +156,13 @@ class CommercialEvaluationService:
             return _response(ServiceOutcome.DENIED, ServiceReason.INVALID_REQUEST)
 
         try:
-            reservation = self._usage.reserve(credential, resource_id, request_id)
+            payload = json.dumps(
+                evaluation_request, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False,
+            ).encode("ascii")
+            reservation = self._usage.reserve_evaluation(
+                credential, resource_id, request_id, payload
+            )
         except Exception:
             return _response(ServiceOutcome.ERROR, ServiceReason.ACCOUNTING_FAILURE)
         if type(reservation) is not UsageResult:
@@ -151,6 +171,8 @@ class CommercialEvaluationService:
             return _response(ServiceOutcome.DENIED, ServiceReason.AUTHORIZATION_DENIED)
         if reservation.reason is UsageReason.REPLAY:
             return _response(ServiceOutcome.DENIED, ServiceReason.REPLAY)
+        if reservation.reason is UsageReason.CONFLICT:
+            return _response(ServiceOutcome.DENIED, ServiceReason.CONFLICT)
         if reservation.reason is UsageReason.ACCOUNTING_ERROR:
             return _response(ServiceOutcome.ERROR, ServiceReason.ACCOUNTING_FAILURE)
         if (
