@@ -1,4 +1,4 @@
-"""Test-first source contracts only; no PostgreSQL or Stripe execution."""
+"""Static source contracts; no PostgreSQL or Stripe execution."""
 
 import hashlib
 import re
@@ -172,14 +172,13 @@ def assert_safe_search_path(declaration):
 @pytest.fixture(scope="module")
 def checkout_sql():
     if not MIGRATION.is_file():
-        pytest.skip("Migration 005 absent by design; SQL-dependent contract is unvalidated.")
+        pytest.skip("Migration 005 is required; SQL-dependent source contracts cannot run.")
     return normalize(MIGRATION.read_text(encoding="utf-8"))
 
 
-def test_proposed_migration_exists():
+def test_migration_005_exists():
     assert MIGRATION.is_file(), (
-        "Expected Phase 3C test-first failure: migration 005 is not implemented. "
-        "Keep it absent until separately authorized; do not create dummy SQL."
+        "Migration 005 must be present for the SQL-dependent source contracts."
     )
 
 

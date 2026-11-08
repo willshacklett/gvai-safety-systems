@@ -1,25 +1,30 @@
-# PostgreSQL Checkout persistence schema contract: Phase 3C
+# PostgreSQL Checkout persistence schema contract: Phase 3E
 
 ## Status and evidence boundary
 
-Migration `005_checkout_attempts_v1.sql` intentionally **does not exist**.
-[Source contracts](../tests/test_postgresql_checkout_schema.py) specify proposed
-object names and constrained SQL spelling before implementation. One existence
-test must fail; tests requiring its SQL explicitly skip until it exists.
-Baseline hashes and extractor tests run independently. Do not create a stub,
-xfail the existence check, or substitute comments/dummy functions for SQL.
+Migration `005_checkout_attempts_v1.sql` is implemented and uncommitted. The
+opt-in acceptance harness has exercised it in a disposable, network-disabled
+PostgreSQL 16.15 container (138 passed, with cleanup verified); it has not been
+deployed. The
+[source contracts](../tests/test_postgresql_checkout_schema.py) check its
+required object names and constrained SQL spelling, while the
+[acceptance harness](../tests/test_postgresql_checkout_acceptance.py) executes
+the migrations and behavioral checks against synthetic data.
 
-These are regex/string checks, not a SQL parser, database execution, authentication
-test or proof of transactions. Required declarations and source anchors can pass
-without correct control flow. Every behavioral invariant below remains binding
-even where it cannot be proved statically. Static green results must never be
-presented as PostgreSQL or operational Stripe acceptance.
+The source contracts are regex/string checks, not a SQL parser, database
+execution, authentication test or proof of transactions. Acceptance results
+apply only to the tested PostgreSQL version and synthetic cases. Neither suite
+proves trusted-adapter provenance, production configuration, Stripe behavior,
+deployment safety or operational integration. The invariants below remain
+binding beyond the coverage demonstrated by those tests.
 
 Migrations 001-004, [Phase 3A](./sandbox_checkout_intent_v1.md), and
 [Phase 3B](./checkout_attempt_contract_v1.md) are preserved byte-for-byte.
-No database, role, credential, listener or paid service is provisioned.
+The acceptance run provisions only an ephemeral database, synthetic role and
+synthetic records inside its disposable container; no persistent or external
+database, credential, listener or paid service is provisioned.
 
-## Minimum proposed additive objects
+## Additive objects and required invariants
 
 Use the existing `gvai_authority` schema, BEGIN/COMMIT and a non-superuser
 schema-owner guard. No replacement/alteration of existing objects, runtime GRANT,
@@ -224,21 +229,28 @@ them, quotas, usage, credentials, authority heads or STOP controls. No attempt
 status supplies verified payment or grants service. Existing active-plus-paid
 fresh reconciliation and UTC-month quota accounting remain unchanged.
 
-## Required future evidence (not established by source checks)
+## Remaining evidence and operational work
 
-- PostgreSQL compilation, atomic migration rollback, FK candidate keys/deferral,
-  function resolution, trigger execution, canonical digest compatibility.
-- Restricted-role catalog/ACL tests including inheritance, PUBLIC and search_path.
-- Two-connection same/different-attempt tenant races across accounts; concurrent
-  revocation, Price withdrawal, pilot/subscription admission and handoff release.
-- Full-record CAS tampering, session uniqueness, stale worker/fence/expiry,
-  generation exhaustion, deadlock handling, transaction rollback, lost commit
-  acknowledgment and restart/restore fencing.
+- The acceptance harness exercises PostgreSQL migration application, a late
+  fault-injected migration rollback, FK deferral, function/trigger behavior,
+  canonical digest vectors and effective privilege denials. Its synchronized
+  competing-prepare tests prove the contenders were simultaneously blocked on
+  the tenant lock; they do not prove every possible scheduler/interleaving.
+- Explicit prepare rollback and the separate late migration-DDL rollback test
+  exercise different transaction paths. Neither proves lost-commit recovery
+  across process restart or database restore.
+- The harness tests synthetic tenant isolation, immutable request association,
+  full-record fencing, lease expiry/recovery, UNKNOWN and quarantine slot
+  retention, session uniqueness/conflicts and exact handoff closure. It does
+  not exhaustively prove deadlock behavior, concurrent revocation/Price
+  withdrawal, pilot/subscription provisioning races or handoff release races.
 - Authoritative Stripe account/Price/session/subscription provenance, closure,
   lost-response recovery and idempotency retention semantics.
 - Dispatcher prevention of delayed calls: database fencing cannot fence Stripe.
-  Exactly-once external purchase is not guaranteed by this schema.
+  Exactly-once external purchase is not guaranteed by this schema. Runtime
+  adapter, provisioning coordination, deployment approval and operational
+  monitoring remain separate work; no Stripe calls or paid service are enabled.
 
-All such tests remain blocked pending separate authorization, implementation,
-and isolated disposable PostgreSQL/Stripe test stages. No unconditional skips
-should hide missing behavior once migration 005 exists.
+Any further PostgreSQL coverage or Stripe-stage work requires separate
+authorization and isolated test stages. No unconditional skips should hide
+missing behavior now that migration 005 exists.
