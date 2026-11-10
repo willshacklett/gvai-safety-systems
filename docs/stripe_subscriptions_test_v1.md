@@ -49,8 +49,9 @@ certification, safety or uptime guarantee is supplied.
 There is no claim of instantaneous knowledge of an external Stripe failure.
 Verified webhook processing serializes on tenant/mapping locks and suspends
 access on failed reconciliation. Lost/delayed events are bounded by a **60-second
-freshness lease**, not a payment grace period. Reconcile every mapped tenant
-at least every 30 seconds; missed scheduling or Stripe outages expire access.
+freshness lease**, not a payment grace period. The bounded reconciler (see
+`docs/subscription_reconciliation_v1.md`) re-verifies each active tenant about every
+20 seconds; missed scheduling or Stripe outages expire access and are never extended.
 Clock synchronization, reliable webhook delivery and scheduler monitoring are
 mandatory launch gates. A transaction already committed before suspension is
 not retroactively canceled.
@@ -238,7 +239,8 @@ Before any customer/live launch:
    compatibility and unsupported tax/discount policy with the founder.
 2. Validate real psycopg billing persistence and paid application restart behind
    reviewed HTTPS; original 47 driver integration tests are still unexecuted here.
-3. Configure and exercise the 30-second per-tenant reconciler, redacted failure
+3. Deploy and exercise the 20-second bounded reconciler (implemented and locally tested;
+   see `docs/subscription_reconciliation_v1.md`, incl. its ~80-tenant capacity limit), redacted failure
    alerts, clock synchronization, webhook delivery/queue monitoring, capacity
    limits and database backup/restore reconciliation. Stale restores can restore
    revoked keys, counters or events: fence the service, do not auto-resume.

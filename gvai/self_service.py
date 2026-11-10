@@ -143,8 +143,13 @@ class PostgreSQLSelfServiceStore:
     def status(self, verifier: bytes) -> dict[str, Any] | None:
         with _transaction(self._connect) as cursor:
             cursor.execute(
-                "SELECT o.resource_id,(b.eligible AND NOT b.revoked AND b.access_until>clock_timestamp()),"
-                "a.key_id IS NOT NULL "
+                "SELECT o.resource_id,"
+                "CASE WHEN b.revoked THEN 'suspended' "
+                "WHEN b.eligible AND b.access_until>clock_timestamp() AND b.verified_until>clock_timestamp() THEN 'active' "
+                "WHEN b.eligible AND b.access_until>clock_timestamp() THEN 'verification_pending' "
+                "ELSE 'payment_required' END,"
+                "a.key_id IS NOT NULL,"
+                "CASE WHEN b.access_until>clock_timestamp() THEN extract(epoch FROM b.access_until)::bigint END "
                 "FROM gvai_authority.customer_accounts a "
                 "JOIN gvai_authority.tenants t ON t.tenant_ref=a.tenant_ref "
                 "JOIN gvai_authority.billing_customers b ON b.tenant_ref=a.tenant_ref "
@@ -155,7 +160,14 @@ class PostgreSQLSelfServiceStore:
             row = cursor.fetchone()
         if row is None:
             return None
-        return {"resource_id": row[0], "entitled": bool(row[1]), "api_key_claimed": bool(row[2])}
+        state = row[1]
+        result = {
+            "resource_id": row[0], "entitled": state == "active", "entitlement_state": state,
+            "api_key_claimed": bool(row[2]),
+        }
+        if state in ("active", "verification_pending"):
+            result["access_until"] = int(row[3])
+        return result
 
     def claim_key(self, verifier: bytes, *, ttl_seconds: int = KEY_TTL_SECONDS) -> str:
         """Issue the only API key for a paid account; plaintext exists only in the return value."""
@@ -170,7 +182,8 @@ class PostgreSQLSelfServiceStore:
                 raise SelfServiceError("invalid_account")
             cursor.execute(
                 "SELECT t.tenant_id,m.principal_id,"
-                "(b.eligible AND NOT b.revoked AND b.access_until>clock_timestamp()) "
+                "(b.eligible AND NOT b.revoked AND b.access_until>clock_timestamp() "
+                "AND b.verified_until>clock_timestamp()) "
                 "FROM gvai_authority.billing_customers b "
                 "JOIN gvai_authority.tenants t ON t.tenant_ref=b.tenant_ref "
                 "JOIN gvai_authority.tenant_memberships m ON m.tenant_ref=b.tenant_ref "

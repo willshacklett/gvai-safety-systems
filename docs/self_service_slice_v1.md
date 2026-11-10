@@ -15,12 +15,14 @@ fails instead of skipping. Stripe is faked; real Stripe test mode is unverified.
 
 ## Known gaps (must close before any customer use)
 
-- **Entitlement freshness:** the paid runtime requires `verified_until > now` (60s) and no
-  periodic reconcile loop exists, so a claimed key stops working shortly after the last webhook.
+- **Entitlement freshness (M2):** addressed by the bounded reconciler in
+  `docs/subscription_reconciliation_v1.md` (implemented and locally tested; real Stripe behaviour and
+  deployment are unverified; capacity is ~80 active tenants at the Stripe test-mode rate limit).
+  `GET /v1/account` now reports `entitlement_state` and `access_until` and no longer ignores the lease.
 - **Key recovery:** if the claim response is lost after commit, the key is unrecoverable and the
   claim latch cannot be cleared. An audited operator reissue flow is not implemented.
-- **Key lifetime:** keys last 365 days and are not revoked by cancellation; the runtime
-  entitlement check is the only gate.
+- **Key lifetime (launch blocker):** keys last 365 days, cannot be rotated, and are not revoked by
+  cancellation; the runtime entitlement check is the only gate.
 - **Signup abuse:** the limiter is global and in-memory. Per-client limiting belongs at ingress.
   Stripe customers created before a failed DB insert are orphaned (tagged `gvai_tenant`
   metadata); the Stripe client permits only GET/POST, so cleanup is a manual/reconcile job.

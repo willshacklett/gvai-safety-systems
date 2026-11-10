@@ -52,11 +52,26 @@ class FakeStripe:
         self.sessions, self.idempotent = {}, {}
         self.start = int(time.time()) - 60
         self.end = self.start + 30 * 86400
+        self.last_date = 0
+        self.undated = False
+        self.outage = None
+
+    def begin_fetch(self):
+        # Every logical fetch observes a strictly later Stripe-side second than the previous one.
+        self.last_date = max(int(time.time()), self.last_date + 1)
 
     def set(self, customer, state):
         self.state[customer] = state
 
     def request(self, method, path, parameters=None, *, idempotency_key=None):
+        from gvai.stripe_billing import BillingUnavailable, StripeObject
+        if self.outage is not None and method == "GET":
+            raise BillingUnavailable("Synthetic outage.", transient=self.outage == "transient")
+        value = StripeObject(self._request(method, path, parameters, idempotency_key))
+        value.stripe_date = None if self.undated else max(self.last_date, int(time.time()))
+        return value
+
+    def _request(self, method, path, parameters=None, idempotency_key=None):
         parameters = parameters or {}
         self.calls.append((method, path))
         parts = path.strip("/").split("/")[1:]
@@ -94,7 +109,8 @@ class FakeStripe:
         if kind == "subscriptions":
             return {
                 "object": "subscription", "id": identifier_, "livemode": False,
-                "customer": customer, "status": "active" if paid else "past_due",
+                "customer": customer, "status": "active" if paid else (
+                    "canceled" if self.state.get(customer) == "canceled" else "past_due"),
                 "collection_method": "charge_automatically", "pause_collection": None,
                 "pending_update": None, "trial_start": None, "trial_end": None,
                 "items": {"data": [{"quantity": 1, "price": PRICE}], "has_more": False},
@@ -204,6 +220,7 @@ def stack():
                 "001_reservation_authority_v1.sql", "002_restricted_reservation_routine_v1.sql",
                 "003_advisory_pilots_v1.sql", "004_paid_advisory_v1.sql",
                 "007_paid_checkout_state_v1.sql", "008_self_service_accounts_v1.sql",
+                "009_subscription_reconciliation_v1.sql",
             ):
                 connection.execute((ROOT / "migrations/postgresql" / migration).read_text())
             connection.execute(
@@ -281,7 +298,7 @@ def deliver(stack, customer, event_type="invoice.paid", *, event_id=None, age=0,
     raw = json.dumps({
         "id": event_id or "evt_" + secrets.token_hex(8), "object": "event", "livemode": livemode,
         "api_version": "2024-06-20", "account": None, "type": event_type,
-        "data": {"object": {"customer": customer}},
+        "created": int(time.time()) - age, "data": {"object": {"customer": customer}},
     }).encode()
     stamp = str(int(time.time()) - age)
     signature = hmac.new(secret.encode(), stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
@@ -321,7 +338,8 @@ def test_signup_to_first_advisory_call_without_leaking_secrets(stack, caplog):
     token, resource, customer = signup(stack)
     assert re.fullmatch(r"gvai_acct_v1_[0-9a-f]{64}", token)
     assert call(stack.account, "GET", "/v1/account", token)[1] == {
-        "resource_id": resource, "entitled": False, "api_key_claimed": False,
+        "resource_id": resource, "entitled": False, "entitlement_state": "payment_required",
+        "api_key_claimed": False,
     }
     assert claim(stack, token)[0] == 402
     status, body, response = call(stack.account, "POST", "/v1/account/checkout", token)
@@ -553,3 +571,96 @@ def test_account_cannot_be_linked_to_another_tenants_credential(stack):
                 "WHERE key_id IS NULL AND account_ref=(SELECT max(account_ref) FROM gvai_authority.customer_accounts)",
                 (key_id,),
             )
+
+
+def tenant_of(stack, resource):
+    with stack.owner() as connection:
+        return connection.execute(
+            "SELECT t.tenant_id FROM gvai_authority.tenants t JOIN gvai_authority.resource_ownerships o "
+            "ON o.tenant_ref=t.tenant_ref WHERE o.resource_id=%s", (resource,),
+        ).fetchone()[0]
+
+
+def lapse_lease(stack, tenant):
+    with stack.owner() as connection:
+        connection.execute(
+            "UPDATE gvai_authority.billing_customers SET verified_until=clock_timestamp()-interval '1 second' "
+            "WHERE tenant_ref=(SELECT tenant_ref FROM gvai_authority.tenants WHERE tenant_id=%s)", (tenant,),
+        )
+
+
+def state_of(stack, token):
+    return call(stack.account, "GET", "/v1/account", token)[1]
+
+
+def test_paid_customer_keeps_access_across_lease_expiry_via_reconciliation(stack):
+    token, resource, customer = paid_account(stack)
+    key = claim(stack, token)[1]["api_key"]
+    assert evaluate(stack, key, resource, "before")[0] == 200
+    tenant = tenant_of(stack, resource)
+    assert state_of(stack, token)["entitlement_state"] == "active"
+    lapse_lease(stack, tenant)
+    # A lapsed lease fails closed and is reported honestly; the customer's own claim changes nothing.
+    assert evaluate(stack, key, resource, "lapsed")[0] == 403
+    shown = state_of(stack, token)
+    assert shown["entitlement_state"] == "verification_pending" and shown["entitled"] is False
+    assert claim(stack, token)[0] in (402, 409)
+    stack.billing.reconcile(tenant)
+    assert evaluate(stack, key, resource, "after")[0] == 200
+    after = state_of(stack, token)
+    assert after["entitlement_state"] == "active" and set(after) == {
+        "resource_id", "entitled", "entitlement_state", "api_key_claimed", "access_until",
+    }
+    with stack.owner() as connection:
+        consumed = connection.execute(
+            "SELECT p.consumed FROM gvai_authority.billing_periods p JOIN gvai_authority.tenants t "
+            "ON t.tenant_ref=p.tenant_ref WHERE t.tenant_id=%s", (tenant,),
+        ).fetchall()
+    assert consumed == [(2,)], "Reconciliation must not reset or duplicate consumed attempts."
+
+
+def test_lapsed_lease_is_never_extended_by_outage_and_cancellation_denies(stack):
+    token, resource, customer = paid_account(stack)
+    key = claim(stack, token)[1]["api_key"]
+    tenant = tenant_of(stack, resource)
+    lapse_lease(stack, tenant)
+    stack.fake.outage = "transient"
+    try:
+        with pytest.raises(Exception):
+            stack.billing.reconcile(tenant)
+    finally:
+        stack.fake.outage = None
+    assert evaluate(stack, key, resource, "outage")[0] == 403
+    assert state_of(stack, token)["entitlement_state"] == "verification_pending"
+    stack.fake.set(customer, "canceled")
+    stack.billing.reconcile(tenant)
+    assert evaluate(stack, key, resource, "canceled")[0] == 403
+    assert state_of(stack, token)["entitlement_state"] == "payment_required"
+    # A later paid report for a terminal subscription must not reactivate it without resubscribe.
+    stack.fake.set(customer, "paid")
+    with pytest.raises(Exception):
+        stack.billing.reconcile(tenant)
+    assert evaluate(stack, key, resource, "reactivated")[0] == 403
+
+
+def test_integrity_failure_suspends_and_revoked_key_stays_revoked_after_reconcile(stack):
+    from gvai.commercial_api_keys import CustomerApiKeys
+    from gvai.postgresql_advisory import PostgreSQLCustomerStore
+
+    token, resource, customer = paid_account(stack)
+    key = claim(stack, token)[1]["api_key"]
+    tenant = tenant_of(stack, resource)
+    assert CustomerApiKeys(
+        PostgreSQLCustomerStore(stack.owner), verifier_secret=VERIFIER_SECRET,
+    ).revoke(key.split("_")[3])
+    lapse_lease(stack, tenant)
+    stack.billing.reconcile(tenant)
+    assert evaluate(stack, key, resource, "revoked")[0] == 403, "Reconciliation must not reactivate a revoked key."
+    stack.fake.outage = "integrity"
+    try:
+        with pytest.raises(Exception):
+            stack.billing.reconcile(tenant)
+    finally:
+        stack.fake.outage = None
+    assert state_of(stack, token)["entitlement_state"] == "payment_required"
+    assert stack.service.status(token)["entitled"] is False

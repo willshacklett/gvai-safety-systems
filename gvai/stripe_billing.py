@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from email.utils import parsedate_to_datetime
 import hashlib
 import hmac
 import json
@@ -35,13 +36,33 @@ EVENT_TYPES = frozenset({
 _ID = re.compile(r"[A-Za-z0-9_]{1,128}\Z")
 
 
+DENIAL_EVENTS = frozenset({
+    "customer.subscription.deleted", "charge.dispute.created", "charge.refunded", "customer.deleted",
+    "invoice.payment_failed", "invoice.voided", "invoice.marked_uncollectible",
+})
+TERMINAL_STATUSES = frozenset({"canceled", "incomplete_expired"})
+_CODE = re.compile(r"[a-z0-9_]{1,64}\Z")
+
+
 class BillingUnavailable(RuntimeError):
-    """Redacted failure requiring retry or operator reconciliation."""
+    """Redacted failure requiring retry or operator reconciliation.
+
+    ``transient`` is True only for provider unavailability that proves nothing about the
+    customer. Every other failure, including unknown ones, is treated as an integrity anomaly.
+    """
+
+    transient: bool
+    code: str
+
+    def __init__(self, message: str, *, transient: bool = False, code: str = "unspecified") -> None:
+        super().__init__(message)
+        self.transient = transient
+        self.code = code if _CODE.fullmatch(code) else "unspecified"
 
 
-def fail(event: str) -> BillingUnavailable:
+def fail(event: str, *, transient: bool = False) -> BillingUnavailable:
     LOG.warning("stripe_billing: %s", event)
-    return BillingUnavailable("Billing unavailable; reconcile before retry.")
+    return BillingUnavailable("Billing unavailable; reconcile before retry.", transient=transient, code=event)
 
 
 def identifier(value: Any, prefix: str) -> str:
@@ -90,6 +111,7 @@ def verify_event(raw: bytes, signature: str, secret: str, *, now: int) -> dict[s
         or event.get("api_version") != API_VERSION or event.get("account") is not None
         or type(event.get("type")) is not str or type(event.get("data")) is not dict
         or type(event["data"].get("object")) is not dict
+        or type(event.get("created")) is not int or not 1 <= event["created"] <= now + 300
     ):
         raise fail("event_contract_rejected")
     identifier(event.get("id"), "evt_")
@@ -119,7 +141,7 @@ class BillingConfig:
 
     def __post_init__(self) -> None:
         if (
-            type(self.secret_key) is not str or not self.secret_key.startswith("sk_test_")
+            type(self.secret_key) is not str or not self.secret_key.startswith(("sk_test_", "rk_test_"))
             or len(self.secret_key) < 20 or not self.secret_key.isascii()
             or type(self.webhook_secret) is not str
             or not self.webhook_secret.startswith("whsec_")
@@ -141,6 +163,22 @@ class StripeAPI(Protocol):
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
         raise fail("redirect_rejected")
+
+
+class StripeObject(dict):
+    """A decoded Stripe response plus the authenticated Stripe-side time of that response."""
+
+    stripe_date: int | None = None
+
+
+def _response_date(value: str | None) -> int | None:
+    if type(value) is not str or len(value) > 64:
+        return None
+    try:
+        moment = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    return int(moment.timestamp()) if moment is not None and moment.tzinfo is not None else None
 
 
 class StripeREST:
@@ -172,10 +210,21 @@ class StripeREST:
                 url, data=encoded if method == "POST" else None, headers=headers, method=method,
             ), timeout=5) as response:
                 if response.status != 200:
-                    raise fail("stripe_response_rejected")
-                return decode(response.read(MAX_PAYLOAD + 1))
-        except (HTTPError, URLError, OSError, TimeoutError):
-            raise fail("stripe_request_failed") from None
+                    raise fail("stripe_response_rejected", transient=True)
+                try:
+                    value = StripeObject(decode(response.read(MAX_PAYLOAD + 1)))
+                except BillingUnavailable:
+                    raise fail("stripe_response_invalid", transient=True) from None
+                value.stripe_date = _response_date(response.headers.get("Date"))
+                return value
+        except BillingUnavailable:
+            raise
+        except HTTPError as error:
+            raise fail(
+                "stripe_request_failed", transient=error.code in {401, 403, 408, 425, 429} or error.code >= 500,
+            ) from None
+        except (URLError, OSError, TimeoutError):
+            raise fail("stripe_request_failed", transient=True) from None
 
 
 @dataclass(frozen=True)
@@ -186,6 +235,9 @@ class PaidState:
     end: int | None = None
     eligible: bool = False
     access_until: int | None = None
+    observed_min: int | None = None
+    observed_max: int | None = None
+    terminal: bool = False
 
 
 def _test_object(value: dict[str, Any], object_type: str, expected_id: str) -> None:
@@ -194,7 +246,7 @@ def _test_object(value: dict[str, Any], object_type: str, expected_id: str) -> N
 
 
 def _single_list(value: dict[str, Any]) -> list[dict[str, Any]]:
-    if type(value) is not dict:
+    if not isinstance(value, dict):
         raise fail("stripe_list_rejected")
     data = value.get("data")
     if value.get("has_more") is not False or type(data) is not list or len(data) > 1:
@@ -209,44 +261,87 @@ class SubscriptionAuthority:
         self.api, self.config, self.clock = api, config, clock
 
     def customer(self, customer: str) -> None:
+        self._customer(self.api.request, customer)
+
+    @staticmethod
+    def _customer(get: Callable[..., Any], customer: str) -> None:
         customer = identifier(customer, "cus_")
-        value = self.api.request("GET", "/v1/customers/" + customer)
+        value = get("GET", "/v1/customers/" + customer)
         _test_object(value, "customer", customer)
         if value.get("deleted"):
             raise fail("customer_deleted")
 
-    def current(self, customer: str, pinned_subscription: str | None) -> PaidState:
-        self.customer(customer)
-        subscriptions = _single_list(self.api.request(
-            "GET", "/v1/subscriptions", {"customer": customer, "status": "all", "limit": "2"},
-        ))
+    def current(
+        self, customer: str, pinned_subscription: str | None, repin: bool = False,
+    ) -> PaidState:
+        """Read the customer's current Stripe state.
+
+        Every response's Stripe ``Date`` is recorded. The reconciliation database accepts a
+        positive snapshot only when the earliest of them is strictly after the newest verified
+        webhook time it has seen, so a stale paid read can never override a later event.
+        """
+        dates: list[int | None] = []
+        begin = getattr(self.api, "begin_fetch", None)
+        if callable(begin):
+            begin()
+
+        def get(*args: Any, **kwargs: Any) -> Any:
+            value = self.api.request(*args, **kwargs)
+            dates.append(getattr(value, "stripe_date", None))
+            return value
+
+        def observed() -> dict[str, int | None]:
+            if not dates or any(type(item) is not int for item in dates):
+                return {"observed_min": None, "observed_max": None}
+            return {"observed_min": min(dates), "observed_max": max(dates)}
+
+        self._customer(get, customer)
+        listed = get("GET", "/v1/subscriptions", {"customer": customer, "status": "all", "limit": "2"})
+        if repin:
+            if not isinstance(listed, dict) or listed.get("has_more") is not False or type(listed.get("data")) is not list \
+                    or len(listed["data"]) > 2 or any(type(item) is not dict for item in listed["data"]):
+                raise fail("ambiguous_subscription_state")
+            subscriptions = [
+                item for item in listed["data"]
+                if pinned_subscription is None or item.get("id") != pinned_subscription
+            ]
+            if len(subscriptions) > 1:
+                raise fail("ambiguous_subscription_state")
+            if not subscriptions and pinned_subscription is not None:
+                subscriptions = [item for item in listed["data"] if item.get("id") == pinned_subscription]
+        else:
+            subscriptions = _single_list(listed)
         if not subscriptions:
-            return PaidState()
+            return PaidState(**observed())
         subscription_id = identifier(subscriptions[0].get("id"), "sub_")
-        if pinned_subscription is not None and subscription_id != pinned_subscription:
+        if pinned_subscription is not None and subscription_id != pinned_subscription and not repin:
             raise fail("subscription_substitution_rejected")
-        sub = self.api.request("GET", "/v1/subscriptions/" + subscription_id)
+        sub = get("GET", "/v1/subscriptions/" + subscription_id)
         _test_object(sub, "subscription", subscription_id)
         if sub.get("customer") != customer:
             raise fail("subscription_customer_mismatch")
-        denied = PaidState(subscription=subscription_id)
+        is_terminal = sub.get("status") in TERMINAL_STATUSES
+
+        def deny() -> PaidState:
+            return PaidState(subscription=subscription_id, terminal=is_terminal, **observed())
+
         if (
             sub.get("status") != "active" or sub.get("collection_method") != "charge_automatically"
             or sub.get("pause_collection") is not None or sub.get("pending_update") is not None
             or sub.get("trial_start") is not None or sub.get("trial_end") is not None
         ):
-            return denied
+            return deny()
         items = _single_list(sub.get("items", {}))
         if len(items) != 1 or type(items[0].get("quantity")) is not int or items[0]["quantity"] != 1:
-            return denied
+            return deny()
         price = items[0].get("price")
         if type(price) is not dict or not self.valid_price(price):
-            return denied
+            return deny()
         start, end = sub.get("current_period_start"), sub.get("current_period_end")
         if type(start) is not int or type(end) is not int or not 0 <= start < end:
             raise fail("period_rejected")
         invoice_id = identifier(sub.get("latest_invoice"), "in_")
-        invoice = self.api.request("GET", "/v1/invoices/" + invoice_id)
+        invoice = get("GET", "/v1/invoices/" + invoice_id)
         _test_object(invoice, "invoice", invoice_id)
         if invoice.get("customer") != customer or invoice.get("subscription") != subscription_id:
             raise fail("invoice_binding_rejected")
@@ -257,7 +352,7 @@ class SubscriptionAuthority:
             or any(type(invoice.get(key)) is not int or invoice[key] != AMOUNT
                    for key in ("amount_paid", "amount_due", "total"))
         ):
-            return denied
+            return deny()
         lines = _single_list(invoice.get("lines", {}))
         if (
             len(lines) != 1 or lines[0].get("type") != "subscription"
@@ -267,18 +362,18 @@ class SubscriptionAuthority:
             or type(lines[0].get("price")) is not dict
             or lines[0]["price"].get("id") != self.config.price_id
         ):
-            return denied
+            return deny()
         intent_id = identifier(invoice.get("payment_intent"), "pi_")
-        intent = self.api.request("GET", "/v1/payment_intents/" + intent_id)
+        intent = get("GET", "/v1/payment_intents/" + intent_id)
         _test_object(intent, "payment_intent", intent_id)
         if (
             intent.get("status") != "succeeded" or intent.get("customer") != customer
             or intent.get("invoice") != invoice_id or intent.get("currency") != "usd"
             or intent.get("amount_received") != AMOUNT
         ):
-            return denied
+            return deny()
         charge_id = identifier(intent.get("latest_charge"), "ch_")
-        charge = self.api.request("GET", "/v1/charges/" + charge_id)
+        charge = get("GET", "/v1/charges/" + charge_id)
         _test_object(charge, "charge", charge_id)
         if (
             charge.get("customer") != customer or charge.get("payment_intent") != intent_id
@@ -286,7 +381,7 @@ class SubscriptionAuthority:
             or charge.get("refunded") is not False or charge.get("disputed") is not False
             or charge.get("amount_refunded") != 0
         ):
-            return denied
+            return deny()
         access_until = end
         cancel_at = sub.get("cancel_at")
         if cancel_at is not None:
@@ -295,7 +390,7 @@ class SubscriptionAuthority:
             access_until = min(end, cancel_at)
         return PaidState(
             subscription_id, invoice_id, start, end,
-            start <= self.clock() < access_until, access_until,
+            start <= self.clock() < access_until, access_until, **observed(),
         )
 
     def valid_price(self, price: dict[str, Any]) -> bool:
@@ -315,10 +410,10 @@ class BillingStore(Protocol):
     def bind(self, tenant: str, customer: str) -> None: ...
     def customer(self, tenant: str) -> str: ...
     def reconcile(
-        self, customer: str, load: Callable[[str | None], PaidState],
-        *, event: tuple[str, str] | None = None,
+        self, customer: str, load: Callable[[str | None, bool], PaidState],
+        *, event: tuple[str, str, int, bool] | None = None,
     ) -> bool: ...
-    def checkout(self, tenant: str, create: Callable[[str], dict[str, Any]]) -> str: ...
+    def checkout(self, tenant: str, create: Callable[[str, int, bool], dict[str, Any]]) -> str: ...
 
 
 class BillingService:
@@ -332,12 +427,20 @@ class BillingService:
         self.store.bind(tenant, customer)
 
     def checkout(self, tenant: str) -> str:
-        def create(customer: str) -> dict[str, Any]:
+        def create(customer: str, generation: int, repin: bool) -> dict[str, Any]:
             self.authority.customer(customer)
-            existing = _single_list(self.authority.api.request(
+            listed = self.authority.api.request(
                 "GET", "/v1/subscriptions", {"customer": customer, "status": "all", "limit": "2"},
-            ))
-            if existing:
+            )
+            if not isinstance(listed, dict) or listed.get("has_more") is not False \
+                    or type(listed.get("data")) is not list or len(listed["data"]) > 2:
+                raise fail("ambiguous_subscription_state")
+            # Only a terminal subscription may already exist, and only when the database has
+            # opened the resubscription (repin); anything else is rejected.
+            if listed["data"] and (not repin or any(
+                type(item) is not dict or item.get("status") not in TERMINAL_STATUSES
+                for item in listed["data"]
+            )):
                 raise fail("subscription_already_exists")
             price = self.authority.api.request("GET", "/v1/prices/" + self.authority.config.price_id)
             if not self.authority.valid_price(price):
@@ -349,7 +452,7 @@ class BillingService:
                 "success_url": self.authority.config.success_url,
                 "cancel_url": self.authority.config.cancel_url,
                 "payment_method_types[0]": "card", "allow_promotion_codes": "false",
-            }, idempotency_key="gvai_checkout_" + customer)
+            }, idempotency_key="gvai_checkout_" + customer + ("" if generation == 0 else "_g%d" % generation))
         return self.store.checkout(tenant, create)
 
     def portal(self, tenant: str) -> str:
@@ -364,7 +467,9 @@ class BillingService:
 
     def reconcile(self, tenant: str) -> bool:
         customer = self.store.customer(tenant)
-        return self.store.reconcile(customer, lambda pinned: self.authority.current(customer, pinned))
+        return self.store.reconcile(
+            customer, lambda pinned, repin: self.authority.current(customer, pinned, repin),
+        )
 
     def webhook(self, raw: bytes, signature: str) -> None:
         event = verify_event(
@@ -382,6 +487,6 @@ class BillingService:
             value.get("id") if event["type"] == "customer.deleted" else value.get("customer"), "cus_",
         )
         self.store.reconcile(
-            customer, lambda pinned: self.authority.current(customer, pinned),
-            event=(event["id"], hashlib.sha256(raw).hexdigest()),
+            customer, lambda pinned, repin: self.authority.current(customer, pinned, repin),
+            event=(event["id"], hashlib.sha256(raw).hexdigest(), event["created"], event["type"] in DENIAL_EVENTS),
         )

@@ -22,7 +22,7 @@ from gvai.commercial_usage import UsageReason
 from gvai.postgresql_billing import PostgreSQLBillingStore, PostgreSQLPaidUsage
 from gvai.stripe_billing import (
     ALLOWANCE, API_VERSION, BillingConfig, BillingService, BillingUnavailable,
-    PaidState, StripeREST, SubscriptionAuthority, _NoRedirect, verify_event,
+    PaidState, StripeObject, StripeREST, SubscriptionAuthority, _NoRedirect, verify_event,
 )
 
 
@@ -48,13 +48,14 @@ def timestamp(value):
     return datetime.fromtimestamp(value, timezone.utc)
 
 
-def event(kind="invoice.paid", event_id="evt_test", customer="cus_a", **claims):
+def event(kind="invoice.paid", event_id="evt_test", customer="cus_a", *, at=NOW, created=None, **claims):
     raw = json.dumps({
         "object": "event", "id": event_id, "type": kind, "livemode": False,
-        "api_version": API_VERSION, "data": {"object": {"customer": customer, **claims}},
+        "api_version": API_VERSION, "created": at - 1 if created is None else created,
+        "data": {"object": {"customer": customer, **claims}},
     }).encode()
-    signature = hmac.new(SIGNING.encode(), str(NOW).encode() + b"." + raw, hashlib.sha256).hexdigest()
-    return raw, f"t={NOW},v1={signature}"
+    signature = hmac.new(SIGNING.encode(), str(at).encode() + b"." + raw, hashlib.sha256).hexdigest()
+    return raw, f"t={at},v1={signature}"
 
 
 class Stripe:
@@ -63,6 +64,11 @@ class Stripe:
         self.objects = {}
         self.subscriptions = {}
         self.failure = False
+        self.transient = False
+        self.clock = lambda: NOW
+        self.date_offset = 0
+        self.undated = False
+        self.fetches = 0
         self.add("a")
         self.add("b")
 
@@ -109,10 +115,19 @@ class Stripe:
             "refunded": False, "disputed": False, "amount_refunded": 0,
         }
 
+    def begin_fetch(self):
+        # Each logical fetch observes a strictly later Stripe-side second.
+        self.fetches += 1
+
     def request(self, method, path, parameters=None, *, idempotency_key=None):
         self.calls.append((method, path, parameters, idempotency_key))
         if self.failure:
-            raise BillingUnavailable("Synthetic outage.")
+            raise BillingUnavailable("Synthetic outage.", transient=self.transient)
+        value = StripeObject(self._respond(method, path, parameters))
+        value.stripe_date = None if self.undated else self.clock() + self.date_offset + self.fetches
+        return value
+
+    def _respond(self, method, path, parameters):
         if path == "/v1/subscriptions":
             return {"has_more": False, "data": copy.deepcopy(self.subscriptions[parameters["customer"]])}
         if path == "/v1/checkout/sessions":
@@ -140,6 +155,8 @@ class Database:
         self.keys = {}
         self.disabled = set()
         self.fail_commit = False
+        self.tickets = {}
+        self.ticket_id = 0
 
     def connect(self):
         return Connection(self)
@@ -173,6 +190,7 @@ class Cursor:
     def __init__(self, db):
         self.db = db
         self.row = None
+        self.rows = []
 
     def __enter__(self):
         return self
@@ -181,11 +199,15 @@ class Cursor:
         pass
 
     def fetchone(self):
-        return self.row
+        return self.rows[0] if self.rows else self.row
+
+    def fetchall(self):
+        return list(self.rows) if self.rows else ([self.row] if self.row is not None else [])
 
     def execute(self, sql, p=()):
         db = self.db
         self.row = None
+        self.rows = []
         if sql.startswith("SAVEPOINT"):
             self.snapshot = copy.deepcopy((db.customers, db.periods))
         elif sql.startswith("ROLLBACK TO"):
@@ -201,6 +223,9 @@ class Cursor:
                     "tenant": tenant, "subscription": None, "revoked": False,
                     "eligible": False, "invoice": None, "verified": 0, "access": 0,
                     "checkout_started": None, "session": None, "url": None,
+                    "repin": False, "generation": 0, "terminal": False, "floor": 0,
+                    "applied_min": 0, "claim_until": 0, "failures": 0, "outcome": None,
+                    "phase": "active", "claim": None,
                 }
         elif sql.startswith("SELECT customer_id FROM"):
             self.row = next(((name,) for name, row in db.customers.items() if row["tenant"] == p[0]), None)
@@ -246,11 +271,34 @@ class Cursor:
             row = db.customers[p[0]]
             if row["checkout_started"] is None:
                 row["checkout_started"] = db.now
+        elif sql.startswith("SELECT revoked FROM"):
+            self.row = (db.customers[p[0]]["revoked"],)
+        elif sql.startswith("SELECT gvai_authority.reconcile_begin_resubscribe_v1"):
+            row = db.customers[p[0]]
+            if row["terminal"] and not row["repin"]:
+                row.update(generation=row["generation"] + 1, checkout_started=None, session=None, url=None,
+                           repin=True, eligible=False, verified=0, access=0, invoice=None)
+            self.row = (row["generation"],)
         elif sql.startswith("SELECT checkout_session_id"):
             row = db.customers[p[0]]
-            self.row = (row["session"], row["url"], row["checkout_started"] > db.now - 23 * 3600)
+            self.row = (row["session"], row["url"], row["checkout_started"] > db.now - 23 * 3600,
+                        row["repin"], row["generation"])
         elif sql.startswith("UPDATE gvai_authority.billing_customers SET checkout_session_id"):
-            db.customers[p[2]].update(session=p[0], url=p[1])
+            session, url, customer, generation, same = p
+            row = db.customers[customer]
+            if row["generation"] == generation and not row["revoked"] and row["session"] in (None, same):
+                row.update(session=session, url=url)
+                self.row = (1,)
+        elif sql.startswith("SELECT o_customer"):
+            self.rows = self.claim_one(*p)
+        elif sql.startswith("SELECT o_duplicate"):
+            self.rows = self.signal(*p)
+        elif sql.startswith("SELECT gvai_authority.reconcile_apply_v1"):
+            self.rows = [(self.apply(*p),)]
+        elif sql.startswith("SELECT gvai_authority.reconcile_fail_v1"):
+            self.rows = [(self.failed(*p),)]
+        elif sql.startswith("SELECT gvai_authority.reconcile_resume_v1"):
+            self.rows = [(True,)]
         elif sql.startswith("SELECT gvai_authority.reserve_paid_v1"):
             self.row = (self.reserve(p),)
         elif sql.startswith("SELECT gvai_authority.complete_paid_v1"):
@@ -281,6 +329,137 @@ class Cursor:
                             states.count("reserved"), states.count("completed"), states.count("failed"))
         else:
             raise AssertionError("Unexpected SQL: " + sql)
+
+    def release(self, row, ticket, outcome, failure):
+        row["outcome"] = outcome
+        row["failures"] += 1 if failure else 0
+        if row.get("claim") == ticket:
+            row["claim_until"] = 0
+            row["claim"] = None
+        return outcome
+
+    def claim_one(self, customer, seconds):
+        db = self.db
+        row = db.customers.get(customer)
+        if row is None or row["claim_until"] > db.now:
+            return []
+        db.ticket_id += 1
+        db.tickets[db.ticket_id] = dict(
+            tenant=row["tenant"], started=db.now, expires=db.now + seconds, event=None, created=None, digest=None,
+        )
+        row.update(claim_until=db.now + seconds, claim=db.ticket_id)
+        return [(customer, row["subscription"], row["repin"], db.ticket_id, "active", 0.0)]
+
+    def signal(self, customer, event, digest, created, denial):
+        db = self.db
+        if not 1 <= created <= db.now + 300:
+            raise ValueError("reconcile signal rejected")
+        row = db.customers.get(customer)
+        if row is None:
+            return []
+        prior = db.events.get(event)
+        if prior is not None:
+            if prior != (row["tenant"], digest):
+                raise ValueError("event collision rejected")
+            return [(True, row["subscription"], row["repin"], None)]
+        row["floor"] = max(row["floor"], created)
+        if denial and created >= db.now - 300 and row["eligible"]:
+            row.update(eligible=False, verified=0)
+        db.ticket_id += 1
+        db.tickets[db.ticket_id] = dict(
+            tenant=row["tenant"], started=db.now, expires=db.now + 45, event=event, created=created, digest=digest,
+        )
+        return [(False, row["subscription"], row["repin"], db.ticket_id)]
+
+    def apply(self, customer, ticket, omin, omax, sub, invoice, start, end, eligible, access, terminal):
+        db = self.db
+        row = db.customers.get(customer)
+        if row is None:
+            raise ValueError("unmapped_customer")
+        t = db.tickets.get(ticket)
+        if t is None or t["tenant"] != row["tenant"] or t["expires"] <= db.now:
+            return "ticket_invalid"
+        del db.tickets[ticket]
+        if t["event"] in db.events:
+            return "duplicate_event"
+        positive = eligible and not row["revoked"] and row["phase"] != "needs_operator"
+        reject, repin = None, False
+        if sub is not None and row["subscription"] is not None and sub != row["subscription"]:
+            if row["repin"] and row["terminal"]:
+                repin = True
+            else:
+                reject = "subscription_replacement_rejected"
+        if reject is None and eligible:
+            if (invoice is None or sub is None or start >= end or end - start > 32 * 86400
+                    or access > end or access <= start):
+                reject = "paid_period_rejected"
+            elif not start <= db.now < access:
+                positive = False
+        if reject is None and row["terminal"] and not repin and not terminal and sub is not None:
+            reject = "terminal_subscription_reactivated"
+        if reject is None and positive:
+            if omin is None:
+                return self.release(row, ticket, "observation_missing", True)
+            if omin < t["started"] - 30 or omax > db.now + 30:
+                return self.release(row, ticket, "clock_skew", True)
+            if db.now - t["started"] > 40:
+                return self.release(row, ticket, "stale_snapshot", False)
+            if omin <= row["floor"]:
+                if t["event"] and row["applied_min"] > t["created"]:
+                    db.events[t["event"]] = (row["tenant"], t["digest"])
+                    return self.release(row, ticket, "covered_by_newer", False)
+                return self.release(row, ticket, "stale_snapshot", False)
+            if any(period["tenant"] == row["tenant"] and name != invoice and (
+                    (period["sub"] == sub and period["start"] < end and period["end"] > start)
+                    or period["start"] == start) for name, period in db.periods.items()):
+                reject = "overlapping_period_rejected"
+        if reject is not None:
+            row.update(eligible=False, verified=0, access=0, phase="needs_operator", outcome=reject)
+            row["failures"] += 1
+            self.release(row, ticket, reject, False)
+            return "rejected_" + reject
+        if omin is None:
+            omin = omax = db.now
+        if positive:
+            period = db.periods.setdefault(invoice, {
+                "tenant": row["tenant"], "sub": sub, "start": start, "end": end,
+                "allowance": ALLOWANCE, "consumed": 0,
+            })
+            if (period["tenant"], period["sub"], period["start"], period["end"]) != (row["tenant"], sub, start, end):
+                row.update(eligible=False, verified=0, access=0, phase="needs_operator")
+                self.release(row, ticket, "invoice_reassignment_rejected", False)
+                return "rejected_invoice_reassignment_rejected"
+            row.update(subscription=sub, invoice=invoice, eligible=True,
+                       verified=max(row["verified"], t["started"] + 60), access=access)
+        else:
+            row.update(eligible=False, verified=0, access=0, invoice=None)
+            if sub is not None:
+                row["subscription"] = sub
+        if sub is not None:
+            row["terminal"] = bool(terminal)
+        if repin:
+            row["repin"] = False
+        row.update(floor=max(row["floor"], omax), applied_min=max(row["applied_min"], omin),
+                   failures=0, outcome="applied_eligible" if positive else "applied_denied")
+        if row.get("claim") == ticket:
+            row.update(claim=None, claim_until=0)
+        if t["event"]:
+            db.events[t["event"]] = (row["tenant"], t["digest"])
+        return row["outcome"]
+
+    def failed(self, customer, ticket, kind, code):
+        db = self.db
+        row = db.customers[customer]
+        t = db.tickets.get(ticket)
+        if t is None or t["tenant"] != row["tenant"] or t["expires"] <= db.now:
+            return "ticket_invalid"
+        del db.tickets[ticket]
+        if kind == "transient":
+            return self.release(row, ticket, code, True)
+        row.update(eligible=False, verified=0, access=0, phase="needs_operator", outcome=code)
+        row["failures"] += 1
+        self.release(row, ticket, code, False)
+        return "suspended"
 
     def authenticate(self, key, verifier, resource):
         db = self.db
@@ -322,6 +501,7 @@ class Cursor:
 @pytest.fixture
 def setup():
     stripe, db = Stripe(), Database()
+    stripe.clock = lambda: db.now
     store = PostgreSQLBillingStore(db.connect)
     authority = SubscriptionAuthority(stripe, config(), clock=lambda: db.now)
     service = BillingService(authority, store)
@@ -426,17 +606,33 @@ def test_reordered_failure_then_old_paid_event_reads_current_state(setup):
     assert len(db.periods) == 1
 
 
-def test_outage_suspends_without_acknowledging_event_then_retry_recovers(setup, caplog):
+def test_transient_outage_keeps_lease_unacknowledged_then_retry_recovers(setup, caplog):
     paid(setup)
-    setup[0].failure = True
+    verified = setup[1].customers["cus_a"]["verified"]
+    setup[0].failure = setup[0].transient = True
     with pytest.raises(BillingUnavailable):
         paid(setup, identifier="evt_retry")
-    assert not setup[1].customers["cus_a"]["eligible"]
+    row = setup[1].customers["cus_a"]
+    assert row["eligible"] and row["verified"] == verified
     assert "evt_retry" not in setup[1].events
     setup[0].failure = False
     paid(setup, identifier="evt_retry")
     assert setup[1].customers["cus_a"]["eligible"]
     assert config().secret_key not in caplog.text
+
+
+def test_integrity_failure_suspends_and_needs_operator_resume(setup):
+    paid(setup)
+    setup[0].failure = True
+    with pytest.raises(BillingUnavailable):
+        paid(setup, identifier="evt_integrity")
+    row = setup[1].customers["cus_a"]
+    assert not row["eligible"] and row["phase"] == "needs_operator"
+    assert "evt_integrity" not in setup[1].events
+    setup[0].failure = False
+    paid(setup, identifier="evt_after")  # healthy Stripe cannot restore access without operator resume
+    row = setup[1].customers["cus_a"]
+    assert not row["eligible"] and row["phase"] == "needs_operator"
 
 
 def test_cancellation_paid_through_and_freshness_expiry(setup):
@@ -606,6 +802,7 @@ def test_rest_transport_pins_origin_version_and_bounds_without_external_calls():
 
     class Response:
         status = 200
+        headers = {"Date": "Mon, 01 Jan 2024 00:00:00 GMT"}
         raw = b'{"object":"customer","livemode":false}'
 
         def __enter__(self):
@@ -627,7 +824,8 @@ def test_rest_transport_pins_origin_version_and_bounds_without_external_calls():
             return Response()
 
     client._opener = Opener()
-    assert client.request("GET", "/v1/customers/cus_a")["livemode"] is False
+    reply = client.request("GET", "/v1/customers/cus_a")
+    assert reply["livemode"] is False and reply.stripe_date == 1704067200
     with pytest.raises(BillingUnavailable):
         client.request("GET", "//evil.test/v1/customers")
     Response.raw = b"x" * 65537
@@ -650,9 +848,10 @@ def test_invoice_replacement_cannot_refresh_an_existing_period_allowance(setup):
     paid(setup)
     stripe, db, service, store, usage, credentials = setup
     assert usage.reserve_evaluation(credentials["a"], "project-a", "one", b"x").may_evaluate
-    state = PaidState("sub_a", "in_different", NOW - 100, NOW + 1000, True, NOW + 1000)
+    state = PaidState("sub_a", "in_different", NOW - 100, NOW + 1000, True, NOW + 1000,
+                      observed_min=NOW + 5, observed_max=NOW + 5)
     with pytest.raises(BillingUnavailable):
-        store.reconcile("cus_a", lambda _: state)
+        store.reconcile("cus_a", lambda pinned, repin: state)
     assert db.periods["in_a"]["consumed"] == 1
     assert "in_different" not in db.periods
     assert not db.customers["cus_a"]["eligible"]

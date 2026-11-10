@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from dataclasses import dataclass
 import hashlib
 import logging
 import re
+import time
 from typing import Any, Callable, Iterator
 
 from gvai.commercial_api_keys import api_key_credential_material
@@ -13,7 +14,7 @@ from gvai.commercial_reservation_authority import AuthorityIdentity, CanonicalRe
 from gvai.commercial_usage import UsageReason, UsageReservation, UsageResult
 from gvai.postgresql_advisory import AdvisoryAccountingUnavailable, AdvisoryPilotUsage
 from gvai.stripe_billing import (
-    ALLOWANCE, FRESH_SECONDS, BillingUnavailable, PaidState, fail, https_url, identifier,
+    ALLOWANCE, BillingUnavailable, PaidState, fail, https_url, identifier,
 )
 
 
@@ -24,10 +25,6 @@ PAID_ENTRY_FUNCTIONS = (
     "paid_usage_v1(text,bytea,text)",
 )
 ConnectionFactory = Callable[[], Any]
-
-
-def _instant(value: int) -> datetime:
-    return datetime.fromtimestamp(value, timezone.utc)
 
 
 @contextmanager
@@ -41,7 +38,143 @@ def _transaction(connect: ConnectionFactory) -> Iterator[Any]:
         raise fail("database_operation_uncertain") from None
 
 
-class PostgreSQLBillingStore:
+RECONCILER_ENTRY_FUNCTIONS = (
+    "reconcile_claim_due_v1(integer,integer)",
+    "reconcile_signal_v1(text,text,text,bigint,boolean)",
+    "reconcile_apply_v1(text,bigint,bigint,bigint,text,text,bigint,bigint,boolean,bigint,boolean)",
+    "reconcile_fail_v1(text,bigint,text,text)",
+    "reconcile_status_v1()",
+)
+APPLIED = frozenset({"applied_eligible", "applied_denied", "covered_by_newer"})
+TRANSIENT_OUTCOMES = frozenset({
+    "stale_snapshot", "ticket_invalid", "observation_missing", "clock_skew", "transient_failure",
+})
+MAX_EVENT_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class Claim:
+    customer: str
+    subscription: str | None
+    repin: bool
+    ticket: int
+    phase: str
+    lag: float
+
+
+class ReconcileFunctions:
+    """Reconciliation through the audited SECURITY DEFINER functions only.
+
+    Stripe is read only between two short database calls: no transaction, row lock or
+    connection is held while a provider request is outstanding.
+    """
+
+    connect: ConnectionFactory
+    sleep: Callable[[float], None] = staticmethod(time.sleep)
+
+    def _call(self, sql: str, parameters: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+        with _transaction(self.connect) as cursor:
+            cursor.execute(sql, parameters)
+            return list(cursor.fetchall())
+
+    def claim_due(self, limit: int = 5, claim_seconds: int = 30) -> list[Claim]:
+        rows = self._call(
+            "SELECT o_customer,o_subscription,o_repin,o_ticket,o_phase,o_lag "
+            "FROM gvai_authority.reconcile_claim_due_v1(%s,%s)", (limit, claim_seconds),
+        )
+        return [Claim(row[0], row[1], row[2], row[3], row[4], float(row[5])) for row in rows]
+
+    def status(self) -> dict[str, Any]:
+        value = self._call("SELECT gvai_authority.reconcile_status_v1()", ())[0][0]
+        if type(value) is not dict:
+            raise fail("status_rejected")
+        return value
+
+    def _claim_single(self, customer: str) -> Claim | None:
+        raise fail("operator_claim_unavailable")
+
+    def _signal(self, customer: str, event: tuple[str, str, int, bool]) -> Claim | None:
+        event_id, digest, created, denial = event
+        identifier(event_id, "evt_")
+        if (
+            type(digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or type(created) is not int or type(denial) is not bool
+        ):
+            raise fail("event_digest_rejected")
+        rows = self._call(
+            "SELECT o_duplicate,o_subscription,o_repin,o_ticket FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,%s)",
+            (customer, event_id, digest, created, denial),
+        )
+        if not rows:
+            raise fail("unmapped_customer")
+        duplicate, subscription, repin, ticket = rows[0]
+        if duplicate:
+            return None
+        return Claim(customer, subscription, repin, ticket, "signal", 0.0)
+
+    def complete(self, claim: Claim, load: Callable[[str | None, bool], PaidState]) -> str:
+        """Fetch Stripe state for a claimed ticket and apply or fail it; never holds a lock."""
+        try:
+            state = load(claim.subscription, claim.repin)
+            if type(state) is not PaidState:
+                raise fail("state_rejected")
+            for number in (state.observed_min, state.observed_max, state.start, state.end, state.access_until):
+                if number is not None and type(number) is not int:
+                    raise fail("state_rejected")
+            if state.subscription is not None:
+                identifier(state.subscription, "sub_")
+            eligible = state.eligible is True
+        except BillingUnavailable as error:
+            return self._failure(claim, error.transient, error.code)
+        except Exception:
+            LOG.warning("stripe_billing: unexpected_reconciliation_error")
+            return self._failure(claim, False, "unexpected_error")
+        return self._call(
+            "SELECT gvai_authority.reconcile_apply_v1(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (claim.customer, claim.ticket, state.observed_min, state.observed_max, state.subscription,
+             state.invoice if eligible else None, state.start if eligible else None,
+             state.end if eligible else None, eligible, state.access_until if eligible else None,
+             state.terminal is True),
+        )[0][0]
+
+    def _failure(self, claim: Claim, transient: bool, code: str) -> str:
+        outcome = self._call(
+            "SELECT gvai_authority.reconcile_fail_v1(%s,%s,%s,%s)",
+            (claim.customer, claim.ticket, "transient" if transient else "integrity", code),
+        )[0][0]
+        return "transient_failure" if transient and outcome != "ticket_invalid" else outcome
+
+    def reconcile(
+        self, customer: str, load: Callable[[str | None, bool], PaidState],
+        *, event: tuple[str, str, int, bool] | None = None,
+    ) -> bool:
+        identifier(customer, "cus_")
+        for attempt in range(1, MAX_EVENT_ATTEMPTS + 1):
+            claim = self._claim_single(customer) if event is None else self._signal(customer, event)
+            if claim is None:
+                return False
+            outcome = self.complete(claim, load)
+            if outcome in APPLIED:
+                return True
+            if outcome == "duplicate_event":
+                return False
+            if outcome == "stale_snapshot" and attempt < MAX_EVENT_ATTEMPTS:
+                # Stripe's clock has second resolution; wait until a read is strictly newer.
+                self.sleep(1.1)
+                continue
+            break
+        raise fail("reconciliation_" + re.sub(r"[^a-z0-9_]", "_", outcome.lower())[:40],
+                   transient=outcome in TRANSIENT_OUTCOMES)
+
+
+class PostgreSQLReconcilerStore(ReconcileFunctions):
+    """Least-privilege reconciler role: function execution only, no table access."""
+
+    def __init__(self, connect: ConnectionFactory) -> None:
+        self.connect = connect
+
+
+class PostgreSQLBillingStore(ReconcileFunctions):
     """Owner-only control plane. No raw event bodies or payment details are stored."""
 
     def __init__(self, connect: ConnectionFactory) -> None:
@@ -84,6 +217,20 @@ class PostgreSQLBillingStore:
                 raise fail("billing_mapping_missing")
             return row[0]
 
+    def _claim_single(self, customer: str) -> Claim | None:
+        rows = self._call(
+            "SELECT o_customer,o_subscription,o_repin,o_ticket,o_phase,o_lag "
+            "FROM gvai_authority.reconcile_claim_one_v1(%s,%s)", (customer, 30),
+        )
+        if not rows:
+            raise fail("claim_in_flight", transient=True)
+        row = rows[0]
+        return Claim(row[0], row[1], row[2], row[3], row[4], float(row[5]))
+
+    def resume(self, tenant: str) -> bool:
+        customer = self.customer(tenant)
+        return self._call("SELECT gvai_authority.reconcile_resume_v1(%s)", (customer,))[0][0] is True
+
     def revoke(self, tenant: str) -> None:
         customer = self.customer(tenant)
         with _transaction(self.connect) as cursor:
@@ -106,135 +253,53 @@ class PostgreSQLBillingStore:
             raise fail("unmapped_customer")
         return row
 
-    def reconcile(
-        self, customer: str, load: Callable[[str | None], PaidState],
-        *, event: tuple[str, str] | None = None,
-    ) -> bool:
-        identifier(customer, "cus_")
-        unavailable = False
-        with _transaction(self.connect) as cursor:
-            tenant, pinned, revoked = self._lock(cursor, customer)
-            if event is not None:
-                identifier(event[0], "evt_")
-                if type(event[1]) is not str or not re.fullmatch(r"[0-9a-f]{64}", event[1]):
-                    raise fail("event_digest_rejected")
-                cursor.execute(
-                    "SELECT tenant_ref,payload_hash FROM gvai_authority.billing_events WHERE event_id=%s",
-                    (event[0],),
-                )
-                previous = cursor.fetchone()
-                if previous is not None:
-                    if previous != (tenant, event[1]):
-                        raise fail("event_collision_rejected")
-                    return False
-            cursor.execute("SELECT extract(epoch FROM clock_timestamp())::bigint")
-            checked_at = cursor.fetchone()[0]
-            cursor.execute("SAVEPOINT billing_snapshot")
-            try:
-                state = load(pinned)
-                self._apply(cursor, tenant, pinned, revoked, state, checked_at)
-            except Exception:
-                # Commit denial, leave event unacknowledged, and require authoritative retry.
-                LOG.warning("stripe_billing: reconciliation_failed_access_suspended")
-                cursor.execute("ROLLBACK TO SAVEPOINT billing_snapshot")
-                cursor.execute(
-                    "UPDATE gvai_authority.billing_customers SET eligible=false,verified_until='-infinity' "
-                    "WHERE tenant_ref=%s", (tenant,),
-                )
-                unavailable = True
-            if not unavailable and event is not None:
-                cursor.execute(
-                    "INSERT INTO gvai_authority.billing_events(event_id,tenant_ref,payload_hash) VALUES(%s,%s,%s)",
-                    (event[0], tenant, event[1]),
-                )
-        if unavailable:
-            raise fail("reconciliation_requires_retry")
-        return True
-
-    @staticmethod
-    def _apply(
-        cursor: Any, tenant: int, pinned: str | None, revoked: bool,
-        state: PaidState, checked_at: int,
-    ) -> None:
-        if type(state) is not PaidState:
-            raise fail("state_rejected")
-        if state.subscription is not None:
-            identifier(state.subscription, "sub_")
-        if pinned is not None and state.subscription != pinned:
-            raise fail("subscription_replacement_rejected")
-        invoice = None
-        if state.eligible:
-            identifier(state.invoice, "in_")
-            if (
-                state.subscription is None or type(state.start) is not int
-                or type(state.end) is not int or type(state.access_until) is not int
-                or not state.start <= checked_at < state.access_until <= state.end
-            ):
-                raise fail("paid_period_rejected")
-            cursor.execute(
-                "SELECT invoice_id FROM gvai_authority.billing_periods WHERE tenant_ref=%s "
-                "AND starts_at<%s AND ends_at>%s AND invoice_id<>%s",
-                (tenant, _instant(state.end), _instant(state.start), state.invoice),
-            )
-            if cursor.fetchone() is not None:
-                raise fail("overlapping_period_rejected")
-            cursor.execute(
-                "INSERT INTO gvai_authority.billing_periods"
-                "(invoice_id,tenant_ref,subscription_id,starts_at,ends_at) "
-                "VALUES(%s,%s,%s,%s,%s) ON CONFLICT(invoice_id) DO NOTHING",
-                (state.invoice, tenant, state.subscription, _instant(state.start), _instant(state.end)),
-            )
-            cursor.execute(
-                "SELECT tenant_ref,subscription_id,starts_at,ends_at,allowance "
-                "FROM gvai_authority.billing_periods WHERE invoice_id=%s", (state.invoice,),
-            )
-            if cursor.fetchone() != (
-                tenant, state.subscription, _instant(state.start), _instant(state.end), ALLOWANCE,
-            ):
-                raise fail("invoice_reassignment_rejected")
-            invoice = state.invoice
-        cursor.execute(
-            "UPDATE gvai_authority.billing_customers SET subscription_id=%s,current_invoice=%s,"
-            "eligible=%s,verified_until=%s,access_until=%s WHERE tenant_ref=%s",
-            (state.subscription, invoice, state.eligible and not revoked,
-             _instant(checked_at + FRESH_SECONDS),
-             _instant(state.access_until if state.eligible else 0), tenant),
-        )
-
-    def checkout(self, tenant: str, create: Callable[[str], dict[str, Any]]) -> str:
+    def checkout(self, tenant: str, create: Callable[[str, int, bool], dict[str, Any]]) -> str:
         customer = self.customer(tenant)
-        # Persist intent before the external call, including on an uncertain reply.
         with _transaction(self.connect) as cursor:
             self._lock(cursor, customer)
+            cursor.execute("SELECT revoked FROM gvai_authority.billing_customers WHERE customer_id=%s", (customer,))
+            if cursor.fetchone()[0]:
+                raise fail("checkout_requires_operator_recovery")
+            # Opens a resubscription only for a terminal subscription; otherwise returns the
+            # current generation. Persists intent before any external call.
+            cursor.execute("SELECT gvai_authority.reconcile_begin_resubscribe_v1(%s)", (customer,))
+            generation = cursor.fetchone()[0]
             cursor.execute(
                 "UPDATE gvai_authority.billing_customers "
                 "SET checkout_started_at=COALESCE(checkout_started_at,clock_timestamp()) "
                 "WHERE customer_id=%s", (customer,),
             )
         with _transaction(self.connect) as cursor:
-            _, _, revoked = self._lock(cursor, customer)
             cursor.execute(
                 "SELECT checkout_session_id,checkout_url,"
-                "checkout_started_at>clock_timestamp()-interval '23 hours' "
+                "checkout_started_at>clock_timestamp()-interval '23 hours',repin_allowed,checkout_generation "
                 "FROM gvai_authority.billing_customers WHERE customer_id=%s", (customer,),
             )
-            session_id, url, retryable = cursor.fetchone()
-            if revoked or not retryable:
-                raise fail("checkout_requires_operator_recovery")
-            if session_id is not None:
-                return https_url(url, host="checkout.stripe.com")
-            value = create(customer)
-            identifier(value.get("id"), "cs_test_")
-            if (
-                value.get("object") != "checkout.session" or value.get("livemode") is not False
-                or value.get("customer") != customer or value.get("mode") != "subscription"
-            ):
-                raise fail("checkout_binding_rejected")
-            url = https_url(value.get("url"), host="checkout.stripe.com")
+            session_id, url, retryable, repin, current = cursor.fetchone()
+        if not retryable or current != generation:
+            raise fail("checkout_requires_operator_recovery")
+        if session_id is not None:
+            return https_url(url, host="checkout.stripe.com")
+        # Stripe is called with no transaction or row lock held; the generation-scoped
+        # idempotency key makes concurrent duplicate calls return the same session.
+        value = create(customer, generation, repin)
+        identifier(value.get("id"), "cs_test_")
+        if (
+            value.get("object") != "checkout.session" or value.get("livemode") is not False
+            or value.get("customer") != customer or value.get("mode") != "subscription"
+        ):
+            raise fail("checkout_binding_rejected")
+        url = https_url(value.get("url"), host="checkout.stripe.com")
+        with _transaction(self.connect) as cursor:
+            self._lock(cursor, customer)
             cursor.execute(
                 "UPDATE gvai_authority.billing_customers SET checkout_session_id=%s,checkout_url=%s "
-                "WHERE customer_id=%s", (value["id"], url, customer),
+                "WHERE customer_id=%s AND checkout_generation=%s AND NOT revoked "
+                "AND (checkout_session_id IS NULL OR checkout_session_id=%s) RETURNING 1",
+                (value["id"], url, customer, generation, value["id"]),
             )
+            if cursor.fetchone() is None:
+                raise fail("checkout_requires_operator_recovery")
         return url
 
 

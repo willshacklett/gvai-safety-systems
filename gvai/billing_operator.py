@@ -9,8 +9,12 @@ import os
 import signal
 import threading
 
+from gvai.billing_reconciler import BoundedStripe, Reconciler, ReconcilerSettings
 from gvai.commercial_http import create_webhook_server
-from gvai.postgresql_billing import PAID_ENTRY_FUNCTIONS, PostgreSQLBillingStore, PostgreSQLPaidUsage
+from gvai.postgresql_billing import (
+    PAID_ENTRY_FUNCTIONS, RECONCILER_ENTRY_FUNCTIONS, PostgreSQLBillingStore, PostgreSQLPaidUsage,
+    PostgreSQLReconcilerStore,
+)
 from gvai.private_staging import (
     BoundedConnections, PrivateStagingApplication, StagingConfig, _database_connect,
     read_private_json, verify_database_role,
@@ -19,6 +23,7 @@ from gvai.stripe_billing import BillingConfig, BillingService, StripeREST, Subsc
 
 
 LOG = logging.getLogger(__name__)
+RECONCILER_COMMANDS = frozenset({"reconcile-serve", "webhooks", "status"})
 
 
 def _billing_connect(dsn):
@@ -27,8 +32,8 @@ def _billing_connect(dsn):
     def connect():
         connection = base()
         try:
-            # Serialize reconciliation while fetching up to six bounded Stripe objects.
-            connection.execute("SET idle_in_transaction_session_timeout='45s'")
+            # No provider request is made inside a transaction; abandoned ones are reaped quickly.
+            connection.execute("SET idle_in_transaction_session_timeout='10s'")
             connection.commit()
         except Exception:
             connection.close()
@@ -57,9 +62,11 @@ def main(argv: list[str] | None = None) -> int:
         command = commands.add_parser(name)
         command.add_argument("--tenant", required=True)
         command.add_argument("--output", required=True, help="New owner-only URL handoff file.")
-    for name in ("reconcile", "revoke"):
+    for name in ("reconcile", "revoke", "resume"):
         commands.add_parser(name).add_argument("--tenant", required=True)
     commands.add_parser("webhooks").add_argument("--port", type=int, default=8081)
+    commands.add_parser("reconcile-serve")
+    commands.add_parser("status")
     commands.add_parser("serve-paid")
     args = parser.parse_args(argv)
     connections = None
@@ -72,6 +79,31 @@ def main(argv: list[str] | None = None) -> int:
                 entry_functions=PAID_ENTRY_FUNCTIONS,
             )
             application.start()
+        elif args.command in RECONCILER_COMMANDS:
+            data = read_private_json(args.config)
+            required = {"mode", "reconciler_database_dsn", "stripe"}
+            if (
+                not required <= set(data) or not set(data) <= required | {"heartbeat_path", "workers", "rate_per_second"}
+                or data["mode"] != "stripe-test-reconciler"
+            ):
+                raise fail("reconciler_configuration_rejected")
+            config = BillingConfig(**data["stripe"])
+            connections = BoundedConnections(_billing_connect(data["reconciler_database_dsn"]), maximum=8)
+            verify_database_role(connections, operator=False, entry_functions=RECONCILER_ENTRY_FUNCTIONS)
+            store = PostgreSQLReconcilerStore(connections)
+            bounded = BoundedStripe(StripeREST(config), rate_per_second=float(data.get("rate_per_second", 10)))
+            authority = SubscriptionAuthority(bounded, config)
+            if args.command == "status":
+                print(json.dumps(store.status(), sort_keys=True))
+            elif args.command == "webhooks":
+                server = create_webhook_server(BillingService(authority, store).webhook, args.port)
+            else:
+                settings = ReconcilerSettings(workers=int(data.get("workers", 4)))
+                reconciler = Reconciler(store, authority, bounded, settings, heartbeat_path=data.get("heartbeat_path"))
+                stopped = threading.Event()
+                for number in (signal.SIGINT, signal.SIGTERM):
+                    previous[number] = signal.signal(number, lambda *_args: stopped.set())
+                reconciler.serve(stopped)
         else:
             data = read_private_json(args.config)
             if set(data) != {"mode", "operator_database_dsn", "stripe"} or data["mode"] != "stripe-test-operator":
@@ -90,9 +122,14 @@ def main(argv: list[str] | None = None) -> int:
                 service.reconcile(args.tenant)
             elif args.command == "revoke":
                 store.revoke(args.tenant)
+            elif args.command == "resume":
+                if not store.resume(args.tenant):
+                    raise fail("resume_not_applicable")
             else:
-                server = create_webhook_server(service.webhook, args.port)
-        if server is not None or application is not None:
+                raise fail("command_rejected")
+        if args.command == "reconcile-serve":
+            pass
+        elif server is not None or application is not None:
             stopped = threading.Event()
             for number in (signal.SIGINT, signal.SIGTERM):
                 previous[number] = signal.signal(number, lambda *_args: stopped.set())
@@ -101,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
                 thread.start()
             stopped.wait()
         else:
-            print("Billing operation acknowledged; no secrets printed.")
+            if args.command != "status":
+                print("Billing operation acknowledged; no secrets printed.")
         return 0
     except Exception:
         LOG.error("stripe_billing: operation_failed_reconcile")
