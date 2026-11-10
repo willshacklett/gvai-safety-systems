@@ -142,15 +142,17 @@ Phase 6G adds the local-only authenticated HTTP adapter documented in
 bounded request parsing, and exposes evaluation only. This does not make the
 service suitable for remote, shared-host, paid, or customer traffic.
 
-The system still depends on process-local API-key and usage stores, trusted
-injected clocks, and trusted server-side ownership data. In-memory restart or
-replica boundaries can bypass quotas and revoke history. Clock rollback can
-still affect API-key validity. Allowance and attempt-accounting policy require
-founder approval; the $99/month price implies no unit count. Before any remote,
-shared-host, paid, or customer use, separately review and implement:
+The default wiring still uses process-local API-key and in-memory usage stores.
+Phase 6H.1 adds an experimental opt-in local SQLite usage ledger, but does not
+change these defaults or make authentication, key revocation, or ownership
+durable. In-memory restart or replica boundaries can bypass quotas; stale
+SQLite restoration and multi-host operation are not protected. Clock rollback
+can still affect API-key validity. Allowance and attempt-accounting policy
+require founder approval; the $99/month price implies no unit count. Before any
+remote, shared-host, paid, or customer use, separately review and implement:
 
-- Durable identity, ownership, API-key, revocation, and quota backends with
-  current reads and explicit transaction/idempotency guarantees.
+- Production-grade durable identity, ownership, API-key, revocation, and quota
+  backends with current reads and explicit transaction/idempotency guarantees.
 - Independently trusted account and key-management flows; customer request
   claims must never set tenant, role, capability, billing, or resource ownership.
 - TLS, credential-header handling, strict body and request limits, rate limits,
