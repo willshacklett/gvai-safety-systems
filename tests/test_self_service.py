@@ -141,10 +141,12 @@ def stack():
     from gvai.self_service import PostgreSQLSelfServiceStore, SelfService, create_self_service_server
     from gvai.stripe_billing import BillingConfig, BillingService, SubscriptionAuthority
 
+    # CI sets GVAI_REQUIRE_SELF_SERVICE_POSTGRES=1 so missing prerequisites fail instead of skipping.
+    unavailable = pytest.fail if os.environ.get("GVAI_REQUIRE_SELF_SERVICE_POSTGRES") == "1" else pytest.skip
     if shutil.which("docker") is None:
-        pytest.skip("Docker unavailable.")
+        unavailable("Docker unavailable.")
     if subprocess.run(["docker", "image", "inspect", "postgres:16"], capture_output=True).returncode:
-        pytest.skip("Cached postgres:16 unavailable; no image pull.")
+        unavailable("Cached postgres:16 unavailable; no image pull.")
     name = "gvai-self-service-" + secrets.token_hex(8)
     admin_password = secrets.token_hex(16)
     owner_password, runtime_password = secrets.token_hex(16), secrets.token_hex(16)
@@ -535,3 +537,19 @@ def test_signup_is_rate_limited_and_account_table_is_owner_only(stack):
     with stack.owner() as connection:
         with pytest.raises(stack.psycopg.errors.RaiseException):
             connection.execute("UPDATE gvai_authority.customer_accounts SET key_id=NULL,key_claimed_at=NULL")
+
+
+def test_account_cannot_be_linked_to_another_tenants_credential(stack):
+    token_a, _, _ = paid_account(stack)
+    claim(stack, token_a)
+    _, _, _ = signup(stack)
+    with stack.owner() as connection:
+        key_id = connection.execute(
+            "SELECT key_id FROM gvai_authority.customer_accounts WHERE key_id IS NOT NULL LIMIT 1"
+        ).fetchone()[0]
+        with pytest.raises(stack.psycopg.errors.RaiseException):
+            connection.execute(
+                "UPDATE gvai_authority.customer_accounts SET key_id=%s,key_claimed_at=now() "
+                "WHERE key_id IS NULL AND account_ref=(SELECT max(account_ref) FROM gvai_authority.customer_accounts)",
+                (key_id,),
+            )

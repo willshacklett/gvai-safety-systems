@@ -17,6 +17,13 @@ BEGIN
         OR pg_catalog.to_regclass('gvai_authority.customer_accounts') IS NOT NULL THEN
         RAISE EXCEPTION 'self-service accounts require baseline 001-004 and no prior install';
     END IF;
+    IF (
+        SELECT count(*) FROM pg_catalog.pg_attribute AS a
+        WHERE a.attrelid='gvai_authority.billing_customers'::regclass AND NOT a.attisdropped
+          AND a.attname IN ('checkout_started_at','checkout_session_id','checkout_url')
+    ) <> 3 THEN
+        RAISE EXCEPTION 'self-service accounts require checkout migration 007';
+    END IF;
 END;
 $guard$;
 
@@ -43,6 +50,15 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'customer account history is immutable';
     END IF;
+    IF NEW.key_id IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.key_id IS NULL) AND NOT EXISTS (
+        SELECT 1 FROM gvai_authority.customer_credentials AS c
+        WHERE c.key_id = NEW.key_id AND c.tenant_ref = NEW.tenant_ref
+    ) THEN
+        RAISE EXCEPTION 'account key must belong to the account tenant';
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        RETURN NEW;
+    END IF;
     IF NEW.account_ref <> OLD.account_ref OR NEW.tenant_ref <> OLD.tenant_ref
         OR NEW.token_verifier <> OLD.token_verifier OR NEW.created_at <> OLD.created_at
         OR (OLD.key_id IS NOT NULL AND (
@@ -54,7 +70,7 @@ BEGIN
     RETURN NEW;
 END;
 $function$;
-CREATE TRIGGER customer_account_guard BEFORE UPDATE OR DELETE
+CREATE TRIGGER customer_account_guard BEFORE INSERT OR UPDATE OR DELETE
     ON gvai_authority.customer_accounts FOR EACH ROW
     EXECUTE FUNCTION gvai_authority.customer_account_guard_v1();
 
