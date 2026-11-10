@@ -1,0 +1,17 @@
+{
+  "base_commit": "0be658ce59662a53c9eee81edcdcb7646af37315",
+  "admission_enabled": false,
+  "dispatch_implemented": false,
+  "migrations": [
+    {"file": "001_reservation_authority_v1.sql", "sha256": "f07891a1ebe6de955b96db6f0bbf88c7267ddde5e4367886cef06a1c025755af"},
+    {"file": "002_restricted_reservation_routine_v1.sql", "sha256": "b9d73dbb0de5039ed8c7ce0aac99a64773660a8a7563fbd90ebbbf79ec16ecba"},
+    {"file": "003_advisory_pilots_v1.sql", "sha256": "d5c6d46140bd21b2b6e848b142b23a162f99bab072a8cc9107d818c0069216a6"},
+    {"file": "004_paid_advisory_v1.sql"},
+    {"file": "007_paid_checkout_state_v1.sql"}
+  ],
+  "excluded": [
+    "004_subscription_billing_v1.sql",
+    "005_checkout_attempts_v1.sql",
+    "006_checkout_restricted_reads_v1.sql"
+  ]
+}
