@@ -8,6 +8,16 @@ The page reuses the small `web/gv-carl-logo.svg` mark from `willshacklett/GvAI` 
 
 ## Local build and test
 
+The homepage's **Invite-Only Advisory Pilot** section describes the implemented
+advisory evaluation contract, operator-led invitations, finite allowances and
+expiring/revocable keys. Its JSON examples mirror the checked-in HTTP/service
+documentation; they are illustrative, not live results. The only new inquiry
+action opens the existing `contact@gvaisafety.com` address. Access remains
+subject to operational validation; no paid subscription, signup or enforcement
+service is activated. The existing eight-file public asset allowlist and Pages
+workflow are unchanged. Public-site tests check the section, example contracts,
+links, keyboard-accessible code blocks and exact allowlisted output.
+
 No frontend package installation or build tool is required. Prepare a deterministic output using the checked-in asset allowlist:
 
 ```sh

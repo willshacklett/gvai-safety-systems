@@ -18,6 +18,7 @@
         <span>GVAI <strong>Safety Systems</strong></span>
       </a>
       <nav aria-label="Primary navigation">
+        <a href="#advisory-pilot">Advisory Pilot</a>
         <a href="#research">Research</a>
         <a href="#business">Business</a>
         <a href="#government">Government</a>
@@ -36,6 +37,7 @@
           <h1 id="hero-title">Independent Oversight.<br>Human Control.</h1>
           <p class="hero-lede">We make system strain legible and powerful software governable, while keeping decisions, permissions, and the switch under human authority.</p>
           <div class="hero-actions">
+            <a class="button button-primary" href="#advisory-pilot">Explore the advisory pilot</a>
             <a class="button button-primary" href="#audiences">Explore what we’re building <span aria-hidden="true">↓</span></a>
             <a class="button button-outline" href="prototype-demo.html">View recorded prototype demo <span aria-hidden="true">↗</span></a>
             <a class="button button-outline" href="https://github.com/willshacklett/gvai-safety-systems/blob/main/docs/agent_safety_v2_threat_model.md" target="_blank" rel="noopener noreferrer">Read the threat model <span aria-hidden="true">↗</span></a>
@@ -141,10 +143,83 @@
       <p class="intelligence-note">Identity and authorization interfaces exist as a foundation only. There is no production login, live model connection, tenant service, or customer data processing in this website.</p>
     </section>
 
+    <section class="advisory-pilot section-wrap" id="advisory-pilot" aria-labelledby="pilot-title">
+      <div class="section-label"><span>04</span> Developer pilot</div>
+      <span class="status-tag">Expressions of interest</span>
+      <h2 id="pilot-title">Invite-Only Advisory Pilot</h2>
+      <p class="pilot-intro">Explore an advisory decision API for your application's telemetry and reported action effects. Get structured recommendations you can inspect and integrate into your own review process.</p>
+      <p id="pilot-status"><strong>Inquiries only; access is not activated by this page.</strong> Hosted pilot access is subject to operator approval and operational validation. Paid subscriptions are not available. There is no signup, checkout, or live API connection on this website.</p>
+      <div class="pilot-grid">
+        <div>
+          <h3>Three outputs. Your controls stay yours.</h3>
+          <ul>
+            <li><strong>ALLOW:</strong> the supplied sample meets the evaluator's advisory rules. It is not permission to execute.</li>
+            <li><strong>QUALIFY:</strong> review the supplied sample before proceeding.</li>
+            <li><strong>BLOCK:</strong> the supplied sample triggers an advisory rule; the recommendation does not stop execution.</li>
+          </ul>
+          <p>Results use caller-supplied telemetry and reported effects, not independent observation of your system. An omitted or inaccurate report can limit the recommendation.</p>
+        </div>
+        <div>
+          <h3>A bounded, operator-led evaluation</h3>
+          <ol>
+            <li>Discuss a non-sensitive use case with our team.</li>
+            <li>Before approved access, agree a finite evaluation allowance, expiry and project scope. No unlimited access or automatic renewal is offered.</li>
+            <li>An operator provisions your tenant and project, then arranges private, one-time API-key delivery. Keys expire and can be revoked; retain them securely.</li>
+            <li>Send authenticated evaluation requests through the separately approved access path and inspect project-scoped usage.</li>
+          </ol>
+          <p>Each newly reserved attempt consumes one unit, including failures or lost replies. Exact request-ID retries do not run the evaluator again; they do not retrieve a previous result. Pilot access ends at its expiry or cap and can be suspended.</p>
+        </div>
+      </div>
+      <h3>What an integration looks like</h3>
+      <p>Illustrative contract examples, not live results or a public endpoint. Approved clients use <code>POST /v1/evaluations</code> with a bearer API key in the Authorization header and <code>Content-Type: application/json</code>. Replace the example request and project IDs with your own opaque request ID and operator-provided project ID. Never put credentials in URLs or email them.</p>
+      <div class="pilot-grid">
+        <div class="pilot-example">
+          <h4 id="pilot-request-title">Example JSON request</h4>
+          <pre tabindex="0" aria-labelledby="pilot-request-title"><code id="pilot-request">{
+  "version": "v1",
+  "request_id": "req-2026-001",
+  "resource_id": "project-a",
+  "telemetry": {
+    "token_delta": 100,
+    "tool_calls_delta": 1,
+    "error_delta": 0,
+    "repeated_action_delta": 0,
+    "recursion_depth": 0,
+    "latency_ms": null
+  },
+  "reported_effects": []
+}</code></pre>
+        </div>
+        <div class="pilot-example">
+          <h4 id="pilot-response-title">Illustrative JSON response</h4>
+          <pre tabindex="0" aria-labelledby="pilot-response-title"><code id="pilot-response">{
+  "outcome": "evaluated",
+  "reason": "evaluated",
+  "evaluation": {
+    "version": "gvai-evaluation-v1",
+    "request_id": "req-2026-001",
+    "decision": "ALLOW",
+    "risk_score": 1.45,
+    "risk_band": "green",
+    "explanation": "The existing telemetry guard classified this sample green. No authority-expansion effect was reported. This is not authorization or enforcement.",
+    "evaluation_status": "ok",
+    "advisory_only": true,
+    "enforcement_applied": false
+  }
+}</code></pre>
+        </div>
+      </div>
+      <p><strong>Advisory is not enforcement.</strong> This API does not execute actions, independently enforce shutdown, terminate processes, or establish confinement. It provides no certification, availability, security, or termination guarantee. Independent shutdown research remains experimental and separate from this pilot.</p>
+      <div class="contact-actions">
+        <a class="button button-dark" href="mailto:contact@gvaisafety.com?subject=Advisory%20Pilot%20Inquiry" aria-label="Discuss the Advisory Pilot by email to contact@gvaisafety.com" aria-describedby="pilot-status contact-stage contact-safety contact-email-help">Discuss the Advisory Pilot</a>
+      </div>
+      <p class="contact-note">Use the existing <a class="text-link" href="#contact">contact details and email guidance</a>. Keep your initial inquiry non-sensitive; do not send credentials, prompts, or customer datasets.</p>
+    </section>
+
     <section class="documentation" id="documentation" aria-labelledby="documentation-title">
       <div class="section-wrap documentation-inner">
         <div>
-          <div class="section-label"><span>04</span> Open engineering</div>
+          <div class="section-label"><span>05</span> Open engineering</div>
           <h2 id="documentation-title">Read the work. Inspect the limits.</h2>
         </div>
         <div class="documentation-links">
@@ -154,7 +229,7 @@
       </div>
     </section>
     <section class="contact section-wrap" id="contact" aria-labelledby="contact-title">
-      <div class="section-label"><span>05</span> Customer inquiries</div>
+      <div class="section-label"><span>06</span> Customer inquiries</div>
       <h2 id="contact-title">Discuss the prototype. Explore the possibilities.</h2>
       <p id="contact-stage"><strong>Prototype-stage inquiries only.</strong> Request a discussion of experimental work or a recorded demonstration. Production services, customer deployments, and operational safety guarantees are not available.</p>
       <p>For business and government inquiries, email <a class="contact-email" href="mailto:contact@gvaisafety.com" aria-label="Email GVAI Safety Systems at contact@gvaisafety.com" aria-describedby="contact-safety contact-email-help">contact@gvaisafety.com</a>.</p>
@@ -177,6 +252,7 @@
         <p>Experimental work. No guarantee of protection or general containment.</p>
       </div>
       <nav class="footer-nav" aria-label="Footer navigation">
+        <a href="#advisory-pilot">Advisory Pilot</a>
         <a href="#research">Research</a>
         <a href="#audiences">Business and Government</a>
         <a href="#intelligence">GVAI Intelligence</a>

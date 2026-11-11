@@ -320,6 +320,39 @@ Current real-container evidence:
   47 opt-in PostgreSQL, four host-Nginx and 18 opt-in Docker tests. The 18
   Docker cases passed separately; this mission does not rerun real PostgreSQL.
 
+### Combined disposable PostgreSQL acceptance (opt-in)
+
+`tests/test_advisory_https_postgresql.py` composes the existing real local
+Nginx/mTLS fixture with the existing PostgreSQL migrations/restricted-role
+fixture and actual private application. It creates its own `postgres:16`
+container using `--pull=never`, tmpfs database storage and a random port
+published only on `127.0.0.1`. It does not use caller-supplied database DSNs:
+generated synthetic credentials temporarily replace both test DSNs, and the
+original environment is restored. The named container and its disposable
+volumes are removed in fixture teardown; temporary PKI/configuration lives in
+pytest's temporary directory, not in the repository.
+
+Run only with existing local Docker, a cached official `postgres:16` image,
+Nginx, OpenSSL and the already installed `psycopg` driver:
+
+```sh
+GVAI_RUN_ADVISORY_HTTPS_POSTGRES=1 python -m pytest -q -p no:cacheprovider \
+  tests/test_advisory_https_postgresql.py
+```
+
+Missing prerequisites produce an explicit skip; no dependencies or images are
+installed/downloaded. The older Docker HTTPS fixture is not invoked because it
+installs container packages. The reused local ingress config changes only
+temporary paths and loopback ports; its mTLS, forwarding and rate rules remain.
+One acceptance case covers two tenants, advisory evaluation/usage, missing
+client certificate, invalid/expired/revoked keys, cross-tenant denials, quota
+exhaustion, replay and persisted accounting/revocation after application restart.
+Role or migration errors fail the test, not a fallback to in-memory accounting.
+Application restart uses the same database and proxy target; it is not a
+PostgreSQL crash, backup/restore, host sandbox or production availability test.
+This opt-in case must actually pass before combined durable HTTPS validation
+can be claimed.
+
 ### Confirmed non-root startup defect
 
 The initial real non-root `nginx -t` parsed the old configuration but failed:
