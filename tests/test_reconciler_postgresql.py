@@ -1,4 +1,4 @@
-"""Disposable-PostgreSQL tests of the migration 009 reconciliation functions and role boundary.
+"""Disposable-PostgreSQL tests of migrations 009/010/011 and the reconciliation role boundary.
 
 Opt in with GVAI_RUN_RECONCILER_POSTGRES=1. GVAI_REQUIRE_RECONCILER_POSTGRES=1 (CI) turns
 every missing prerequisite into a failure instead of a skip.
@@ -252,10 +252,19 @@ def test_fresh_denial_event_suspends_immediately_but_old_replay_does_not(env):
     now = env.now()
     old = env.signal(customer, "evt_old1", now - 4000, denial=True, digest="b" * 64)
     assert old[0] is False
-    assert env.billing(customer)[0] is True, "A replayed old denial must not suspend a paid customer."
-    fresh = env.signal(customer, "evt_new1", now, denial=True, digest="c" * 64)
+    assert env.billing(customer)[:3] == (False, False, False), "An unseen delayed denial must suspend access."
+    fresh = env.signal(customer, "evt_new1", now - 2, denial=True, digest="c" * 64)
     assert fresh[0] is False and fresh[3] is not None
-    assert env.billing(customer)[:2] == (False, False)
+    assert env.billing(customer)[:3] == (False, False, False)
+    assert recover(env, customer, "evt_new1", now - 2) == "recovered"
+    assert env.signal(customer, "evt_old1", now - 4000, denial=True, digest="b" * 64)[0] is True
+    assert env.signal(customer, "evt_new1", now - 2, denial=True, digest="c" * 64)[0] is True
+    # A strictly later authenticated payment also covers previously unseen older denials.
+    assert env.signal(customer, "evt_late_covered", now - 2, denial=True)[0] is False
+    assert env.billing(customer)[:3] == (True, True, True)
+    # Equal-time evidence is not strictly later recovery and must remain protective.
+    env.signal(customer, "evt_equal_payment", now - 1, denial=True)
+    assert env.billing(customer)[:3] == (False, False, False)
 
 
 def test_stale_paid_snapshot_after_cancellation_event_cannot_restore_access(env):
@@ -270,14 +279,28 @@ def test_stale_paid_snapshot_after_cancellation_event_cannot_restore_access(env)
     assert env.billing(customer)[:2] == (False, False)
 
 
-def test_fresher_paid_snapshot_after_a_denial_event_is_the_stripe_truth(env):
+def test_newer_http_date_alone_cannot_reverse_denial(env):
+    """A newer HTTP Date alone is insufficient evidence to reverse a denial."""
+    _, customer = env.tenant()
+    paid(env, customer)
+    now = env.now()
+    event = env.signal(customer, "evt_denial_snapshot", now, denial=True, digest="f" * 64)
+    assert env.billing(customer)[0] is False
+
+    # Simulate an apparently fresh response containing pre-denial paid data.
+    outcome = env.apply(customer, event[3], obs=(now + 1, now + 1))
+    assert outcome != "applied_eligible"
+    assert env.billing(customer)[0] is False
+
+
+def test_fresher_paid_snapshot_preserves_denial_hold(env):
     _, customer = env.tenant()
     paid(env, customer)
     now = env.now()
     event = env.signal(customer, "evt_fail1", now, denial=True, digest="e" * 64)
     assert env.billing(customer)[0] is False
-    assert env.apply(customer, event[3], obs=(now + 1, now + 1)) == "applied_eligible"
-    assert env.billing(customer)[0:2] == (True, True)
+    assert env.apply(customer, event[3], obs=(now + 1, now + 1)) == "applied_denied"
+    assert env.billing(customer)[0:3] == (False, False, False)
     assert env.state(customer)[2] == 0
 
 
@@ -437,8 +460,52 @@ def test_terminal_resubscription_requires_owner_transition_and_new_subscription(
     env.owner.execute("UPDATE gvai_authority.billing_customers SET checkout_started_at=clock_timestamp() WHERE tenant_ref=%s", (tenant,))
     env.owner.execute("UPDATE gvai_authority.billing_reconcile_state SET next_due_at=clock_timestamp()")
     ticket = env.claim(customer)[3]
-    assert env.apply(customer, ticket, sub="sub_new", invoice="in_new", start=env.now() - 2) == "applied_eligible"
-    assert env.billing(customer)[0:2] == (True, True) and env.billing(customer)[4] == "sub_new"
+    start = env.now() - 2
+    assert env.apply(customer, ticket, sub="sub_new", invoice="in_new", start=start) == "applied_denied"
+    assert env.billing(customer)[:3] == (False, False, False)
+    denial, barrier = env.owner.execute(
+        "SELECT s.denial_event,d.event_created FROM gvai_authority.billing_reconcile_state s "
+        "JOIN gvai_authority.billing_denials d ON d.event_id=s.denial_event WHERE s.tenant_ref=%s",
+        (tenant,),
+    ).fetchone()
+    # Use the signed-evidence operator path, with the replacement chain independently bound.
+    import time
+    from types import SimpleNamespace
+    from gvai.postgresql_billing import PostgreSQLBillingStore
+    from gvai.stripe_billing import BillingUnavailable, PaidState
+    from tests.test_stripe_billing import config, event
+
+    while env.now() <= barrier:
+        time.sleep(0.05)
+    payment = barrier + 1
+    def current(*args):
+        obs = env.tick(customer)
+        return PaidState("sub_new", "in_new", start, start + 30 * 86400,
+                         True, start + 30 * 86400, obs, obs)
+    authority = SimpleNamespace(config=config(), clock=env.now, current=current)
+    store = PostgreSQLBillingStore(lambda: env.server.connect("m2_owner"))
+    tenant_id = env.owner.execute("SELECT tenant_id FROM gvai_authority.tenants WHERE tenant_ref=%s", (tenant,)).fetchone()[0]
+    def evidence(paid_at):
+        return event(event_id="evt_resub_paid_" + customer, customer=customer,
+            at=env.now(), created=env.now(), object="invoice", id="in_new",
+            livemode=False, subscription="sub_new", status="paid", paid=True,
+            paid_out_of_band=False, status_transitions={"paid_at": paid_at})
+    raw, signature = evidence(barrier)
+    with pytest.raises(BillingUnavailable):
+        store.recover_denial(tenant_id, denial, raw, signature, "verified resubscription payment", authority)
+    # A rejected recovery rolls back ticket consumption; release its claim before retry.
+    rejected_ticket = env.owner.execute("SELECT claim_ticket FROM gvai_authority.billing_reconcile_state WHERE tenant_ref=%s", (tenant,)).fetchone()[0]
+    assert env.rec.execute("SELECT gvai_authority.reconcile_fail_v1(%s,%s,'transient','recovery_retry')", (customer, rejected_ticket)).fetchone() == ("recovery_retry",)
+    raw, signature = evidence(payment)
+    with pytest.raises(BillingUnavailable):
+        store.recover_denial(tenant_id, denial, raw + b" ", signature, "verified resubscription payment", authority)
+    assert env.billing(customer)[:3] == (False, False, False)
+    assert env.owner.execute("SELECT denial_event FROM gvai_authority.billing_reconcile_state WHERE tenant_ref=%s", (tenant,)).fetchone() == (denial,)
+    assert store.recover_denial(tenant_id, denial, raw, signature, "verified resubscription payment", authority) == "recovered"
+    assert env.billing(customer)[:6] == (True, True, True, False, "sub_new", False)
+    assert env.owner.execute("SELECT denial_event FROM gvai_authority.billing_reconcile_state WHERE tenant_ref=%s", (tenant,)).fetchone() == (None,)
+    assert env.owner.execute("SELECT repin_allowed FROM gvai_authority.billing_customers WHERE tenant_ref=%s", (tenant,)).fetchone() == (False,)
+    assert env.owner.execute("SELECT payment_created FROM gvai_authority.billing_denial_recoveries WHERE tenant_ref=%s", (tenant,)).fetchone() == (payment,)
     assert env.owner.execute("SELECT count(*) FROM gvai_authority.billing_subscription_history WHERE tenant_ref=%s", (tenant,)).fetchone()[0] == 2
     # Old subscription is not resurrected.
     env.owner.execute("UPDATE gvai_authority.billing_reconcile_state SET next_due_at=clock_timestamp()")
@@ -540,3 +607,349 @@ def test_status_is_aggregate_and_identifier_free(env):
     assert customer not in text and "sub_" not in text and "cus_" not in text
     assert {"phases", "due_now", "max_overdue_seconds", "in_flight", "failing", "needs_operator", "entitled",
             "lease_expiring", "lease_lapsed", "oldest_active_success_age_seconds"} <= set(status)
+
+
+def hold(env, customer):
+    paid(env, customer)
+    at = env.now() - 2
+    denial = "evt_hold_" + customer
+    env.signal(customer, denial, at, denial=True)
+    return denial, at
+
+
+def recover(env, customer, expected_denial, at, *, connection=None, **changes):
+    ticket = env.claim(customer)[3]
+    values = dict(customer=customer, denial=expected_denial, event="evt_paid_" + customer,
+                  digest="b" * 64, paid=at + 1, reason="verified payment evidence",
+                  ticket=ticket, low=env.tick(customer), high=env.last[customer],
+                  sub="sub_" + customer, invoice="in_" + customer,
+                  start=env.periods[(customer, "in_" + customer)], end=0, access=0)
+    values["end"] = values["start"] + 30 * 86400
+    values["access"] = values["end"]
+    values.update(changes)
+    return (connection or env.owner).execute(
+        "SELECT gvai_authority.reconcile_recover_denial_v1(" + ",".join(["%s"] * 14) + ")",
+        tuple(values.values()),
+    ).fetchone()[0]
+
+
+def test_verified_operator_recovery_is_atomic_audited_and_duplicate_safe(env):
+    tenant, customer = env.tenant()
+    denial, at = hold(env, customer)
+    assert recover(env, customer, denial, at) == "recovered"
+    assert env.billing(customer)[:2] == (True, True)
+    assert env.owner.execute("SELECT denial_event FROM gvai_authority.billing_reconcile_state WHERE tenant_ref=%s", (tenant,)).fetchone() == (None,)
+    audit = env.owner.execute("SELECT denial_event,payment_event,operator_name FROM gvai_authority.billing_denial_recoveries WHERE tenant_ref=%s", (tenant,)).fetchall()
+    assert audit == [(denial, "evt_paid_" + customer, "m2_owner")]
+    assert env.signal(customer, denial, at, denial=True)[0] is True
+    assert env.billing(customer)[0] is True
+    with pytest.raises(psycopg.errors.RaiseException):
+        recover(env, customer, denial, at)
+    assert env.billing(customer)[0] is True
+    with pytest.raises(psycopg.errors.RaiseException):
+        env.owner.execute("DELETE FROM gvai_authority.billing_denial_recoveries WHERE tenant_ref=%s", (tenant,))
+
+
+@pytest.mark.parametrize("change", ["old_payment", "wrong_hold", "wrong_sub", "wrong_invoice", "bad_hash", "no_reason", "future_payment", "reconciler"])
+def test_recovery_rejects_invalid_evidence_and_preserves_hold(env, change):
+    tenant, customer = env.tenant()
+    denial, at = hold(env, customer)
+    changes = {"old_payment": dict(paid=at), "wrong_hold": dict(denial="evt_wrong"),
+               "wrong_sub": dict(sub="sub_wrong"), "wrong_invoice": dict(invoice="bad"),
+               "bad_hash": dict(digest="bad"), "no_reason": dict(reason=""),
+               "future_payment": dict(paid=env.now()+100), "reconciler": dict(connection=env.rec)}[change]
+    with pytest.raises(psycopg.errors.Error):
+        recover(env, customer, denial, at, **changes)
+    assert env.billing(customer)[:3] == (False, False, False)
+    assert env.owner.execute("SELECT denial_event FROM gvai_authority.billing_reconcile_state WHERE tenant_ref=%s", (tenant,)).fetchone() == (denial,)
+    assert env.owner.execute("SELECT count(*) FROM gvai_authority.billing_denial_recoveries WHERE tenant_ref=%s", (tenant,)).fetchone() == (0,)
+
+
+def test_cancellation_and_revocation_block_recovery(env):
+    for revoked in (False, True):
+        tenant, customer = env.tenant()
+        denial, at = hold(env, customer)
+        if revoked:
+            env.owner.execute("UPDATE gvai_authority.billing_customers SET revoked=true WHERE tenant_ref=%s", (tenant,))
+        else:
+            claim = env.claim(customer)
+            assert env.apply(customer, claim[3], eligible=False, terminal=True) == "applied_denied"
+        with pytest.raises(psycopg.errors.RaiseException):
+            recover(env, customer, denial, at)
+        assert env.billing(customer)[0] is False
+
+
+def test_resubscription_does_not_clear_hold(env):
+    tenant, customer = env.tenant()
+    denial, at = hold(env, customer)
+    env.apply(customer, env.claim(customer)[3], eligible=False, terminal=True)
+    env.owner.execute("SELECT gvai_authority.reconcile_begin_resubscribe_v1(%s)", (customer,))
+    env.owner.execute("UPDATE gvai_authority.billing_customers SET checkout_started_at=clock_timestamp() WHERE tenant_ref=%s", (tenant,))
+    assert env.apply(customer, env.claim(customer)[3], sub="sub_resub_" + customer, invoice="in_resub_" + customer) == "applied_denied"
+    assert env.billing(customer)[0] is False
+    assert env.owner.execute("SELECT denial_event FROM gvai_authority.billing_reconcile_state WHERE tenant_ref=%s", (tenant,)).fetchone() == (denial,)
+
+
+def test_new_denial_serializes_with_recovery_and_wins(env, pg):
+    tenant, customer = env.tenant()
+    denial, at = hold(env, customer)
+    errors = []
+    with env.owner.transaction():
+        assert recover(env, customer, denial, at) == "recovered"
+        def signal():
+            try:
+                other = Env(pg)
+                other.signal(customer, "evt_race_" + customer, env.now(), denial=True)
+            except Exception as error:
+                errors.append(error)
+        thread = threading.Thread(target=signal)
+        thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive() and not errors
+    assert env.billing(customer)[:3] == (False, False, False)
+
+
+def test_hold_blocks_paid_quota_even_if_eligibility_is_mistakenly_set(env):
+    tenant, customer = env.tenant()
+    hold(env, customer)
+    env.owner.execute("UPDATE gvai_authority.billing_customers SET eligible=true, verified_until=clock_timestamp()+interval '1 minute', access_until=clock_timestamp()+interval '1 day' WHERE tenant_ref=%s", (tenant,))
+    membership = env.owner.execute(
+        "INSERT INTO gvai_authority.tenant_memberships(tenant_ref,principal_id,status) "
+        "VALUES(%s,%s,'active') RETURNING membership_ref", (tenant, customer),
+    ).fetchone()[0]
+    resource = "project_" + customer
+    key = f"{tenant:032x}"
+    env.owner.execute("INSERT INTO gvai_authority.resource_ownerships(resource_id,ownership_version,tenant_ref,resource_kind,status) VALUES(%s,1,%s,'evaluation','active')", (resource, tenant))
+    env.owner.execute("INSERT INTO gvai_authority.customer_credentials(key_id,tenant_ref,membership_ref,credential_verifier,capabilities,status,created_at,expires_at) VALUES(%s,%s,%s,decode(repeat('c',64),'hex'),ARRAY['evaluation:run','usage:read'],'active',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '1 day')", (key,tenant,membership))
+    runtime = env.server.connect("m2_runtime")
+    runtime.autocommit = True
+    assert runtime.execute("SELECT gvai_authority.reserve_paid_v1(%s,decode(repeat('c',64),'hex'),'m2-test',1,'disposable','held_request',%s,repeat('a',64))", (key,resource)).fetchone() == ("unauthorized",)
+    # Prove these same credentials and resource would otherwise be authorized.
+    env.owner.execute("UPDATE gvai_authority.billing_reconcile_state SET denial_event=NULL WHERE tenant_ref=%s", (tenant,))
+    assert runtime.execute("SELECT gvai_authority.reserve_paid_v1(%s,decode(repeat('c',64),'hex'),'m2-test',1,'disposable','authorized_request',%s,repeat('a',64))", (key,resource)).fetchone() == ("reserved",)
+    runtime.close()
+    assert env.owner.execute("SELECT consumed FROM gvai_authority.billing_periods WHERE tenant_ref=%s", (tenant,)).fetchone() == (1,)
+
+
+def test_held_terminal_customer_can_recover_only_with_authorized_new_subscription(env):
+    tenant, customer = env.tenant()
+    denial, at = hold(env, customer)
+    env.apply(customer, env.claim(customer)[3], eligible=False, terminal=True)
+    env.owner.execute("SELECT gvai_authority.reconcile_begin_resubscribe_v1(%s)", (customer,))
+    env.owner.execute("UPDATE gvai_authority.billing_customers SET checkout_started_at=clock_timestamp() WHERE tenant_ref=%s", (tenant,))
+    start = env.now() - 1
+    assert recover(env, customer, denial, at, sub="sub_new_"+customer,
+                   invoice="in_new_"+customer, start=start, end=start+86400,
+                   access=start+86400) == "recovered"
+    assert env.billing(customer)[:2] == (True, True)
+    assert env.billing(customer)[4:6] == ("sub_new_"+customer, False)
+
+
+def test_new_hold_invalidates_old_recovery_evidence_and_duplicate_collisions(env):
+    tenant, customer = env.tenant()
+    denial, at = hold(env, customer)
+    env.signal(customer, "evt_second_"+customer, env.now(), denial=True, digest="c"*64)
+    with pytest.raises(psycopg.errors.RaiseException):
+        recover(env, customer, denial, at)
+    with pytest.raises(psycopg.errors.RaiseException):
+        env.signal(customer, denial, at, denial=True, digest="d"*64)
+    assert env.billing(customer)[0] is False
+
+
+def test_out_of_order_denials_do_not_lower_recovery_payment_barrier(env):
+    _, customer = env.tenant()
+    denial, at = hold(env, customer)
+    env.signal(customer, "evt_latest_"+customer, at+1, denial=True, digest="c"*64)
+    older = "evt_older_"+customer
+    env.signal(customer, older, at, denial=True, digest="d"*64)
+    with pytest.raises(psycopg.errors.RaiseException):
+        recover(env, customer, older, at, paid=at+1)
+    assert env.billing(customer)[0] is False
+
+
+def test_migration_010_preserves_populated_009_history_and_runtime_grants():
+    from tests.pg_support import MIGRATIONS, ROOT
+    with disposable_postgres(REQUIRE, migrations=MIGRATIONS[:MIGRATIONS.index("010_subscription_denial_hold_v1.sql")]) as server:
+        existing = Env(server)
+        tenant, customer = existing.tenant()
+        paid(existing, customer)
+        before = existing.owner.execute("SELECT invoice_id,subscription_id,starts_at,ends_at,allowance,consumed FROM gvai_authority.billing_periods WHERE tenant_ref=%s", (tenant,)).fetchall()
+        existing.owner.execute((ROOT / "migrations/postgresql/010_subscription_denial_hold_v1.sql").read_text())
+        assert existing.billing(customer)[:2] == (True, True)
+        assert existing.owner.execute("SELECT invoice_id,subscription_id,starts_at,ends_at,allowance,consumed FROM gvai_authority.billing_periods WHERE tenant_ref=%s", (tenant,)).fetchall() == before
+        signal = existing.signal(customer, "evt_upgrade", existing.now(), denial=True)
+        assert existing.apply(customer, signal[3]) != "applied_eligible"
+        assert existing.billing(customer)[0] is False
+
+
+def test_review_polling_denial_survives_fresher_paid_snapshot(env):
+    _, customer = env.tenant()
+    paid(env, customer)
+    ticket = env.claim(customer)[3]
+    assert env.apply(customer, ticket, eligible=False) == "applied_denied"
+    ticket = env.claim(customer)[3]
+    assert env.apply(customer, ticket) == "applied_denied"
+    assert env.billing(customer)[0] is False
+
+
+def test_review_unseen_delayed_denial_is_durable(env):
+    _, customer = env.tenant()
+    paid(env, customer)
+    signal = env.signal(customer, "evt_delayed_"+customer, env.now()-4000, denial=True)
+    assert env.billing(customer)[0] is False
+    assert env.apply(customer, signal[3]) == "applied_denied"
+
+
+def test_review_older_denial_after_authenticated_recovery_is_covered(env):
+    _, customer = env.tenant()
+    denial, at = hold(env, customer)
+    assert recover(env, customer, denial, at) == "recovered"
+    env.signal(customer, "evt_covered_"+customer, at, denial=True)
+    assert env.billing(customer)[0] is True
+
+
+def test_review_monitoring_exposes_active_hold_count_and_age(env):
+    _, customer = env.tenant()
+    hold(env, customer)
+    value = env.rec.execute("SELECT gvai_authority.reconcile_status_v1()").fetchone()[0]
+    assert value["active_denial_holds"] >= 1
+    assert value["oldest_denial_hold_age_seconds"] >= 0
+
+
+@pytest.mark.parametrize("sub,invoice,held", [
+    ("other", "current", False), ("current", "other", False),
+    ("current", "current", True), ("current", None, True),
+])
+def test_review_denial_scope_is_checked_under_customer_lock(env, sub, invoice, held):
+    _, customer = env.tenant()
+    paid(env, customer)
+    subscription = "sub_"+customer if sub == "current" else "sub_unrelated"
+    invoice = "in_"+customer if invoice == "current" else "in_unrelated" if invoice else None
+    signal = env.rec.execute(
+        "SELECT * FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,true,%s,%s)",
+        (customer,"evt_scope_"+customer,"c"*64,env.now(),subscription,invoice)).fetchone()
+    assert env.billing(customer)[0] is not held
+    obs = max(env.tick(customer), env.now()+1)
+    assert env.apply(customer,signal[3],obs=(obs,obs)) == ("applied_denied" if held else "applied_eligible")
+
+
+def test_review_recovery_evidence_cannot_cross_tenants(env):
+    _, customer = env.tenant()
+    denial, at = hold(env,customer)
+    assert recover(env,customer,denial,at) == "recovered"
+    _, other = env.tenant()
+    other_denial, other_at = hold(env,other)
+    with pytest.raises(psycopg.errors.RaiseException):
+        recover(env,other,other_denial,other_at,event="evt_paid_"+customer)
+    assert env.billing(other)[0] is False
+
+
+def test_review_pre_recovery_negative_poll_cannot_reinstate_hold(env):
+    _, customer = env.tenant()
+    denial, at = hold(env,customer)
+    # A webhook ticket can coexist with the operator's polling ticket.
+    old = env.signal(customer,"evt_before_recovery_"+customer,at)[3]
+    assert recover(env,customer,denial,at) == "recovered"
+    assert env.apply(customer,old,eligible=False) == "ticket_invalid"
+    assert env.billing(customer)[0] is True
+
+
+
+def test_review_new_signal_preserves_continuous_hold_age(env):
+    tenant, customer = env.tenant()
+    hold(env, customer)
+    env.owner.execute("UPDATE gvai_authority.billing_reconcile_state SET denial_held_since=clock_timestamp()-interval '1 hour' WHERE tenant_ref=%s", (tenant,))
+    env.signal(customer,"evt_age_"+customer,env.now(),denial=True)
+    status = env.rec.execute("SELECT gvai_authority.reconcile_status_v1()").fetchone()[0]
+    assert status["oldest_denial_hold_age_seconds"] >= 3600
+
+
+
+def test_review_owner_recovers_with_historical_hmac_and_current_chain(env, pg):
+    from types import SimpleNamespace
+    from tests.test_stripe_billing import config, event
+    from gvai.postgresql_billing import PostgreSQLBillingStore
+    from gvai.stripe_billing import PaidState, BillingUnavailable
+    tenant, customer = env.tenant()
+    paid(env,customer)
+    at = env.now()
+    denial = "evt_historical_"+customer
+    env.signal(customer,denial,at-4000,denial=True)
+    raw, signature = event(event_id="evt_historical_paid_"+customer,customer=customer,
+        at=at-2999,created=at-3000,object="invoice",id="in_"+customer,
+        livemode=False,subscription="sub_"+customer,status="paid",paid=True,
+        paid_out_of_band=False,status_transitions={"paid_at":at-3001})
+    start = env.periods[(customer,"in_"+customer)]
+    def current(*args):
+        obs = env.tick(customer)
+        return PaidState("sub_"+customer,"in_"+customer,start,start+30*86400,
+            True,start+30*86400,obs,obs)
+    authority = SimpleNamespace(config=config(),clock=env.now,current=current)
+    store = PostgreSQLBillingStore(lambda: pg.connect("m2_owner"))
+    tenant_id = env.owner.execute("SELECT tenant_id FROM gvai_authority.tenants WHERE tenant_ref=%s",(tenant,)).fetchone()[0]
+    with pytest.raises(BillingUnavailable):
+        store.recover_denial(tenant_id,denial,raw+b" ",signature,"historical verified payment",authority)
+    assert env.billing(customer)[0] is False
+    assert store.recover_denial(tenant_id,denial,raw,signature,"historical verified payment",authority) == "recovered"
+    assert env.billing(customer)[0] is True
+
+
+
+def test_review_newer_scoped_denial_while_held_preserves_payment_barrier(env):
+    _, customer = env.tenant()
+    denial, at = hold(env,customer)
+    newer = env.now()
+    env.rec.execute("SELECT * FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,true,%s,%s)",
+        (customer,"evt_held_newer_"+customer,"c"*64,newer,"sub_"+customer,"in_"+customer))
+    with pytest.raises(psycopg.errors.RaiseException):
+        recover(env,customer,denial,at)
+    assert env.billing(customer)[0] is False
+
+
+
+def test_review_unpinned_scoped_denial_blocks_later_matching_grant(env):
+    _, customer = env.tenant()
+    signal = env.rec.execute("SELECT * FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,true,%s,%s)",
+        (customer,"evt_unpinned_"+customer,"c"*64,env.now()-4000,"sub_"+customer,"in_"+customer)).fetchone()
+    assert env.apply(customer,signal[3]) == "applied_denied"
+    assert env.billing(customer)[0] is False
+
+
+def test_review_unmatched_denial_does_not_hold_a_different_new_subscription(env):
+    _, customer = env.tenant()
+    signal = env.rec.execute("SELECT * FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,true,%s,%s)",
+        (customer,"evt_other_unpinned_"+customer,"c"*64,env.now()-4000,"sub_other","in_other")).fetchone()
+    assert env.apply(customer,signal[3]) == "applied_eligible"
+    assert env.billing(customer)[0] is True
+
+
+
+def test_review_owner_can_recover_matched_pending_scope(env):
+    _, customer = env.tenant()
+    at = env.now()-4000
+    denial = "evt_pending_recover_"+customer
+    signal = env.rec.execute("SELECT * FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,true,%s,%s)",
+        (customer,denial,"c"*64,at,"sub_"+customer,"in_"+customer)).fetchone()
+    assert env.apply(customer,signal[3]) == "applied_denied"
+    assert recover(env,customer,denial,at) == "recovered"
+    assert env.billing(customer)[0] is True
+
+
+def test_review_scoped_evidence_and_recovery_remain_owner_only(env):
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        env.rec.execute("SELECT * FROM gvai_authority.billing_scoped_denials")
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        env.rec.execute("DELETE FROM gvai_authority.billing_denial_recoveries")
+
+
+
+def test_review_pending_denial_event_cannot_be_reused_as_other_tenant_recovery(env):
+    _, customer = env.tenant()
+    pending = "evt_pending_collision_"+customer
+    env.rec.execute("SELECT * FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,true,%s,%s)",
+        (customer,pending,"c"*64,env.now()-4000,"sub_other","in_other"))
+    _, other = env.tenant()
+    denial, at = hold(env,other)
+    with pytest.raises(psycopg.errors.RaiseException):
+        recover(env,other,denial,at,event=pending)
+    assert env.billing(other)[0] is False

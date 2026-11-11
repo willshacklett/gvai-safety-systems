@@ -220,7 +220,9 @@ def stack():
                 "001_reservation_authority_v1.sql", "002_restricted_reservation_routine_v1.sql",
                 "003_advisory_pilots_v1.sql", "004_paid_advisory_v1.sql",
                 "007_paid_checkout_state_v1.sql", "008_self_service_accounts_v1.sql",
-                "009_subscription_reconciliation_v1.sql",
+                "009_subscription_reconciliation_v1.sql", "010_subscription_denial_hold_v1.sql",
+                "011_legacy_billing_quarantine_v1.sql",
+                "012_bounded_billing_integrity_v1.sql",
             ):
                 connection.execute((ROOT / "migrations/postgresql" / migration).read_text())
             connection.execute(
@@ -228,7 +230,9 @@ def stack():
                 "GRANT EXECUTE ON FUNCTION "
                 "gvai_authority.reserve_paid_v1(text,bytea,text,bigint,text,text,text,text),"
                 "gvai_authority.complete_paid_v1(text,bytea,text,text,boolean),"
-                "gvai_authority.paid_usage_v1(text,bytea,text) TO ss_runtime;"
+                "gvai_authority.paid_usage_v1(text,bytea,text),"
+                "gvai_authority.billing_upgrade_ready_v1(),"
+                "gvai_authority.billing_integrity_ready_v12() TO ss_runtime;"
                 "INSERT INTO gvai_authority.authority_state(singleton_id,authority_id,epoch,trust_domain)"
                 " VALUES(1,'self-service-test',1,'disposable');"
             )
@@ -425,7 +429,7 @@ def test_out_of_order_events_follow_current_stripe_state_never_stale_payload(sta
     assert entitled(stack, token) is False
     stack.fake.set(customer, "paid")
     assert deliver(stack, customer, "invoice.paid")[0] == 200
-    assert entitled(stack, token) is True
+    assert entitled(stack, token) is False, "Ordinary paid events cannot clear a denial hold."
     with stack.owner() as connection:
         assert connection.execute(
             "SELECT count(*) FROM gvai_authority.billing_periods p JOIN gvai_authority.tenants t "
@@ -445,6 +449,8 @@ def test_failed_payment_blocks_key_issuance_and_suspends_existing_key(stack):
     assert claim(stack, token)[0] == 402
     stack.fake.set(customer, "paid")
     assert deliver(stack, customer)[0] == 200
+    assert claim(stack, token)[0] == 402, "A paid snapshot alone cannot clear the hold."
+    token, resource, customer = paid_account(stack)
     key = claim(stack, token)[1]["api_key"]
     assert evaluate(stack, key, resource)[0] == 200
     stack.fake.set(customer, "failed")

@@ -156,7 +156,7 @@ def cluster(request):
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             probe = subprocess.run(
-                ["docker", "exec", container_id, "pg_isready", "-U", "postgres"],
+                ["docker", "exec", container_id, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
                 capture_output=True, timeout=5,
             )
             if probe.returncode == 0:

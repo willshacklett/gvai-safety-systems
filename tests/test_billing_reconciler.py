@@ -224,7 +224,7 @@ def test_serve_stops_cleanly_and_survives_worker_errors(caplog):
 def test_reconciler_entry_functions_are_exactly_the_non_owner_surface():
     assert {name.split("(")[0] for name in RECONCILER_ENTRY_FUNCTIONS} == {
         "reconcile_claim_due_v1", "reconcile_signal_v1", "reconcile_apply_v1",
-        "reconcile_fail_v1", "reconcile_status_v1",
+        "reconcile_fail_v1", "reconcile_status_v1", "billing_upgrade_ready_v1", "billing_integrity_ready_v12",
     }
     assert not any("resume" in name or "claim_one" in name or "resubscribe" in name
                    for name in RECONCILER_ENTRY_FUNCTIONS)

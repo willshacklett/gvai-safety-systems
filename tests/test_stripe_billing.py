@@ -947,3 +947,60 @@ def test_sql_paid_contract_is_separate_atomic_locked_and_fail_closed():
     assert "update gvai_authority.advisory_pilots" not in sql
     assert "delete from" not in sql
     assert "grant " not in sql
+
+
+def test_recovery_requires_signed_paid_invoice_and_payment_timestamp():
+    from gvai.stripe_billing import verified_recovery_event
+    claims = dict(object="invoice", id="in_a", subscription="sub_a", livemode=False,
+                  status="paid", paid=True, paid_out_of_band=False,
+                  status_transitions={"paid_at": NOW - 2})
+    raw, signature = event(**claims)
+    assert verified_recovery_event(raw, signature, config(), NOW)["id"] == "evt_test"
+    with pytest.raises(BillingUnavailable):
+        verified_recovery_event(raw + b" ", signature, config(), NOW)
+    for overrides in (dict(paid=False), dict(paid_out_of_band=True), dict(livemode=True),
+                      dict(status_transitions={}), dict(status_transitions={"paid_at": NOW+1})):
+        raw, signature = event(**{**claims, **overrides})
+        with pytest.raises(BillingUnavailable):
+            verified_recovery_event(raw, signature, config(), NOW)
+    raw, signature = event(kind="invoice.payment_failed", **claims)
+    with pytest.raises(BillingUnavailable):
+        verified_recovery_event(raw, signature, config(), NOW)
+
+
+@pytest.mark.parametrize("mismatch", [None, "customer", "invoice", "subscription", "denied"])
+def test_operator_recovery_verifies_payment_bindings_before_database_attestation(mismatch):
+    from types import SimpleNamespace
+    api = Stripe()
+    authority = SubscriptionAuthority(api, config(), clock=lambda: NOW)
+    calls = []
+    class Store(PostgreSQLBillingStore):
+        def __init__(self):
+            pass
+        def customer(self, tenant):
+            return "cus_a"
+        def _claim_single(self, customer):
+            return SimpleNamespace(ticket=123, subscription="sub_a", repin=False)
+        def _call(self, sql, parameters):
+            calls.append((sql, parameters))
+            return [("recovered",)]
+    claims = dict(object="invoice", id="in_a", subscription="sub_a", livemode=False,
+                  status="paid", paid=True, paid_out_of_band=False,
+                  status_transitions={"paid_at": NOW-2})
+    customer = "cus_b" if mismatch == "customer" else "cus_a"
+    if mismatch == "invoice":
+        claims["id"] = "in_b"
+    if mismatch == "subscription":
+        claims["subscription"] = "sub_b"
+    if mismatch == "denied":
+        api.objects["/v1/charges/ch_a"]["disputed"] = True
+    raw, signature = event(customer=customer, **claims)
+    store = Store()
+    if mismatch:
+        with pytest.raises(BillingUnavailable):
+            store.recover_denial("tenant-a", "evt_denial", raw, signature, "payment verified", authority)
+        assert calls == []
+    else:
+        assert store.recover_denial("tenant-a", "evt_denial", raw, signature, "payment verified", authority) == "recovered"
+        assert len(calls) == 1
+        assert calls[0][1][:6] == ("cus_a", "evt_denial", "evt_test", hashlib.sha256(raw).hexdigest(), NOW-2, "payment verified")

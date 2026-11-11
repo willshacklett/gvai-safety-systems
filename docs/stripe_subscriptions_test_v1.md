@@ -289,3 +289,44 @@ Updated:
 - [README.md](../README.md): test-mode implementation pointer
 - [commercial_advisory_base_v1.md](commercial_advisory_base_v1.md): distinguish extraction history
 - [private_staging_v1.md](private_staging_v1.md): distinguish pilot and paid entry points
+
+
+## M2 denial holds (migration 010)
+
+Apply `010_subscription_denial_hold_v1.sql` after unchanged migration 009 as the non-superuser
+schema owner. Previously unseen authenticated applicable denials establish durable holds regardless of delivery age, unless covered by strictly later authenticated recovery; later HTTP Dates and ordinary
+polling cannot recover paid access or quota. See [operator recovery and limits](subscription_reconciliation_v1.md#operator-recovery)
+for the signed subsequent-payment evidence workflow, audit boundary, permissions and upgrade limits.
+`resume` only resumes polling; resubscription does not bypass a hold.
+
+
+## M2 historical upgrade quarantine (migration 011)
+
+For local disposable testing, install forward-only `011_legacy_billing_quarantine_v1.sql` after unchanged
+009/010. All customers existing at cutover are conservatively quarantined; apparently paid flags are not
+historical recovery evidence. An empty installation does not quarantine future customers. Internal markers
+record uncertainty and a database cutover boundary, never invented Stripe events. Existing real holds,
+invoices, quota and credential history are retained; pre-cutover tickets are invalidated.
+
+Owner `recover-denial` still requires signed later payment and a matching current paid chain. A real 010 hold
+retains its pointer but its recovery must also cross the legacy boundary. Do not perform an additional charge
+or manually clear a hold to work around missing evidence. Paid/reconciler allowlists now also include
+`billing_upgrade_ready_v1()`; startup/readiness and the database reject incomplete inventory. See the
+[011 policy and historical results](subscription_reconciliation_v1.md#historical-upgrade-quarantine-migration-011).
+
+No staging/production execution, real customer suspension, communications or payment action is authorized.
+
+
+## M2 bounded integrity (migration 012)
+
+For local disposable testing, apply `012_bounded_billing_integrity_v1.sql` after unchanged 009/010/011.
+The migration validates and seals the 011 inventory, then maintains exact invalid-case accounting through
+restricted database triggers. Readiness and authenticated tenant access no longer rehash all historical
+customers per request. Both read-only readiness signatures belong in paid/reconciler allowlists; owner
+recovery, full audit and internal entitlement functions remain unavailable to those roles.
+
+Status, locked key claim and paid SQL share the effective hold/readiness/period/lease predicate. Invalid
+credentials and exhausted signup admission are rejected before costly work; database checks still precede
+grants/provider actions. A full owner audit latches any failure without a force-ready option. Trigger-disabled
+owner maintenance requires a full audit: an aggregate is not evidence that arbitrary privileged corruption
+could not occur. See the [012 design and limits](subscription_reconciliation_v1.md#bounded-integrity-and-consistent-entitlement-migration-012).

@@ -22,11 +22,16 @@ MIGRATIONS = (
     "001_reservation_authority_v1.sql", "002_restricted_reservation_routine_v1.sql",
     "003_advisory_pilots_v1.sql", "004_paid_advisory_v1.sql",
     "007_paid_checkout_state_v1.sql", "008_self_service_accounts_v1.sql",
-    "009_subscription_reconciliation_v1.sql",
+    "009_subscription_reconciliation_v1.sql", "010_subscription_denial_hold_v1.sql",
+    "011_legacy_billing_quarantine_v1.sql",
+    "012_bounded_billing_integrity_v1.sql",
 )
 RECONCILER_FUNCTIONS = (
+    "billing_upgrade_ready_v1()",
+    "billing_integrity_ready_v12()",
     "reconcile_claim_due_v1(integer,integer)",
     "reconcile_signal_v1(text,text,text,bigint,boolean)",
+    "reconcile_signal_v1(text,text,text,bigint,boolean,text,text)",
     "reconcile_apply_v1(text,bigint,bigint,bigint,text,text,bigint,bigint,boolean,bigint,boolean)",
     "reconcile_fail_v1(text,bigint,text,text)",
     "reconcile_status_v1()",
@@ -118,10 +123,17 @@ def disposable_postgres(
                 "INSERT INTO gvai_authority.authority_state(singleton_id,authority_id,epoch,trust_domain)"
                 " VALUES(1,'m2-test',1,'disposable');"
             )
+            if "011_legacy_billing_quarantine_v1.sql" in migrations:
+                connection.execute("GRANT EXECUTE ON FUNCTION gvai_authority.billing_upgrade_ready_v1() TO m2_runtime;")
+            if "012_bounded_billing_integrity_v1.sql" in migrations:
+                connection.execute("GRANT EXECUTE ON FUNCTION gvai_authority.billing_integrity_ready_v12() TO m2_runtime;")
             if "009_subscription_reconciliation_v1.sql" in migrations:
                 connection.execute(
                     "GRANT EXECUTE ON FUNCTION "
-                    + ",".join("gvai_authority." + f for f in RECONCILER_FUNCTIONS) + " TO m2_reconciler;"
+                    + ",".join("gvai_authority." + f for f in RECONCILER_FUNCTIONS
+                        if ("boolean,text,text" not in f or "010_subscription_denial_hold_v1.sql" in migrations)
+                        and ("billing_upgrade_ready" not in f or "011_legacy_billing_quarantine_v1.sql" in migrations)
+                        and ("billing_integrity_ready" not in f or "012_bounded_billing_integrity_v1.sql" in migrations)) + " TO m2_reconciler;"
                 )
         yield server
     finally:

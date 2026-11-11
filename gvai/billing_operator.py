@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+from pathlib import Path
 import signal
 import threading
 
@@ -64,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--output", required=True, help="New owner-only URL handoff file.")
     for name in ("reconcile", "revoke", "resume"):
         commands.add_parser(name).add_argument("--tenant", required=True)
+    recovery = commands.add_parser("recover-denial")
+    for field in ("tenant", "denial", "evidence", "signature-file", "reason"):
+        recovery.add_argument("--" + field, required=True)
     commands.add_parser("webhooks").add_argument("--port", type=int, default=8081)
     commands.add_parser("reconcile-serve")
     commands.add_parser("status")
@@ -111,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
             config = BillingConfig(**data["stripe"])
             connections = BoundedConnections(_billing_connect(data["operator_database_dsn"]), maximum=2)
             verify_database_role(connections, operator=True)
+            with connections() as connection, connection.cursor() as cursor:
+                cursor.execute("SELECT gvai_authority.billing_integrity_ready_v12()")
+                if cursor.fetchone() != (True,):
+                    raise fail("billing_upgrade_not_ready")
             store = PostgreSQLBillingStore(connections)
             service = BillingService(SubscriptionAuthority(StripeREST(config), config), store)
             if args.command == "bind":
@@ -122,6 +130,13 @@ def main(argv: list[str] | None = None) -> int:
                 service.reconcile(args.tenant)
             elif args.command == "revoke":
                 store.revoke(args.tenant)
+            elif args.command == "recover-denial":
+                result = store.recover_denial(
+                    args.tenant, args.denial, Path(args.evidence).read_bytes(),
+                    Path(args.signature_file).read_text().strip(), args.reason, service.authority,
+                )
+                if result != "recovered":
+                    raise fail("recovery_rejected")
             elif args.command == "resume":
                 if not store.resume(args.tenant):
                     raise fail("resume_not_applicable")

@@ -83,7 +83,7 @@ def decode(raw: bytes) -> dict[str, Any]:
         raise fail("invalid_json") from None
 
 
-def verify_event(raw: bytes, signature: str, secret: str, *, now: int) -> dict[str, Any]:
+def verify_event(raw: bytes, signature: str, secret: str, *, now: int, historical: bool = False) -> dict[str, Any]:
     if (
         type(raw) is not bytes or not 0 < len(raw) <= MAX_PAYLOAD
         or type(signature) is not str or len(signature) > 2048
@@ -97,7 +97,8 @@ def verify_event(raw: bytes, signature: str, secret: str, *, now: int) -> dict[s
         len(timestamps) != 1 or not re.fullmatch(r"[0-9]{1,12}", timestamps[0])
         or not 1 <= len(signatures) <= 8
         or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in signatures)
-        or abs(now - int(timestamps[0])) > 300
+        or int(timestamps[0]) > now + 300
+        or (not historical and abs(now - int(timestamps[0])) > 300)
     ):
         raise fail("signature_rejected")
     expected = hmac.new(
@@ -278,7 +279,8 @@ class SubscriptionAuthority:
 
         Every response's Stripe ``Date`` is recorded. The reconciliation database accepts a
         positive snapshot only when the earliest of them is strictly after the newest verified
-        webhook time it has seen, so a stale paid read can never override a later event.
+        webhook time it has seen, as an ordering check. A durable denial hold additionally requires explicit
+        operator recovery with verified payment evidence.
         """
         dates: list[int | None] = []
         begin = getattr(self.api, "begin_fetch", None)
@@ -406,12 +408,30 @@ class SubscriptionAuthority:
         )
 
 
+def verified_recovery_event(raw: bytes, signature: str, config: BillingConfig, now: int) -> dict[str, Any]:
+    """Only a signed TEST invoice payment can attest recovery; Dates cannot attest it."""
+    event = verify_event(raw, signature, config.webhook_secret, now=now, historical=True)
+    value = event["data"]["object"]
+    if (event["type"] != "invoice.paid" or value.get("object") != "invoice"
+            or value.get("livemode") is not False or value.get("status") != "paid"
+            or value.get("paid") is not True or value.get("paid_out_of_band") is not False):
+        raise fail("recovery_evidence_rejected")
+    identifier(value.get("id"), "in_")
+    identifier(value.get("customer"), "cus_")
+    identifier(value.get("subscription"), "sub_")
+    transitions = value.get("status_transitions")
+    paid_at = transitions.get("paid_at") if type(transitions) is dict else None
+    if type(paid_at) is not int or not 1 <= paid_at <= event["created"]:
+        raise fail("recovery_payment_time_rejected")
+    return event
+
+
 class BillingStore(Protocol):
     def bind(self, tenant: str, customer: str) -> None: ...
     def customer(self, tenant: str) -> str: ...
     def reconcile(
         self, customer: str, load: Callable[[str | None, bool], PaidState],
-        *, event: tuple[str, str, int, bool] | None = None,
+        *, event: tuple[str, str, int, bool] | tuple[str, str, int, bool, str | None, str | None] | None = None,
     ) -> bool: ...
     def checkout(self, tenant: str, create: Callable[[str, int, bool], dict[str, Any]]) -> str: ...
 
@@ -478,15 +498,48 @@ class BillingService:
         if event["type"] not in EVENT_TYPES:
             return
         value = event["data"]["object"]
+        scope_sub = scope_invoice = None
+        denial = event["type"] in DENIAL_EVENTS
+        scoped = event["type"].startswith(("charge.", "invoice.")) and denial
+        # A minimal customer-only notification can wake polling, but carries no
+        # transaction identity and therefore cannot itself attest a denial.
+        if scoped and set(value) == {"customer"}:
+            denial = scoped = False
         if event["type"] == "charge.dispute.created":
             charge = self.authority.api.request(
                 "GET", "/v1/charges/" + identifier(value.get("charge"), "ch_"),
             )
+            _test_object(charge, "charge", identifier(value.get("charge"), "ch_"))
             value = charge
+        if scoped:
+            if event["type"].startswith("charge."):
+                if value.get("object") != "charge" or value.get("livemode") is not False:
+                    raise fail("denial_charge_rejected")
+                intent_id = identifier(value.get("payment_intent"), "pi_")
+                intent = self.authority.api.request("GET", "/v1/payment_intents/" + intent_id)
+                _test_object(intent, "payment_intent", intent_id)
+                scope_invoice = identifier(intent.get("invoice"), "in_")
+                invoice = self.authority.api.request("GET", "/v1/invoices/" + scope_invoice)
+                _test_object(invoice, "invoice", scope_invoice)
+                if (intent.get("latest_charge") != value.get("id")
+                        or intent.get("customer") != value.get("customer")
+                        or invoice.get("customer") != value.get("customer")
+                        or invoice.get("payment_intent") != intent_id):
+                    raise fail("denial_binding_rejected")
+                value = invoice
+            else:
+                if value.get("object") != "invoice" or value.get("livemode") is not False:
+                    raise fail("denial_invoice_rejected")
+                scope_invoice = identifier(value.get("id"), "in_")
+            scope_sub = identifier(value.get("subscription"), "sub_")
+        elif event["type"] == "customer.subscription.deleted":
+            scope_sub = identifier(value.get("id"), "sub_")
+            scoped = True
         customer = identifier(
             value.get("id") if event["type"] == "customer.deleted" else value.get("customer"), "cus_",
         )
         self.store.reconcile(
             customer, lambda pinned, repin: self.authority.current(customer, pinned, repin),
-            event=(event["id"], hashlib.sha256(raw).hexdigest(), event["created"], event["type"] in DENIAL_EVENTS),
+            event=(event["id"], hashlib.sha256(raw).hexdigest(), event["created"], denial)
+                + ((scope_sub, scope_invoice) if scoped else ()),
         )

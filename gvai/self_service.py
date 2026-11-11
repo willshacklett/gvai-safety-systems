@@ -95,6 +95,13 @@ class PostgreSQLSelfServiceStore:
         if type(verifier_secret) is not bytes or len(verifier_secret) < 32:
             raise ValueError("A pinned verifier secret is required.")
         self._connect, self._secret = connect, verifier_secret
+        self.require_ready()
+
+    def require_ready(self) -> None:
+        with _transaction(self._connect) as cursor:
+            cursor.execute("SELECT gvai_authority.billing_integrity_ready_v12()")
+            if cursor.fetchone() != (True,):
+                raise SelfServiceError("unavailable")
 
     def token_verifier(self, token: object) -> bytes | None:
         if type(token) is not str or _ACCOUNT_TOKEN.fullmatch(token) is None:
@@ -105,6 +112,7 @@ class PostgreSQLSelfServiceStore:
         self, *, tenant: str, principal: str, resource: str, customer: str, verifier: bytes,
     ) -> None:
         identifier(customer, "cus_")
+        self.require_ready()
         with _transaction(self._connect) as cursor:
             cursor.execute(
                 "INSERT INTO gvai_authority.tenants(tenant_id,status) VALUES(%s,'active') RETURNING tenant_ref",
@@ -143,30 +151,29 @@ class PostgreSQLSelfServiceStore:
     def status(self, verifier: bytes) -> dict[str, Any] | None:
         with _transaction(self._connect) as cursor:
             cursor.execute(
-                "SELECT o.resource_id,"
-                "CASE WHEN b.revoked THEN 'suspended' "
-                "WHEN b.eligible AND b.access_until>clock_timestamp() AND b.verified_until>clock_timestamp() THEN 'active' "
-                "WHEN b.eligible AND b.access_until>clock_timestamp() THEN 'verification_pending' "
-                "ELSE 'payment_required' END,"
-                "a.key_id IS NOT NULL,"
-                "CASE WHEN b.access_until>clock_timestamp() THEN extract(epoch FROM b.access_until)::bigint END "
+                "SELECT b.tenant_ref,o.resource_id,a.key_id IS NOT NULL "
                 "FROM gvai_authority.customer_accounts a "
-                "JOIN gvai_authority.tenants t ON t.tenant_ref=a.tenant_ref "
-                "JOIN gvai_authority.billing_customers b ON b.tenant_ref=a.tenant_ref "
+                "JOIN gvai_authority.tenants t USING(tenant_ref) "
+                "JOIN gvai_authority.billing_customers b USING(tenant_ref) "
                 "JOIN gvai_authority.resource_ownerships o ON o.tenant_ref=a.tenant_ref AND o.status='active' "
-                "WHERE a.token_verifier=%s AND a.status='active' AND t.status='active'",
-                (verifier,),
+                "WHERE a.token_verifier=%s AND a.status='active' AND t.status='active' "
+                "AND EXISTS (SELECT 1 FROM gvai_authority.tenant_memberships m WHERE m.tenant_ref=a.tenant_ref AND m.status='active') "
+                "FOR SHARE OF b", (verifier,),
             )
-            row = cursor.fetchone()
-        if row is None:
-            return None
-        state = row[1]
-        result = {
-            "resource_id": row[0], "entitled": state == "active", "entitlement_state": state,
-            "api_key_claimed": bool(row[2]),
-        }
-        if state in ("active", "verification_pending"):
-            result["access_until"] = int(row[3])
+            row=cursor.fetchone()
+            if row is None:
+                return None
+            cursor.execute(
+                "SELECT gvai_authority.billing_entitlement_state_v12(tenant_ref),"
+                "CASE WHEN access_until>clock_timestamp() THEN extract(epoch FROM access_until)::bigint END FROM gvai_authority.billing_customers WHERE tenant_ref=%s",
+                (row[0],),
+            )
+            state,access=cursor.fetchone()
+            if state == "unavailable":
+                raise SelfServiceError("unavailable")
+        result={"resource_id":row[1],"entitled":state=="active","entitlement_state":state,"api_key_claimed":bool(row[2])}
+        if state in ("active","verification_pending"):
+            result["access_until"]=int(access)
         return result
 
     def claim_key(self, verifier: bytes, *, ttl_seconds: int = KEY_TTL_SECONDS) -> str:
@@ -181,9 +188,7 @@ class PostgreSQLSelfServiceStore:
             if account is None:
                 raise SelfServiceError("invalid_account")
             cursor.execute(
-                "SELECT t.tenant_id,m.principal_id,"
-                "(b.eligible AND NOT b.revoked AND b.access_until>clock_timestamp() "
-                "AND b.verified_until>clock_timestamp()) "
+                "SELECT t.tenant_id,m.principal_id,b.tenant_ref "
                 "FROM gvai_authority.billing_customers b "
                 "JOIN gvai_authority.tenants t ON t.tenant_ref=b.tenant_ref "
                 "JOIN gvai_authority.tenant_memberships m ON m.tenant_ref=b.tenant_ref "
@@ -191,7 +196,13 @@ class PostgreSQLSelfServiceStore:
                 "FOR UPDATE OF t,b", (account[0],),
             )
             owner = cursor.fetchone()
-            if owner is None or owner[2] is not True:
+            if owner is None:
+                raise SelfServiceError("payment_required")
+            cursor.execute("SELECT gvai_authority.billing_entitlement_state_v12(%s)", (owner[2],))
+            state=cursor.fetchone()[0]
+            if state == "unavailable":
+                raise SelfServiceError("unavailable")
+            if state != "active":
                 raise SelfServiceError("payment_required")
             if account[1] is not None:
                 raise SelfServiceError("already_claimed")
@@ -235,6 +246,7 @@ class SelfService:
 
     def signup(self) -> dict[str, str]:
         self._admit_signup()
+        self._store.require_ready()
         suffix = secrets.token_hex(16)
         tenant, principal, resource = "tenant-" + suffix, "principal-" + suffix, "project-" + suffix
         token = ACCOUNT_PREFIX + secrets.token_hex(32)
@@ -265,6 +277,7 @@ class SelfService:
         tenant = self._store.tenant(self._verifier(token))
         if tenant is None:
             raise SelfServiceError("invalid_account")
+        self._store.require_ready()
         try:
             return self._billing.checkout(tenant)
         except BillingUnavailable:

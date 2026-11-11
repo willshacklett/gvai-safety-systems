@@ -302,6 +302,10 @@ def verify_database_role(
         )
         if cursor.fetchone() != (False,):
             raise _failure("runtime_function_privileges_rejected")
+        if "billing_integrity_ready_v12()" in entry_functions:
+            cursor.execute("SELECT gvai_authority.billing_integrity_ready_v12()")
+            if cursor.fetchone() != (True,):
+                raise _failure("billing_upgrade_not_ready")
 
 
 class PrivateStagingApplication:

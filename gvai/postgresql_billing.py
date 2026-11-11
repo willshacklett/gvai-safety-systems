@@ -20,6 +20,8 @@ from gvai.stripe_billing import (
 
 LOG = logging.getLogger(__name__)
 PAID_ENTRY_FUNCTIONS = (
+    "billing_upgrade_ready_v1()",
+    "billing_integrity_ready_v12()",
     "reserve_paid_v1(text,bytea,text,bigint,text,text,text,text)",
     "complete_paid_v1(text,bytea,text,text,boolean)",
     "paid_usage_v1(text,bytea,text)",
@@ -39,8 +41,11 @@ def _transaction(connect: ConnectionFactory) -> Iterator[Any]:
 
 
 RECONCILER_ENTRY_FUNCTIONS = (
+    "billing_upgrade_ready_v1()",
+    "billing_integrity_ready_v12()",
     "reconcile_claim_due_v1(integer,integer)",
     "reconcile_signal_v1(text,text,text,bigint,boolean)",
+    "reconcile_signal_v1(text,text,text,bigint,boolean,text,text)",
     "reconcile_apply_v1(text,bigint,bigint,bigint,text,text,bigint,bigint,boolean,bigint,boolean)",
     "reconcile_fail_v1(text,bigint,text,text)",
     "reconcile_status_v1()",
@@ -94,7 +99,10 @@ class ReconcileFunctions:
         raise fail("operator_claim_unavailable")
 
     def _signal(self, customer: str, event: tuple[str, str, int, bool]) -> Claim | None:
-        event_id, digest, created, denial = event
+        event_id, digest, created, denial = event[:4]
+        scope = event[4:]
+        if len(scope) not in (0, 2):
+            raise fail("event_scope_rejected")
         identifier(event_id, "evt_")
         if (
             type(digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", digest)
@@ -102,8 +110,9 @@ class ReconcileFunctions:
         ):
             raise fail("event_digest_rejected")
         rows = self._call(
-            "SELECT o_duplicate,o_subscription,o_repin,o_ticket FROM gvai_authority.reconcile_signal_v1(%s,%s,%s,%s,%s)",
-            (customer, event_id, digest, created, denial),
+            "SELECT o_duplicate,o_subscription,o_repin,o_ticket FROM gvai_authority.reconcile_signal_v1("
+            + ",".join(["%s"] * (5 + len(scope))) + ")",
+            (customer, event_id, digest, created, denial) + scope,
         )
         if not rows:
             raise fail("unmapped_customer")
@@ -226,6 +235,29 @@ class PostgreSQLBillingStore(ReconcileFunctions):
             raise fail("claim_in_flight", transient=True)
         row = rows[0]
         return Claim(row[0], row[1], row[2], row[3], row[4], float(row[5]))
+
+    def recover_denial(self, tenant: str, denial: str, raw: bytes, signature: str,
+                       reason: str, authority: Any) -> str:
+        """Owner-only recovery from signed payment evidence plus a freshly verified chain."""
+        from gvai.stripe_billing import verified_recovery_event
+
+        customer = self.customer(tenant)
+        event = verified_recovery_event(raw, signature, authority.config, int(authority.clock()))
+        value = event["data"]["object"]
+        if value.get("customer") != customer:
+            raise fail("recovery_customer_mismatch")
+        claim = self._claim_single(customer)
+        state = authority.current(customer, claim.subscription, claim.repin)
+        if (not state.eligible or state.terminal or state.invoice != value.get("id")
+                or state.subscription != value.get("subscription")):
+            raise fail("recovery_payment_mismatch")
+        return self._call(
+            "SELECT gvai_authority.reconcile_recover_denial_v1("
+            "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (customer, denial, event["id"], hashlib.sha256(raw).hexdigest(), value["status_transitions"]["paid_at"],
+             reason, claim.ticket, state.observed_min, state.observed_max, state.subscription,
+             state.invoice, state.start, state.end, state.access_until),
+        )[0][0]
 
     def resume(self, tenant: str) -> bool:
         customer = self.customer(tenant)
