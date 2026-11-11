@@ -190,7 +190,7 @@ def test_readiness_connection_failure_redacted(readiness_module, monkeypatch, ca
 
 
 @pytest.fixture
-def real_proxy(tmp_path):
+def real_proxy(tmp_path, request):
     if NGINX is None or OPENSSL is None:
         pytest.skip("Real Nginx/mTLS requires locally installed nginx and openssl; no proxy/TLS claim from static tests.")
 
@@ -223,9 +223,14 @@ def real_proxy(tmp_path):
         def log_message(self, *_args):
             pass
 
-    backend = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=backend.serve_forever)
-    thread.start()
+    application_fixture = getattr(request, "param", None)
+    if application_fixture is None:
+        backend = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=backend.serve_forever)
+        thread.start()
+    else:
+        backend = request.getfixturevalue(application_fixture)
+        thread = None
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -235,7 +240,8 @@ def real_proxy(tmp_path):
     rendered = rendered.replace("/etc/gvai-ingress/server-key.pem", str(tmp_path / "server-key.pem"))
     rendered = rendered.replace("/etc/gvai-ingress/client-ca.pem", str(ca))
     rendered = rendered.replace("127.0.0.1:8443", "127.0.0.1:" + str(port))
-    rendered = rendered.replace("127.0.0.1:8080", "127.0.0.1:" + str(backend.server_port))
+    backend_port = backend.server_port if thread is not None else backend.server.server_port
+    rendered = rendered.replace("127.0.0.1:8080", "127.0.0.1:" + str(backend_port))
     (tmp_path / "run").mkdir()
     config = tmp_path / "nginx.conf"
     config.write_text(rendered)
@@ -255,26 +261,30 @@ def real_proxy(tmp_path):
         else:
             pytest.fail("Disposable nginx listener did not become ready.")
 
-        def request(path, client=True, headers=None):
+        def https_request(path, client=True, headers=None, method="GET", payload=None):
             context = ssl.create_default_context(cafile=str(ca))
             if client:
                 context.load_cert_chain(str(tmp_path / "client.pem"), str(tmp_path / "client-key.pem"))
             connection = HTTPSConnection("localhost", port, timeout=3, context=context)
             try:
-                connection.request("GET", path, headers=headers or {})
+                connection.request(
+                    method, path, headers=headers or {},
+                    body=None if payload is None else json.dumps(payload),
+                )
                 response = connection.getresponse()
                 return response.status, response.read()
             finally:
                 connection.close()
 
-        yield SimpleNamespace(request=request, calls=calls, state=state, log=tmp_path / "access.log")
+        yield SimpleNamespace(request=https_request, calls=calls, state=state, log=tmp_path / "access.log")
     finally:
         if process is not None and process.poll() is None:
             process.terminate()
             process.wait(timeout=10)
-        backend.shutdown()
-        backend.server_close()
-        thread.join(timeout=2)
+        if thread is not None:
+            backend.shutdown()
+            backend.server_close()
+            thread.join(timeout=2)
 
 
 def test_real_mtls_and_forwarding_redaction(real_proxy):

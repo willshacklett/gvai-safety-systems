@@ -7,6 +7,13 @@ DigitalOcean test server `gvai-safety-test-01`. No SSH, cloud API, host inspecti
 installation, firewall/service change, DNS change or deployment was performed.
 Offline tests prove script behavior, not this server's readiness.
 
+For the separate Lab-01 host, use the
+[Lab-01 commercial staging adaptation](lab01_commercial_staging_v1.md).
+Explicit `--target gvai-safety-lab-01` selects that exact hostname and preserves
+its policy baseline/user-namespace restriction without inventing Test-01's
+experiment labels. The default Test-01 target and its enforcing-label checks
+are unchanged. Neither procedure authorizes connecting or changing a host.
+
 Read [private HTTPS staging](private_https_staging_v1.md),
 [private application](private_staging_v1.md) and
 [PostgreSQL advisory backend](commercial_advisory_backend_v1.md) first.
@@ -65,6 +72,10 @@ Checks:
 | Inventory listeners | No existing TCP listener on 5432, 8080 or 8443, even loopback |
 | Resources | >=5 GiB free root disk, >=2 GiB available memory, cgroup v2; additional experiment budget reviewed manually |
 | Accounts | `gvai-api` and `gvai-proxy` nonroot, dedicated primary groups, non-login shells, no extra supplementary groups |
+
+The report identifies its selected `target` and adds fixed package-availability
+Booleans for Nginx, psql and OpenSSL. Missing executables are inventory evidence;
+prepared mode requires them. Versions/modules remain an on-host manual check.
 
 The repository does not define existing host `gvai-worker`/`gvai-bwrap`
 profiles. If actual kernel labels differ, **stop**; obtain the founder-approved
