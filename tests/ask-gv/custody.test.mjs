@@ -123,3 +123,17 @@ test('leftover reservation files or missing guard high-water deny startup',t=>{
  assert.throws(()=>f.open());
  }
 });
+
+test('optional dedicated decision credential preserves existing credential and budget semantics',t=>{
+ const f=fixture(t),base={CREDENTIALS_DIRECTORY:f.creds};
+ assert.equal(loadCredentials(base,{allowSticky:true}).decisionKey,undefined);
+ const env={...base,ASK_GV_ADVISORY_ENABLED:'1'};
+ assert.throws(()=>loadCredentials(env,{allowSticky:true}));
+ f.write('decision_key','FAKE-separate-decision-key');
+ assert.equal(loadCredentials(env,{allowSticky:true}).decisionKey,'FAKE-separate-decision-key');
+ assert.throws(()=>loadCredentials({...env,ASK_GV_DECISION_KEY:'FAKE-env-key'},{allowSticky:true}));
+ for(const secret of ['FAKE-test-only-provider-credential','a'.repeat(64),'b'.repeat(64)]) {fs.chmodSync(path.join(f.creds,'decision_key'),0o600);fs.writeFileSync(path.join(f.creds,'decision_key'),secret);fs.chmodSync(path.join(f.creds,'decision_key'),0o400);assert.throws(()=>loadCredentials(env,{allowSticky:true}));}
+ fs.chmodSync(path.join(f.creds,'decision_key'),0o600);fs.writeFileSync(path.join(f.creds,'decision_key'),'FAKE-separate-decision-key');fs.chmodSync(path.join(f.creds,'decision_key'),0o644);assert.throws(()=>loadCredentials(env,{allowSticky:true}));
+ fs.chmodSync(path.join(f.creds,'decision_key'),0o400);fs.unlinkSync(path.join(f.creds,'decision_key'));fs.symlinkSync(path.join(f.creds,'openai_key'),path.join(f.creds,'decision_key'));assert.throws(()=>loadCredentials(env,{allowSticky:true}));
+ assert.equal(JSON.parse(fs.readFileSync(f.file)).reserved,0);
+});

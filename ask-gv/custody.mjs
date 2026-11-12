@@ -86,5 +86,11 @@ export function loadCredentials(env=process.env, {allowSticky=false}={}) {
   const read=name=>readPrivate(path.join(dir,name),{modes:[0o400],max:4096}).text.trim();
   const apiKey=read('openai_key'), ipSalt=read('ip_salt'), ingressToken=read('ingress_token');
   if (!/^[\x21-\x7e]{16,256}$/.test(apiKey) || !/^[a-f0-9]{64}$/.test(ipSalt) || !/^[a-f0-9]{64}$/.test(ingressToken) || new Set([apiKey,ipSalt,ingressToken]).size!==3)fail();
-  return {apiKey,ipSalt,ingressToken,permit:JSON.parse(read('budget_permit'))};
+  let decisionKey;
+  if(env.ASK_GV_ADVISORY_ENABLED==='1') {
+    if(env.ASK_GV_DECISION_KEY)fail();
+    decisionKey=read('decision_key');
+    if(!/^[\x21-\x7e]{16,4096}$/.test(decisionKey) || [apiKey,ipSalt,ingressToken].includes(decisionKey))fail();
+  }
+  return {apiKey,ipSalt,ingressToken,permit:JSON.parse(read('budget_permit')),...(decisionKey?{decisionKey}:{})};
 }

@@ -308,3 +308,100 @@ chat text, questions, history, transcripts or a dynamic body to mailto URLs; the
 is no automatic email submission. Feedback cannot change instructions, facts, code,
 billing, permissions or STOP authority. Any proposal to automate email handling or
 turn suggestions into actions needs separate review and authorization.
+
+## GVAI Self-Protection v1: optional advisory adapter
+
+Development only, based on feedback checkpoint
+`64c7c507fa20060d8f2bcdfd8eacd63499718855`. The adapter is disabled unless
+`ASK_GV_ADVISORY_ENABLED=1` is explicitly configured. No deployment template,
+frontend endpoint, approved fact, billing or commercial API change accompanies
+this work. This is not activation approval or enforced protection.
+
+A later approved operator configuration supplies `ASK_GV_DECISION_ENDPOINT`
+(exact `/v1/evaluations`, HTTPS or literal loopback HTTP, no URL credentials,
+query or fragment) and `ASK_GV_DECISION_PROJECT` (an existing owned evaluation
+project). Enabled credential loading additionally requires the private systemd
+credential file `decision_key`, under the same custody checks as existing files.
+It must differ from provider key, IP salt and ingress token. There is no secret
+environment fallback. Invalid enabled configuration refuses startup before budget
+custody is opened. Missing advisory configuration is irrelevant when disabled.
+Do not provision or read real credentials for development tests.
+
+After existing request validation and admission, immediately before provider
+budget reservation, the server sends exactly one authenticated commercial v1
+request with a generated `askgv-<UUID>` ID, configured `resource_id`, five zero
+telemetry counters, `latency_ms:null` and `reported_effects:[]`. The zeros describe
+this pre-dispatch sample: tokens/latency have not yet been observed, no model tools
+are invoked, and no automatic retry or recursion occurs. **This fixed all-zero pre-dispatch sample does not demonstrate meaningful
+operational risk detection.** Successful evaluations of the current deterministic
+engine return score 0/green/ALLOW. It validates connectivity and correlation only,
+not prompt safety, cumulative monitoring or future spend prediction. Empty reported effects are not proof of safe effects.
+No question, history, IP, model instructions or provider credential is sent.
+
+The decision client uses a 500 ms total header/body deadline, a 16 KiB response
+cap, exact body byte length, bearer authentication and no redirects or retries.
+After native JSON grammar validation, a bounded structural walk (maximum depth 32)
+rejects duplicate decoded member names in every object, including escaped names.
+The byte cap applies before parsing; excessive nesting is unavailable, not a decision.
+It validates the outer evaluated envelope, matching ID, version, nested advisory
+flags, successful evaluation status and consistent finite score/band/decision.
+Response Content-Type may include `charset=utf-8`. Evaluator failures normally
+arrive as HTTP 500, not a successful BLOCK/error result. Errors, replay/conflict,
+quota denial, malformed responses and timeouts are unavailable observations;
+there is no refund, replacement request ID, quota reset or repair. An abort may
+leave a charged server attempt, and does not prove server-side cancellation.
+
+ALLOW, QUALIFY and BLOCK do not affect provider admission. Existing readiness,
+disable/drain, finite budget and provider circuit controls remain authoritative.
+Readiness and disconnect/cancellation are rechecked after evaluation, after
+provider reservation, and immediately before provider dispatch. A post-reservation
+denial preserves the consumed unit, including the final permitted unit. The
+post-reservation checks do not require remaining allowance to be positive because
+the just-reserved final unit is still usable. Observation callbacks are not invoked
+between the final state check and provider dispatch. Drain aborts active advisory
+requests; a processed drain prevents new provider dispatch. The external disable
+marker can still change between the final check and dispatch, and synchronous
+filesystem work can delay signal/disconnect handlers. These checks reduce a
+non-atomic cross-process window; they do not create an independent STOP guarantee
+or prove remote termination after abort. Provider reservation still happens exactly once, independently of
+commercial evaluation accounting. No STOP/ARM, checkpoint, independent authority,
+execution gate, ledger initialization or recovery mechanism is imported or changed.
+
+Sanitized structured observations correlate evaluation and provider outcomes by
+the generated ID: schema version, timestamp, operation, advisory mode,
+pre-dispatch telemetry/phase, status/recommendation/score/band and elapsed time;
+then attempted/completed/failed/cancelled/not_attempted provider events. Every
+record sets `enforcement_applied:false`. Library tests inject a trusted observation
+sink. CLI uses a bounded JSON-line writer (maximum 2 KiB per record; pending
+queue plus the next record must not exceed 64 KiB). Stream error listeners and
+write callbacks handle asynchronous failures; a failed output stops accepting
+records. Diagnostics are best effort, nonthrowing and attempted at most once per
+writer/client, with their own stream-error containment and queue bound. One error
+listener per stream is retained for process lifetime because errors may arrive
+after a write returns. Sink promise failures are caught; request processing does
+not await sink promises. Request controller/timer/listener/active-count cleanup is
+in an unconditional inner finally, independent of final observation emission.
+Custom observer functions remain trusted and must handle any private streams or
+background work they create; the CLI writer contains its own output/diagnostic
+streams rather than arbitrary user-created event emitters.
+A trusted synchronous sink or filesystem/event-loop stall can still delay work;
+this is not hard real-time isolation. No raw exception, explanation, prompt,
+answer, history, IP, headers, credential or provider body is logged. Logging loss
+never grants new execution authority or disables existing controls. Durable log
+collection, access controls, retention, load validation and alerts remain operator
+review requirements, not supplied guarantees.
+
+Regression commands: `node --test tests/ask-gv/*.test.mjs` and
+`python -m pytest -q -p no:cacheprovider tests/test_ask_gv_artifact.py
+ tests/test_ask_gv_hardening.py tests/test_ask_gv_feedback.py tests/test_public_site.py`.
+Use only mocked provider/evaluator transports and disposable synthetic custody.
+Real commercial HTTP/PostgreSQL interoperability, host isolation, credential
+mounts, TLS/private networking, audit retention and an independently reviewed
+release remain unverified by these tests. The advisory client adds up to its
+deadline to a held Ask GV concurrency slot. Abort is not an accounting rollback.
+
+Rollback after separate activation approval means disabling the advisory flag
+and following existing owner-reviewed restart custody with the greatest reconciled
+budget count and a fresh permit. Never restore older ledger/guard/permit,
+checkpoint, quota or revocation history. No automatic restart or reset is added.
+The permanent feedback invitation and approved-fact rendering remain unchanged.
