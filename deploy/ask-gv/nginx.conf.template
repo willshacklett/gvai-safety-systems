@@ -1,0 +1,105 @@
+# INERT, DISABLED PROPOSAL: unselected address/port/certificate, no installation.
+worker_processes 1;
+pid /run/gvai-ask-gv-ingress/nginx.pid;
+error_log /dev/null crit;
+events { worker_connections 64; }
+http {
+    server_tokens off;
+    default_type application/json;
+    access_log off;
+    client_max_body_size 12000;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 2 4k;
+    client_header_timeout 5s;
+    client_body_timeout 5s;
+    send_timeout 5s;
+    keepalive_timeout 2s;
+    reset_timedout_connection on;
+    client_body_temp_path /run/gvai-ask-gv-ingress/body;
+    proxy_temp_path /run/gvai-ask-gv-ingress/proxy;
+    fastcgi_temp_path /run/gvai-ask-gv-ingress/fastcgi;
+    uwsgi_temp_path /run/gvai-ask-gv-ingress/uwsgi;
+    scgi_temp_path /run/gvai-ask-gv-ingress/scgi;
+    map $http_origin $ask_gv_origin {
+        default "";
+        "https://gvaisafety.com" "https://gvaisafety.com";
+        "https://www.gvaisafety.com" "https://www.gvaisafety.com";
+    }
+    limit_req_zone $binary_remote_addr zone=ask_gv_visitors:1m rate=6r/m;
+    limit_req_zone $server_name zone=ask_gv_global:1m rate=30r/m;
+    limit_conn_zone $binary_remote_addr zone=ask_gv_connections:1m;
+    limit_conn_zone $server_name zone=ask_gv_total:1m;
+    limit_req_status 429;
+    limit_conn_status 429;
+    server {
+        listen APPROVED_IPV4:APPROVED_TLS_PORT ssl;
+        server_name ask.gvaisafety.com;
+        if ($host != ask.gvaisafety.com) { return 404 '{"error":"route"}'; }
+        ssl_certificate /etc/gvai-ask-gv-ingress/server-chain.pem;
+        ssl_certificate_key /etc/gvai-ask-gv-ingress/server-key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_tickets off;
+        # Owner must review host, TLS, isolation and finite allowance before changing.
+        set $ask_gv_open 0;
+        add_header Access-Control-Allow-Origin $ask_gv_origin always;
+        add_header Vary Origin always;
+        add_header Cache-Control no-store always;
+        add_header X-Content-Type-Options nosniff always;
+        error_page 413 = @too_large;
+        error_page 429 = @limited;
+        error_page 502 503 504 = @unavailable;
+        location @too_large { return 413 '{"error":"input"}'; }
+        location @limited {
+            add_header Access-Control-Allow-Origin $ask_gv_origin always;
+            add_header Vary Origin always;
+            add_header Cache-Control no-store always;
+            add_header Retry-After 60 always;
+            return 429 '{"error":"rate"}';
+        }
+        location @unavailable { return 503 '{"error":"unavailable"}'; }
+        location = /v1/ask-gv {
+            if ($ask_gv_open = 0) { return 503 '{"error":"unavailable"}'; }
+            if ($ask_gv_origin = "") { return 403 '{"error":"origin"}'; }
+            if ($args != "") { return 404 '{"error":"route"}'; }
+            if ($request_method = OPTIONS) {
+                add_header Access-Control-Allow-Origin $ask_gv_origin always;
+                add_header Vary Origin always;
+                add_header Access-Control-Allow-Methods POST always;
+                add_header Access-Control-Allow-Headers Content-Type always;
+                add_header Cache-Control no-store always;
+                return 204;
+            }
+            if ($request_method != POST) { return 404 '{"error":"route"}'; }
+            if ($http_content_encoding != "") { return 415 '{"error":"input"}'; }
+            if ($http_content_type != "application/json") { return 415 '{"error":"input"}'; }
+            if ($http_expect != "") { return 417 '{"error":"input"}'; }
+            limit_req zone=ask_gv_visitors burst=2 nodelay;
+            limit_req zone=ask_gv_global burst=2 nodelay;
+            limit_conn ask_gv_connections 2;
+            limit_conn ask_gv_total 8;
+            proxy_pass http://127.0.0.1:8787;
+            proxy_http_version 1.1;
+            proxy_pass_request_headers off;
+            proxy_set_header Host ask-gv-backend;
+            proxy_set_header Connection close;
+            proxy_set_header Origin $http_origin;
+            proxy_set_header Content-Type $http_content_type;
+            proxy_set_header X-Ask-GV-Client-IP $remote_addr;
+            # Private credential contains ONLY: proxy_set_header X-Ask-GV-Ingress "...";
+            include /run/credentials/gvai-ask-gv-ingress.service/proxy-identity.conf;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_next_upstream off;
+            proxy_connect_timeout 1s;
+            proxy_send_timeout 6s;
+            proxy_read_timeout 10s;
+            proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Vary;
+            proxy_hide_header Cache-Control;
+            proxy_hide_header X-Content-Type-Options;
+            proxy_hide_header Server;
+        }
+        location / { return 404 '{"error":"route"}'; }
+    }
+}

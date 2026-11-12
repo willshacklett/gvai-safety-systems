@@ -1,0 +1,41 @@
+name: Ask GV offline security and accessibility
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENAI_API_KEY: ''
+      ASK_GV_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.2'
+          cache: npm
+      - name: Install locked test dependencies only
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install disposable browser on CI runner
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Mocked backend and custody security tests
+        run: npm run test:ask-gv
+      - name: Public artifact and disabled template checks
+        run: python -m unittest discover -s tests -p 'test_ask_gv_hardening.py'
+      - name: Extract pinned Nginx for disposable TLS proxy checks (never install)
+        run: |
+          mkdir -p "$RUNNER_TEMP/ask-gv-nginx"
+          cd "$RUNNER_TEMP/ask-gv-nginx"
+          apt-get download nginx=1.24.0-2ubuntu7.19
+          dpkg-deb -x nginx_1.24.0-2ubuntu7.19_amd64.deb extracted
+      - name: Real disposable Nginx ingress with mocked backend provider
+        env:
+          ASK_GV_NGINX: ${{ runner.temp }}/ask-gv-nginx/extracted/usr/sbin/nginx
+        run: node tests/ask-gv/proxy-qa.mjs
+      - name: Browser keyboard, accessibility, bounds and injection checks
+        run: npm run test:browser

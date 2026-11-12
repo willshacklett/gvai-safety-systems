@@ -39,13 +39,15 @@
     const generation=epoch;controller=new AbortController();send.disabled=true;
     message('user',question);input.value='';notice('Finding approved GVAI facts…');log.setAttribute('aria-busy','true');
     try {
-      const response=await window.GVAI.fetchJSON(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',referrerPolicy:'no-referrer',timeoutMs:12000,signal:controller.signal,body:JSON.stringify({message:question,history:history.slice(-4)})});
+      const response=await window.GVAI.fetchJSON(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',referrerPolicy:'no-referrer',timeoutMs:20000,maxBytes:16384,signal:controller.signal,body:JSON.stringify({message:question,history:history.slice(-4)})});
       const data=await response.json();if(generation!==epoch)return;
-      if(typeof data.answer!=='string' || data.answer.length>6000 || typeof data.version!=='string' || !Array.isArray(data.sources) || data.sources.length>3)throw Error();
+      if(typeof data.answer!=='string' || data.answer.length>6000 || typeof data.version!=='string' || !/^\d{4}-\d{2}-\d{2}\.v\d{1,3}$/.test(data.version) || !Array.isArray(data.sources) || data.sources.length>3)throw Error();
       for(const source of data.sources) {
+        if(!source || typeof source.id!=='string' || !/^[a-z]{1,32}$/.test(source.id || '') || typeof source.title!=='string' || source.title.length>128 || !source.title.trim() || typeof source.url!=='string' || source.url.length>512)throw Error();
         const url=new URL(source.url);
-        if(url.protocol!=='https:' || !['gvaisafety.com','github.com'].includes(url.hostname) || url.username || url.password)throw Error();
+        if(url.protocol!=='https:' || !(url.hostname==='gvaisafety.com' || (url.hostname==='github.com' && url.pathname.startsWith('/willshacklett/gvai-safety-systems/'))) || url.port || url.username || url.password)throw Error();
       }
+      if(new Set(data.sources.map(s=>s.id)).size!==data.sources.length)throw Error();
       const article=message('assistant',data.answer);
       for(const source of data.sources) {const a=document.createElement('a');a.href=source.url;a.textContent=source.title;a.target='_blank';a.rel='noopener noreferrer';article.append(a);}
       const version=document.createElement('small');version.textContent='Fact set '+data.version;article.append(version);

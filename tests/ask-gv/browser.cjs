@@ -1,4 +1,4 @@
-// npm install --prefix /tmp/ask-gv-browser playwright @axe-core/playwright
+// npm ci --ignore-scripts; npx --no-install playwright install chromium
 // NODE_PATH=/tmp/ask-gv-browser/node_modules PLAYWRIGHT_BROWSERS_PATH=/tmp/ask-gv-browser/browsers node tests/ask-gv/browser.cjs
 const { chromium } = require('playwright');
 const { default:AxeBuilder } = require('@axe-core/playwright');
@@ -48,7 +48,13 @@ const root = path.resolve(__dirname,'../..');
    if(mode==='delay')await new Promise(r=>pending=r);
    if(mode==='error')return route.fulfill({status:503,contentType:'application/json',body:'{"error":"unavailable"}'});
    if(mode==='rate')return route.fulfill({status:429,contentType:'application/json',body:'{"error":"rate"}'});
-   const body=mode==='malicious'?{...result,sources:[{id:'x',title:'x',url:'javascript:alert(1)'}]}:result;
+   let body=result;
+   if(mode==='malicious')body={...result,sources:[{id:'x',title:'x',url:'javascript:alert(1)'}]};
+   if(mode==='oversize')body={...result,answer:'x'.repeat(20000)};
+   if(mode==='badtitle')body={...result,sources:[{...result.sources[0],title:{bad:'type'}}]};
+   if(mode==='badpath')body={...result,sources:[{...result.sources[0],url:'https://github.com/evil/repo'}]};
+   if(mode==='badid')body={...result,sources:[{...result.sources[0],id:['status']}]};
+   if(mode==='badversion')body={...result,version:['2026-11-12.v1']};
    return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
  });
  await page.reload();
@@ -84,13 +90,14 @@ const root = path.resolve(__dirname,'../..');
  await page.screenshot({path:'/tmp/ask-gv-enabled-mobile.png',fullPage:true});
  await page.locator('#ask-gv').screenshot({path:'/tmp/ask-gv-enabled-panel-mobile.png'});
  console.log('PASS 320/375/768/1440 responsive overflow and mobile axe audit');
- for(const failure of ['error','rate','malicious']){
+ for(const failure of ['error','rate','malicious','oversize','badtitle','badpath','badid','badversion']){
    mode=failure;await page.locator('#ask-question').fill('<img src=x onerror=alert(1)>');await page.locator('#ask-send').click();
    await page.waitForFunction(()=>!document.querySelector('#ask-send').disabled);
    assert.match(await page.locator('#ask-status').textContent(),failure==='rate'?/Too many requests/:/temporarily unavailable/);
    assert.equal(await page.locator('#ask-log img').count(),0);
  }
  assert.equal(posted[1].history.length,2);
+ assert.equal(await page.getByRole('button',{name:'Copy answer',exact:true}).count(),1,'invalid responses cannot add answers');
  mode='delay';await page.locator('#ask-question').fill('Question in flight');await page.locator('#ask-send').click();
  await page.waitForFunction(()=>document.querySelector('#ask-log').getAttribute('aria-busy')==='true');
  while(!pending)await new Promise(r=>setTimeout(r,5));

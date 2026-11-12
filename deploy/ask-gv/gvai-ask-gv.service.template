@@ -1,0 +1,56 @@
+# INERT REVIEW PROPOSAL. Never install directly. No host selection is approved.
+[Unit]
+Description=Ask GV bounded public-information backend (proposal)
+ConditionPathExists=/etc/gvai-ask-gv-control/OWNER_APPROVED
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=1
+
+[Service]
+Type=simple
+User=gvai-ask-gv
+Group=gvai-ask-gv
+WorkingDirectory=/opt/gvai-ask-gv/current
+ExecStart=/usr/bin/node /opt/gvai-ask-gv/current/ask-gv/server.mjs
+Environment=ASK_GV_ENABLED=0
+Environment=ASK_GV_TRUSTED_INGRESS=loopback-token-v1
+Environment=OPENAI_MODEL=OWNER_MUST_SELECT_MODEL_SNAPSHOT
+Environment=ASK_GV_STATE_DIR=/var/lib/gvai-ask-gv
+Environment=ASK_GV_GUARD_DIR=/var/lib/gvai-ask-gv-custody
+Environment=ASK_GV_DISABLE_FILE=/etc/gvai-ask-gv-control/disabled
+Environment=PORT=8787
+LoadCredential=openai_key:/etc/gvai-ask-gv/openai-key.credential
+LoadCredential=ip_salt:/etc/gvai-ask-gv/ip-salt.credential
+LoadCredential=ingress_token:/etc/gvai-ask-gv/ingress-token.credential
+LoadCredential=budget_permit:/etc/gvai-ask-gv/budget-permit.credential
+Restart=no
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/gvai-ask-gv /var/lib/gvai-ask-gv-custody
+ReadOnlyPaths=/opt/gvai-ask-gv/current /etc/gvai-ask-gv
+InaccessiblePaths=-/etc/gvai-runtime -/etc/gvai-operator -/var/lib/gvai-operator -/var/lib/postgresql -/run/postgresql -/run/docker.sock -/opt/gvai
+MemoryMax=256M
+CPUQuota=25%
+TasksMax=32
+LimitNOFILE=256
+LimitCORE=0
+StandardOutput=null
+StandardError=null
+# Deliberately no [Install] section, dependencies on protected services, or restart.

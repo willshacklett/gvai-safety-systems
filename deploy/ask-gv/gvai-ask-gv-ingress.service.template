@@ -1,0 +1,43 @@
+# INERT REVIEW PROPOSAL. Dedicated host/listener/account must first be approved.
+[Unit]
+Description=Ask GV independent HTTPS ingress (proposal)
+ConditionPathExists=/etc/gvai-ask-gv-control/OWNER_APPROVED
+After=gvai-ask-gv.service
+
+[Service]
+Type=simple
+User=gvai-ask-gv-proxy
+Group=gvai-ask-gv-proxy
+RuntimeDirectory=gvai-ask-gv-ingress
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/sbin/nginx -t -q -c /etc/gvai-ask-gv-ingress/nginx.conf
+ExecStart=/usr/sbin/nginx -c /etc/gvai-ask-gv-ingress/nginx.conf -g "daemon off;"
+LoadCredential=proxy-identity.conf:/etc/gvai-ask-gv-ingress/proxy-identity.credential
+Restart=no
+TimeoutStopSec=10
+KillSignal=SIGQUIT
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+InaccessiblePaths=-/etc/gvai-ask-gv -/var/lib/gvai-ask-gv -/var/lib/gvai-ask-gv-custody -/etc/gvai-runtime -/etc/gvai-operator -/var/lib/gvai-operator -/var/lib/postgresql -/run/postgresql -/run/docker.sock -/opt/gvai
+MemoryMax=128M
+CPUQuota=25%
+TasksMax=16
+LimitNOFILE=256
+LimitCORE=0
+StandardOutput=null
+StandardError=null
+# No [Install] section. Ingress must stay closed until separately authorized.

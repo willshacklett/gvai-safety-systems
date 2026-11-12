@@ -15,7 +15,7 @@
   }
 
   async function fetchJSON(url, options = {}) {
-    const { timeoutMs = 25000, signal, ...requestOptions } = options;
+    const { timeoutMs = 20000, maxBytes = 16384, signal, ...requestOptions } = options;
     const controller = new AbortController();
     let timedOut = false;
     const cancellation = new Promise((resolve, reject) => {
@@ -42,7 +42,14 @@
         if (!response.ok) throw new RequestError("http", response.status);
         let data;
         try {
-          data = await response.json();
+          if(!Number.isSafeInteger(maxBytes) || maxBytes<1 || maxBytes>32768 || !response.headers.get('content-type')?.startsWith('application/json'))throw Error('response');
+          if(Number(response.headers.get('content-length'))>maxBytes)throw Error('size');
+          const reader=response.body.getReader();let bytes=0;const parts=[];
+          try {
+            while(true) {const {value,done}=await reader.read();if(done)break;bytes+=value.byteLength;if(bytes>maxBytes)throw Error('size');parts.push(value);}
+          } finally {await reader.cancel().catch(()=>{});reader.releaseLock();}
+          const all=new Uint8Array(bytes);let offset=0;for(const part of parts){all.set(part,offset);offset+=part.byteLength;}
+          data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(all));
         } catch (error) {
           throw new RequestError("json");
         }
@@ -51,6 +58,7 @@
       return await Promise.race([operation(), cancellation]);
     } finally {
       clearTimeout(timer);
+      controller.abort();
       signal?.removeEventListener("abort", abort);
     }
   }

@@ -1,0 +1,12 @@
+{
+  "name": "gvai-ask-gv-checks",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {"node": "24.22.2"},
+  "scripts": {
+    "test:ask-gv": "node --test tests/ask-gv/*.test.mjs",
+    "test:browser": "node tests/ask-gv/browser.cjs",
+    "test:security": "python -m pytest -q tests/test_ask_gv_artifact.py tests/test_ask_gv_hardening.py"
+  },
+  "devDependencies": {"playwright": "1.65.0", "@axe-core/playwright": "4.14.0"}
+}

@@ -13,7 +13,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ask_gv_checks:
+    if: github.repository == 'willshacklett/gvai-safety-systems' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ask-gv-checks.yml
+
   validate_build:
+    needs: ask_gv_checks
     if: github.repository == 'willshacklett/gvai-safety-systems' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
