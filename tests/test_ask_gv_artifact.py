@@ -30,9 +30,9 @@ def test_public_artifact_never_contains_server_key_or_backend(tmp_path):
 def test_versioned_facts_keep_status_and_verification_limits_explicit():
     data = json.loads((REPOSITORY_ROOT / "ask-gv/facts.json").read_text())
     assert data["baseline"] == "23299020ea200e268a1d91aa591c49b8a6557ecb"
-    assert data["version"] == "2026-11-12.v1"
+    assert data["version"] == "2026-11-12.v2"
     facts = {f["id"]: f for f in data["facts"]}
-    assert set(facts) == {"technology", "status", "pilot", "pricing", "setup", "platform", "docs"}
+    assert set(facts) == {"technology", "status", "pilot", "pricing", "setup", "platform", "docs", "feedback"}
     for key, expected in {"technology": "experimental", "status": "No production readiness", "pilot": "do not authorize or stop execution", "pricing": "No approved public price", "setup": "expiry", "platform": "Planned", "docs": "offline evidence"}.items():
         assert expected in json.dumps(facts[key])
     assert len(data["facts"]) == len(set(facts))

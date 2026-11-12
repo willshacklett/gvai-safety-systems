@@ -346,8 +346,9 @@ class PublicSiteTests(unittest.TestCase):
             "Government - Request a Technical Briefing":
                 "Government Inquiry - Request a Technical Briefing",
             "Discuss the Advisory Pilot": "Advisory Pilot Inquiry",
+            "Email your idea to contact@gvaisafety.com": "GVAI Feature Idea or Feedback",
         }
-        self.assertEqual(len(self.parser.mail_links), 6)
+        self.assertEqual(len(self.parser.mail_links), 7)
         for link in self.parser.mail_links:
             with self.subTest(href=link["href"]):
                 parsed = urlsplit(link["href"])
@@ -365,7 +366,7 @@ class PublicSiteTests(unittest.TestCase):
         for label in expected_subjects:
             self.assertEqual(
                 sum(link["text"].strip() == label for link in self.parser.mail_links),
-                1 if label == "Discuss the Advisory Pilot" else 2,
+                1 if label in {"Discuss the Advisory Pilot", "Email your idea to contact@gvaisafety.com"} else 2,
                 "Each inquiry must appear in its intended sections.",
             )
 
@@ -440,7 +441,10 @@ class PublicSiteTests(unittest.TestCase):
             self.assertIn("contact-safety", descriptions)
             self.assertIn("contact-email-help", descriptions)
             self.assertTrue(set(descriptions).issubset(self.parser.ids))
-            if "subject=" in link["href"]:
+            if link.get("id") == "feedback-email":
+                self.assertNotIn("contact-stage", descriptions)
+                self.assertIn("feedback-privacy", descriptions)
+            elif "subject=" in link["href"]:
                 self.assertIn("contact-stage", descriptions)
         demo = (REPOSITORY_ROOT / "prototype-demo.html").read_text(encoding="utf-8")
         self.assertIn('href="index.html#contact">Contact</a>', demo)

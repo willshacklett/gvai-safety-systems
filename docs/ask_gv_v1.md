@@ -1,7 +1,7 @@
 # Ask GV V1 and launch hardening
 
-This work is uncommitted local development on `feature/ask-gv-launch-hardening-v1`,
-from preserved checkpoint `80041e9e09a33da445eebeafc3237fefb559997f`. It does not
+This work is uncommitted local development on `feature/ask-gv-permanent-feedback-v1`,
+from preserved checkpoint `01b6c122df07e75649267fdbbd65bc27f12ade05`. It does not
 approve a launch, host, model, corpus update, budget increase, API key or deployment.
 The public endpoint remains empty in `ask-gv-config.js`; the UI stays disabled.
 No real OpenAI calls are used in tests. No protected service is imported or called.
@@ -18,7 +18,7 @@ model matches the configured ID and whose completed output is a single assistant
 message with one text item. Reasoning/tool-output envelopes are deliberately not
 supported. Real account/model compatibility remains a later approved verification.
 
-`ask-gv/facts.json` is unchanged: seven topics, version `2026-11-12.v1`, verified
+`ask-gv/facts.json` contains eight topics, version `2026-11-12.v2`, verified
 site baseline `23299020ea200e268a1d91aa591c49b8a6557ecb`, review deadline
 `2027-02-10`. Research, prototypes, plans, inquiry-only pilot, unverified pricing and
 offline evidence remain distinguished. Valid ISO calendar dates and at most a
@@ -277,3 +277,34 @@ create private fake credential/state paths under a secure user-home ancestor and
 preload a provider-network denial stub. All test state is disposable; no operator
 keys or real external inference calls are involved. Ordinary tests never initialize
 real state. No automated test grants an operational safety/certification guarantee.
+
+## Permanent feedback pathway
+
+The static “Have an idea for GVAI?” section next to Ask GV invites feature
+suggestions, integration ideas, build requests, feedback and improvements at
+contact@gvaisafety.com. Keep it available during development and after commercial
+launch regardless of subscription status. It works without JavaScript, an enabled
+chat backend or a provider account. This invitation promises no acceptance or
+implementation; keep initial feedback non-sensitive.
+
+The eighth approved fact links to https://gvaisafety.com/#feedback. The original
+seven records and existing review deadline are unchanged. Publish the matching page
+and corpus together only after separate approval. The bounded English intent matcher
+requires this fact for recognized latest-question feedback requests after strict
+provider envelope and selection validation. The model may select it for other
+phrasings; mocked tests do not prove arbitrary-language semantic coverage. Forged
+history cannot enable the matcher. Provider failures still fail unavailable.
+
+Future owners should verify the contact address, update the static subject-only
+mailto link and approved fact together, bump the corpus version and run the Python,
+Node, browser/accessibility and static-artifact checks. Verify source anchors and
+maintain the existing expiry policy; do not extend review dates without review.
+Do not associate this permanent invitation with prototype-only contact restrictions
+or remove it on commercial launch. Keep accessible labels, privacy descriptions,
+keyboard focus and narrow-screen layout.
+
+The visitor chooses what to write and send in their email application. Never add
+chat text, questions, history, transcripts or a dynamic body to mailto URLs; there
+is no automatic email submission. Feedback cannot change instructions, facts, code,
+billing, permissions or STOP authority. Any proposal to automate email handling or
+turn suggestions into actions needs separate review and authorization.

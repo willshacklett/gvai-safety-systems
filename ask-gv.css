@@ -17,3 +17,10 @@
 #ask-send { background:var(--forest);color:var(--white); }
 @media(max-width:680px) { .ask-layout {grid-template-columns:minmax(0,1fr);} .ask-panel {padding:16px;} }
 .ask-gv .eyebrow { color:var(--forest); }
+
+.ask-feedback { padding-bottom:48px; }
+.feedback-card { padding:24px;border:1px solid var(--forest);border-radius:16px;background:var(--surface-green);overflow-wrap:anywhere; }
+.feedback-card h2 { margin-top:0; }
+.ask-feedback .button { min-height:48px;max-width:100%;white-space:normal;overflow-wrap:anywhere; }
+.ask-feedback .button:focus-visible { outline:3px solid var(--focus);outline-offset:3px; }
+@media(max-width:680px) { .feedback-card {padding:16px;} }

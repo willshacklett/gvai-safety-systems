@@ -34,7 +34,7 @@ test('disabled, missing key and stale corpus spend nothing',async t=>{
  const f=await fixture(t,options);assert.equal((await f.request()).status,503);assert.equal(f.attempts,0);assert.equal(f.calls.length,0);}
 });
 test('success uses fixed endpoint, server secret, bounded tokens, no tools and no storage',async t=>{
- const f=await fixture(t);const res=await f.request();assert.equal(res.status,200);const data=await res.json();assert.match(data.answer,/experimental/);assert.equal(data.version,'2026-11-12.v1');assert.equal(f.attempts,1);
+ const f=await fixture(t);const res=await f.request();assert.equal(res.status,200);const data=await res.json();assert.match(data.answer,/experimental/);assert.equal(data.version,'2026-11-12.v2');assert.equal(f.attempts,1);
  assert.equal(f.calls[0].url,'https://api.openai.com/v1/responses');
  const options=f.calls[0].options,body=JSON.parse(options.body);
  assert.equal(options.headers.Authorization,`Bearer ${secret}`);assert.equal(body.store,false);assert.equal(body.max_output_tokens,LIMITS.output);assert.equal(body.tools,undefined);assert.equal(options.redirect,'error');assert.ok(options.signal);assert.ok(!options.body.includes(secret));
@@ -74,7 +74,7 @@ test('corpus rejects unsafe sources, duplicate IDs, missing review dates and ove
  const {validateCorpus}=await import('../../ask-gv/server.mjs');
  const fresh=()=>JSON.parse(fs.readFileSync(new URL('../../ask-gv/facts.json',import.meta.url)));
  for(const mutate of [v=>v.reviewBy='invalid',v=>v.facts[0].url='https://evil.example/',v=>v.facts[0].url='https://github.com/untrusted/repo',v=>v.facts[0].url='javascript:alert(1)',v=>v.facts.push(v.facts[0]),v=>v.facts[0].text='x'.repeat(1201),v=>v.baseline='main']){const v=fresh();mutate(v);assert.throws(()=>validateCorpus(v));}
- assert.equal(validateCorpus(fresh()).version,'2026-11-12.v1');
+ assert.equal(validateCorpus(fresh()).version,'2026-11-12.v2');
 });
 test('preflight is exact-origin, read-only routes and queries are rejected',async t=>{
  const f=await fixture(t);
