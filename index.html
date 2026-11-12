@@ -8,6 +8,10 @@
   <title>GVAI Safety Systems | Independent Oversight. Human Control.</title>
   <link rel="icon" type="image/svg+xml" href="assets/gvai-mark.svg">
   <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="ask-gv.css">
+  <script src="ask-gv-config.js" defer></script>
+  <script src="ask-gv-fetch.js" defer></script>
+  <script src="ask-gv.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -19,6 +23,7 @@
       </a>
       <nav aria-label="Primary navigation">
         <a href="#advisory-pilot">Advisory Pilot</a>
+        <a href="#ask-gv">Ask GV</a>
         <a href="#research">Research</a>
         <a href="#business">Business</a>
         <a href="#government">Government</a>
@@ -54,6 +59,43 @@
         <span>Runtime governance <strong>Experimental</strong></span>
         <span>GVAI Intelligence <strong>In development</strong></span>
         <span>Public services <strong>Not yet available</strong></span>
+      </div>
+    </section>
+
+    <section class="ask-gv section-wrap" id="ask-gv" aria-labelledby="ask-title">
+      <div class="ask-layout">
+        <div>
+          <p class="eyebrow">A guide to our work</p>
+          <h2 id="ask-title">Ask GV</h2>
+          <p><strong>Powered by OpenAI</strong></p>
+          <p>Explore approved facts about our technology, research, documentation and plans.</p>
+          <p>AI-generated answers may be inaccurate. Check the linked sources. This assistant provides information only and has no operational or shutdown authority.</p>
+          <a href="#documentation">Read documentation</a> · <a href="#contact">Contact GVAI</a>
+        </div>
+        <div class="ask-panel">
+          <p id="ask-privacy">When enabled, your question and bounded recent conversation are sent to a GVAI backend and OpenAI. Do not share personal, confidential or sensitive information, API keys or credentials. This page’s local conversation is cleared on reset or reload. OpenAI and hosting provider retention policies apply.</p>
+          <div class="ask-starters" role="group" aria-label="Starter questions">
+            <button type="button" data-ask="What is available today?">What is available today?</button>
+            <button type="button" data-ask="What are GVAI’s safety principles?">Safety principles</button>
+            <button type="button" data-ask="How do setup and pricing work?">Setup and pricing</button>
+          </div>
+          <p id="ask-status" role="status" aria-live="polite">Ask GV is unavailable until secure backend hosting is configured.</p>
+          <div id="ask-log" role="log" aria-label="Ask GV conversation" aria-live="polite" aria-relevant="additions" aria-busy="false"></div>
+          <form id="ask-form">
+            <label for="ask-question">Your question</label>
+            <textarea id="ask-question" maxlength="1600" rows="3" required disabled aria-describedby="ask-privacy ask-limit"></textarea>
+            <p id="ask-limit">Up to 1,600 characters. Use Send to submit; Enter adds a new line.</p>
+            <div class="ask-actions">
+              <button id="ask-send" type="submit" disabled>Send question</button>
+              <button id="ask-reset" type="button">Reset conversation</button>
+              <button id="ask-export" type="button">Prepare summary for ChatGPT</button>
+            </div>
+          </form>
+          <label for="ask-summary">Factual summary to review and copy</label>
+          <textarea id="ask-summary" rows="6" readonly hidden></textarea>
+          <div class="ask-actions"><button id="ask-copy-summary" type="button">Copy summary</button><a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">Open ChatGPT</a></div>
+          <noscript>JavaScript is needed for Ask GV. You can still read documentation and contact GVAI using the links above.</noscript>
+        </div>
       </div>
     </section>
 
@@ -140,7 +182,7 @@
           <p>Separate customer identities, tenant-scoped data, and explicitly permitted tools.</p>
         </div>
       </div>
-      <p class="intelligence-note">Identity and authorization interfaces exist as a foundation only. There is no production login, live model connection, tenant service, or customer data processing in this website.</p>
+      <p class="intelligence-note">Identity and authorization interfaces exist as a foundation only. The GVAI Intelligence platform has no production login, live model connection, tenant service, or customer data processing on this website.</p>
     </section>
 
     <section class="advisory-pilot section-wrap" id="advisory-pilot" aria-labelledby="pilot-title">
@@ -148,7 +190,7 @@
       <span class="status-tag">Expressions of interest</span>
       <h2 id="pilot-title">Invite-Only Advisory Pilot</h2>
       <p class="pilot-intro">Explore an advisory decision API for your application's telemetry and reported action effects. Get structured recommendations you can inspect and integrate into your own review process.</p>
-      <p id="pilot-status"><strong>Inquiries only; access is not activated by this page.</strong> Hosted pilot access is subject to operator approval and operational validation. Paid subscriptions are not available. There is no signup, checkout, or live API connection on this website.</p>
+      <p id="pilot-status"><strong>Inquiries only; access is not activated by this page.</strong> Hosted pilot access is subject to operator approval and operational validation. Paid subscriptions are not available. There is no signup, checkout, or live advisory API connection on this website.</p>
       <div class="pilot-grid">
         <div>
           <h3>Three outputs. Your controls stay yours.</h3>

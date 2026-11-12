@@ -9,6 +9,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_FILES = (
     "index.html",
     "site.css",
+    "ask-gv.css",
+    "ask-gv-config.js",
+    "ask-gv-fetch.js",
+    "ask-gv.js",
     "assets/gvai-mark.svg",
     "assets/GvAI-MIT-LICENSE.txt",
     "examples/gv_geometry_map.png",

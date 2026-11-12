@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Ask GV local provider secrets and durable runtime state
+.env.*
+.ask-gv-state/
+node_modules/

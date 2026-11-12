@@ -1,3 +1,6 @@
+The Ask GV fetch helper ask-gv-fetch.js is also reproduced from web/fetch.js
+at GvAI commit 9646e9a867c7cc94b1386277c9c0d592a427fcdf under this license.
+
 The file gvai-mark.svg is reproduced from web/gv-carl-logo.svg in
 https://github.com/willshacklett/GvAI, used under the MIT License.
 

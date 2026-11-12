@@ -304,12 +304,16 @@ class PublicSiteTests(unittest.TestCase):
         self.assertIn("No live analysis", self.page)
         self.assertIn('href="prototype-demo.html"', self.page)
 
-    def test_public_page_has_no_legacy_domain_or_live_runtime(self) -> None:
+    def test_public_page_has_no_legacy_runtime_and_only_reviewed_chat_scripts(self) -> None:
         public_source = self.page + self.styles
         self.assertNotIn("gvai.io", public_source.lower())
         self.assertNotIn("api.gvai", public_source.lower())
         self.assertNotIn("railway", public_source.lower())
-        self.assertFalse(self.parser.has_script)
+        self.assertEqual(
+            re.findall(r'<script src="([^\"]+)" defer></script>', self.page),
+            ["ask-gv-config.js", "ask-gv-fetch.js", "ask-gv.js"],
+        )
+        self.assertEqual(len(re.findall(r"<script\b", self.page)), 3)
         self.assertNotIn("@import", self.styles.lower())
         self.assertNotIn("url(http", self.styles.lower())
         self.assertIn("@media (max-width: 900px)", self.styles)
@@ -326,7 +330,7 @@ class PublicSiteTests(unittest.TestCase):
             self.assertIn(section_id, self.parser.ids)
         self.assertTrue(self.parser.external_links)
         self.assertTrue(
-            all(link.startswith("https://github.com/willshacklett/") for link in self.parser.external_links)
+            all(link.startswith("https://github.com/willshacklett/") or link == "https://chatgpt.com/" for link in self.parser.external_links)
         )
 
     def test_homepage_has_balanced_html_nesting(self) -> None:
@@ -460,15 +464,21 @@ class PublicSiteTests(unittest.TestCase):
             mobile, r"\.contact-actions\s*\{\s*grid-template-columns: minmax\(0, 1fr\);"
         )
 
-    def test_public_pages_have_only_local_embeds_and_no_submission_or_tracking(self) -> None:
+    def test_public_pages_have_local_embeds_and_only_disabled_ask_gv_form(self) -> None:
         for filename in ("index.html", "prototype-demo.html"):
             with self.subTest(filename=filename):
                 parser = PublicPageParser()
                 page = (REPOSITORY_ROOT / filename).read_text(encoding="utf-8")
                 parser.feed(page)
                 self.assertFalse(
-                    parser.tags & {"form", "input", "textarea", "iframe", "object", "embed"}
+                    parser.tags & ({"iframe", "object", "embed"} if filename == "index.html" else {"form", "input", "textarea", "iframe", "object", "embed"})
                 )
+                if filename == "index.html":
+                    self.assertEqual(re.findall(r"<form\b[^>]*>", page), ['<form id="ask-form">'])
+                    self.assertEqual(len(re.findall(r"<textarea\b", page)), 2)
+                    self.assertNotIn("input", parser.tags)
+                    self.assertIn('id="ask-send" type="submit" disabled', page)
+                    self.assertNotRegex(page, r"<form[^>]*\baction=")
                 for resource in parser.embedded_resources:
                     self.assertFalse(urlsplit(resource).scheme, resource)
                     self.assertFalse(urlsplit(resource).netloc, resource)
@@ -504,6 +514,10 @@ class PublicSiteTests(unittest.TestCase):
             (
                 "index.html",
                 "site.css",
+                "ask-gv.css",
+                "ask-gv-config.js",
+                "ask-gv-fetch.js",
+                "ask-gv.js",
                 "assets/gvai-mark.svg",
                 "assets/GvAI-MIT-LICENSE.txt",
                 "examples/gv_geometry_map.png",

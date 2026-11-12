@@ -1,0 +1,19 @@
+.ask-gv { padding-block: 64px; }
+.ask-layout { display:grid;grid-template-columns:minmax(220px,1fr) minmax(0,2fr);gap:32px; }
+.ask-panel { border:1px solid var(--muted);border-radius:16px;padding:24px;background:var(--white);min-width:0; }
+.ask-gv button,.ask-gv textarea { font:inherit; }
+.ask-gv button,.ask-gv a { min-height:44px; }
+.ask-gv button { padding:10px 16px;border:1px solid var(--forest);border-radius:8px;background:var(--paper);color:var(--ink);cursor:pointer; }
+.ask-gv button:disabled { cursor:not-allowed; }
+.ask-gv button:focus-visible,.ask-gv textarea:focus-visible,.ask-gv a:focus-visible { outline:3px solid var(--focus);outline-offset:3px; }
+.ask-starters,.ask-actions { display:flex;flex-wrap:wrap;gap:10px;margin-block:16px; }
+.ask-gv label { display:block;font-weight:700;margin-block:12px; }
+.ask-gv textarea { width:100%;box-sizing:border-box;min-height:110px;border:1px solid var(--muted);border-radius:8px;padding:12px;color:var(--ink);background:var(--white); }
+.ask-message { border-bottom:1px solid var(--muted);padding-block:16px;overflow-wrap:anywhere; }
+.ask-message p { white-space:pre-wrap; }
+.ask-message h3 { font-size:1rem; }
+.ask-message a,.ask-message small { display:block;margin-block:10px; }
+#ask-status { min-height:3em; }
+#ask-send { background:var(--forest);color:var(--white); }
+@media(max-width:680px) { .ask-layout {grid-template-columns:minmax(0,1fr);} .ask-panel {padding:16px;} }
+.ask-gv .eyebrow { color:var(--forest); }
