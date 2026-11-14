@@ -129,9 +129,19 @@ export function createApp({env={}, credentials={}, fetchImpl=globalThis.fetch, s
       let data;try {data=validate(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks))));}catch {count('input');return reply(400,{error:'input'});}
       if(!status().ready){count('disabled');return reply(503,{error:'unavailable'});}
       try {store.reserve();}catch {count('budget');return reply(503,{error:'unavailable'});}
+      // A reservation is consumed even if disable/cancellation now denies dispatch.
+      // remaining=0 is valid here: this request owns the final reserved unit.
+      const dispatchReady=()=>{
+        const current=status();
+        return !res.destroyed && !req.aborted && current.configured && !current.disabled &&
+          !current.draining && !current.circuitOpen && current.corpusValid && current.remaining!==null;
+      };
+      if(!dispatchReady()){count('disabled');return reply(503,{error:'unavailable'});}
       const controller=providerController=new AbortController();controllers.add(controller);
       let timedOut=false;timer=setTimeout(()=>{timedOut=true;controller.abort();},8000);
       try {
+        // No callbacks between this final check and dispatch; not an atomic STOP.
+        if(!dispatchReady() || controller.signal.aborted){count('disabled');return reply(503,{error:'unavailable'});}
         const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',redirect:'error',signal:controller.signal,
           headers:{'Content-Type':'application/json','Authorization':`Bearer ${credentials.apiKey}`},
           body:JSON.stringify({model:env.OPENAI_MODEL,store:false,max_output_tokens:LIMITS.output,

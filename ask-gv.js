@@ -5,15 +5,17 @@
   const form=byId('ask-form'), input=byId('ask-question'), send=byId('ask-send');
   const status=byId('ask-status'), log=byId('ask-log'), summary=byId('ask-summary');
   const endpoint=window.ASK_GV_ENDPOINT;
-  let configured=false;
-  try {const url=new URL(endpoint);configured=url.protocol==='https:' && !url.username && !url.password && !url.search && !url.hash && url.pathname==='/v1/ask-gv';} catch {}
+  const configured=window.GVAI?.isApprovedAskGVEndpoint(endpoint,window.ASK_GV_APPROVED_ORIGIN)===true;
+  const MAX_VISIBLE_MESSAGES=24; // 12 complete exchanges; bounded independently of sent history.
   let history=[], facts=new Map(), controller=null, epoch=0;
   const notice=text=>{status.textContent=text;};
   function message(role,text) {
     const article=document.createElement('article');article.className='ask-message';
     const heading=document.createElement('h3');heading.textContent=role==='user'?'You':'Ask GV';
     const p=document.createElement('p');p.textContent=text;
-    article.append(heading,p);log.append(article);return article;
+    article.append(heading,p);log.append(article);
+    while(log.children.length>MAX_VISIBLE_MESSAGES)log.firstElementChild.remove();
+    return article;
   }
   async function copy(text) {
     try {await navigator.clipboard.writeText(text);notice('Copied. Paste wherever you choose.');}

@@ -70,15 +70,48 @@ test('strict calendars/horizon and malformed provider envelopes fail closed',()=
  for(const change of [r=>r.status='incomplete',r=>r.model='other',r=>r.output[0].role='user',r=>r.output[0].status='incomplete',r=>r.output.push({type:'function_call'}),r=>r.output[0].content.push({type:'refusal'}),r=>r.output[0].content[0].annotations=[{url:'https://evil.example'}],r=>r.tools=[{type:'web_search'}],r=>r.tools=0,r=>r.output[0].phase='commentary',r=>r.output[0].content[0].annotations='',r=>r.output[0].content[0].refusal='hidden']){const r=envelope();change(r);assert.throws(()=>validateEnvelope(r,'test-model'));}
  assert.match(validateEnvelope(envelope(),'test-model').answer,/experimental/);
 });
-test('CLI disabled startup, provider-free liveness and signal shutdown use no keys',async t=>{
+// Owned direct-child supervision. These CLI fixtures spawn no descendants.
+// No process-group or name-based kills; an external supervisor owns whole-job failure.
+export function supervisedChild(args, env, {spawnImpl=spawn, deadlineMs=5000, maxBytes=16384, graceMs=250, reapMs=1000}={}) {
+ for(const n of [deadlineMs,maxBytes,graceMs,reapMs])if(!Number.isSafeInteger(n)||n<1||n>65536)throw Error('child_configuration');
+ let child,closed=false,failure=null,output='',bytes=0,termTimer,killTimer,deadline;
+ let resolveDone,rejectDone;
+ const done=new Promise((resolve,reject)=>{resolveDone=resolve;rejectDone=reject;});
+ done.catch(()=>{}); // The owning caller still awaits done; no early unhandled rejection.
+ const clear=()=>{clearTimeout(deadline);clearTimeout(termTimer);clearTimeout(killTimer);};
+ const kill=signal=>{if(!closed && child?.exitCode===null && child?.signalCode===null)try{child.kill(signal);}catch{failure||='child_cleanup';}};
+ const stop=reason=>{
+  if(closed)return;
+  failure||=reason;clearTimeout(deadline);
+  if(termTimer || killTimer)return;
+  kill('SIGTERM');
+  termTimer=setTimeout(()=>{termTimer=null;kill('SIGKILL');killTimer=setTimeout(()=>{
+   clear();child?.stdout?.destroy();child?.stderr?.destroy();rejectDone(Error('child_cleanup_unverified'));
+  },reapMs);},graceMs);
+ };
+ try {
+  child=spawnImpl(process.execPath,args,{env,stdio:['ignore','pipe','pipe']});
+  child.once('error',()=>stop('child_spawn'));
+  child.once('close',(code,signal)=>{closed=true;clear();if(failure)rejectDone(Error(failure));else resolveDone({code,signal,output});});
+  const capture=data=>{bytes+=Buffer.byteLength(data);if(bytes>maxBytes){stop('child_output');return;}output+=data.toString();};
+  child.stdout.on('data',capture);child.stderr.on('data',capture);
+  child.stdout.on('error',()=>stop('child_io'));child.stderr.on('error',()=>stop('child_io'));
+  deadline=setTimeout(()=>stop('child_deadline'),deadlineMs);
+ } catch {
+  if(child)stop('child_setup');else {closed=true;clear();rejectDone(Error('child_spawn'));}
+ }
+ return {child,done,async dispose(){if(!closed)stop('child_cancelled');try{await done;}catch(error){if(!closed)throw Error('child_cleanup_unverified');}}};
+}
+test('CLI disabled startup, provider-free liveness and signal shutdown use no keys',{timeout:8000},async t=>{
  const port=await new Promise(r=>{const s=http.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>r(p));});});
- const child=spawn(process.execPath,['ask-gv/server.mjs'],{env:{PATH:process.env.PATH,PORT:String(port),ASK_GV_ENABLED:'0'},stdio:['ignore','pipe','pipe']});
- let out='';child.stdout.on('data',d=>out+=d);child.stderr.on('data',d=>out+=d);t.after(()=>child.kill('SIGKILL'));
- let response;for(let i=0;i<100;i++){try{response=await requestFetch(`http://127.0.0.1:${port}/healthz`);break;}catch{await new Promise(r=>setTimeout(r,10));}}
- assert.equal(response?.status,200);child.kill('SIGTERM');const code=await new Promise(r=>child.once('exit',r));assert.equal(code,0);assert.equal(out,'');
+ const owned=supervisedChild(['ask-gv/server.mjs'],{PATH:process.env.PATH,PORT:String(port),ASK_GV_ENABLED:'0'});
+ t.after(()=>owned.dispose());
+ let response;for(let i=0;i<20;i++){try{response=await requestFetch(`http://127.0.0.1:${port}/healthz`,{signal:AbortSignal.timeout(200)});break;}catch{await new Promise(r=>setTimeout(r,10));}}
+ assert.equal(response?.status,200);owned.child.kill('SIGTERM');const result=await owned.done;assert.equal(result.code,0);assert.equal(result.output,'');
 });
-test('CLI enabled startup refuses missing credentials without printing environment secrets',async()=>{
- const child=spawn(process.execPath,['ask-gv/server.mjs'],{env:{PATH:process.env.PATH,ASK_GV_ENABLED:'1',ASK_GV_DISABLE_FILE:'/nonexistent/disabled',OPENAI_API_KEY:'FAKE-must-not-be-printed'},stdio:['ignore','pipe','pipe']});let out='';child.stderr.on('data',d=>out+=d);const code=await new Promise(r=>child.once('exit',r));assert.equal(code,1);assert.equal(out,'Ask GV startup refused.\n');
+test('CLI enabled startup refuses missing credentials without printing environment secrets',{timeout:8000},async t=>{
+ const owned=supervisedChild(['ask-gv/server.mjs'],{PATH:process.env.PATH,ASK_GV_ENABLED:'1',ASK_GV_DISABLE_FILE:'/nonexistent/disabled',OPENAI_API_KEY:'FAKE-must-not-be-printed'});
+ t.after(()=>owned.dispose());const result=await owned.done;assert.equal(result.code,1);assert.equal(result.output,'Ask GV startup refused.\n');
 });
 
 test('provider response-body deadline is bounded after headers arrive',async t=>{

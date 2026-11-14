@@ -103,3 +103,14 @@ test('slow upload deadline releases concurrency without spending budget',async t
  });
  assert.ok(Date.now()-start>=4900 && Date.now()-start<7000);
 });
+
+// Requires a separately authorized disposable listener. Cancellation is tested
+// deterministically with the in-memory real handler in public-boundary.test.mjs.
+test('reserved final unit dispatches once; disabled after reservation denies', {timeout:5000}, async t=>{
+ for(const mode of ['final','disabled']) {
+  let disabled=false,n=99;
+  const f=await fixture(t,{operatorDisabled:()=>disabled,store:{peek(){return {remaining:100-n};},reserve(){n++;if(mode==='disabled')disabled=true;}}});
+  assert.equal((await f.request()).status,mode==='final'?200:503);
+  assert.equal(n,100);assert.equal(f.calls.length,mode==='final'?1:0);
+ }
+});

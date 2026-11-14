@@ -14,6 +14,21 @@
     }
   }
 
+  // Public configuration is not an authorization grant. Both values stay absent/empty
+  // until separate origin/hosting approval. Never infer approval from the endpoint.
+  function isApprovedAskGVEndpoint(endpoint, approvedOrigin) {
+    if (typeof endpoint !== 'string' || typeof approvedOrigin !== 'string' || !approvedOrigin) return false;
+    try {
+      const origin = new URL(approvedOrigin), target = new URL(endpoint);
+      return origin.protocol === 'https:' && origin.origin === approvedOrigin &&
+        !origin.username && !origin.password && !origin.search && !origin.hash &&
+        origin.pathname === '/' && target.protocol === 'https:' &&
+        target.origin === approvedOrigin && !target.username && !target.password &&
+        !target.search && !target.hash && target.pathname === '/v1/ask-gv' &&
+        endpoint === approvedOrigin + '/v1/ask-gv';
+    } catch { return false; }
+  }
+
   async function fetchJSON(url, options = {}) {
     const { timeoutMs = 20000, maxBytes = 16384, signal, ...requestOptions } = options;
     const controller = new AbortController();
@@ -35,11 +50,11 @@
         if (controller.signal.aborted) throw new RequestError("aborted");
         let response;
         try {
-          response = await root.fetch(url, { ...requestOptions, signal: controller.signal });
+          response = await root.fetch(url, { ...requestOptions, redirect: "error", signal: controller.signal });
         } catch (error) {
           throw new RequestError(controller.signal.aborted ? (timedOut ? "timeout" : "aborted") : "network");
         }
-        if (!response.ok) throw new RequestError("http", response.status);
+        if (response.redirected || !response.ok) throw new RequestError("http", response.status);
         let data;
         try {
           if(!Number.isSafeInteger(maxBytes) || maxBytes<1 || maxBytes>32768 || !response.headers.get('content-type')?.startsWith('application/json'))throw Error('response');
@@ -62,6 +77,6 @@
       signal?.removeEventListener("abort", abort);
     }
   }
-  root.GVAI = { ...root.GVAI, fetchJSON, RequestError };
+  root.GVAI = { ...root.GVAI, fetchJSON, RequestError, isApprovedAskGVEndpoint };
   if (typeof module !== "undefined" && module.exports) module.exports = root.GVAI;
 })(globalThis);
