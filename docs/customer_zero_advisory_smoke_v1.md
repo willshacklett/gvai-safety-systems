@@ -1,242 +1,228 @@
-# Customer Zero durable advisory smoke V1
+# Customer Zero advisory smoke: pre-execution corrections V1
 
-Status: new test-only candidate. Only resource-free validation is authorized for
-this build. No real HTTP/PostgreSQL integration result, deployment approval,
-independent launcher approval, threat-detection claim or enforced STOP follows.
+**Resource execution remains BLOCKING / HOLD.** These corrections authorize only
+resource-free validation. They do not establish the external frozen-source,
+runtime, approval or supervisor boundary identified by the pre-execution review.
+Both Python resource admission and Node native admission now unconditionally
+HOLD at that missing boundary. No environment flag, fixture record or supplied
+digest enables them. Connecting to HTTP/PostgreSQL requires a separately reviewed
+future boundary integration and separate explicit execution authorization.
 
-## Immutable source and scope
+## Preserved provenance and permitted changes
 
-Base L: `3c117260901cb15877512161cb24fa8e5587aa73` from
-`feature/lab01-commercial-staging-v1`. Import N:
-`c3fd88a236f32aa9b84e6baaa212cb4db79d02ca` from
-`feature/ask-gv-self-protection-advisory-v1`.
+Worktree: `/workspaces/gvai-customer-zero-advisory-smoke-v1`.
+Branch: `feature/customer-zero-advisory-smoke-v1`.
+Preserved HEAD C: `da20805adf79dac35f79ab99b303960ab66e4a96`.
+Backend base L: `3c117260901cb15877512161cb24fa8e5587aa73`.
+Node source N: `c3fd88a236f32aa9b84e6baaa212cb4db79d02ca`.
 
-New branch: `feature/customer-zero-advisory-smoke-v1`.
-Durable worktree: `/workspaces/gvai-customer-zero-advisory-smoke-v1`.
-All five paths were absent at L before writing:
+Only these three files change in this correction:
 
-| File | Provenance |
-| --- | --- |
-| `ask-gv/decision-client.mjs` | Exact N blob `7cb255a896036f669b034c6858d2b74d4ebecc46` |
-| `tests/ask-gv/decision-client.test.mjs` | Exact N blob `92fbe60cb1d1565326aace17ae08d91368506b56` |
-| `tests/ask-gv/customer-zero-commercial-smoke-driver.mjs` | New one-shot test driver |
-| `tests/integration/test_customer_zero_commercial_smoke.py` | New pure contracts and separately gated disposable case |
-| `docs/customer_zero_advisory_smoke_v1.md` | This boundary/evidence document |
+- `tests/integration/test_customer_zero_commercial_smoke.py`;
+- `tests/ask-gv/customer-zero-commercial-smoke-driver.mjs`;
+- `docs/customer_zero_advisory_smoke_v1.md`.
 
-Product/backend/custody APIs, SQL, migrations, provider controls, STOP/ARM,
-package manifests and deployment/CI remain unchanged. This does not reconstruct,
-invoke, approve or replace the missing eight-file harness/trusted launcher.
-No other worktree or preserved branch is changed.
+Imported `ask-gv/decision-client.mjs` stays exactly N blob
+`7cb255a896036f669b034c6858d2b74d4ebecc46`, SHA256
+`e4e729459eb4510eb4b5498ef885b7c3c5d6a5c803ddeccc2a1fdce7414c8420`.
+Imported `tests/ask-gv/decision-client.test.mjs` stays exactly N blob
+`92fbe60cb1d1565326aace17ae08d91368506b56`, SHA256
+`ae1be8aa0198a84058475936901a0c3a7bffb4f60d2dfab94848546824a7ee59`.
+No backend, product API, evaluator, migration, provider, budget, STOP/ARM, billing,
+CI or deployment change. No missing eight-file harness/launcher is reconstructed,
+invoked, approved or bypassed. Corrections are uncommitted until separately
+reviewed and authorized for preservation; C and its GitHub branch remain unchanged.
 
-## Driver contract and private transport
+## F1: effective destination checks
 
-Importing the new Node driver defines functions; it does not read stdin, start a
-listener or evaluate. `runSmoke(config,{fetchImpl,signal,evidence})` requires an
-explicit transport; there is no default native transport. It calls the real
-unchanged `createDecisionClient` once, checks the outgoing request, and calls
-`operation.provider('not_attempted')` exactly once. That method only records an
-observation; no provider exists in this driver.
+`validate_destination` is pure, bounded and independent of psycopg/libpq. It
+accepts only an explicitly narrowed synthetic keyword DSN: exactly `host`,
+`hostaddr`, `port`, `dbname`, `user`, `password`, each once. Host and hostaddr must
+both be literal127.0.0.1; port must be a canonical single decimal1..65535 and equal
+the independently reviewed `expected_database_port` integer. Database and runtime
+role must match the reviewed test-only identifiers. No URI, quotes, escapes,
+newlines/tabs, duplicate keys, extra parameters, empty values, multi-host/port
+lists or inferred defaults. Synthetic passwords deliberately use only16..256
+ASCII letters/digits/underscore/hyphen; this is not a general DSN parser or API.
+The result is rebuilt in a canonical field order rather than forwarding ambiguous
+text. Fixture DSNs using a broader grammar must HOLD, never be silently relaxed.
 
-The generated request ID is a fresh `askgv-<UUIDv4>`; no test-supplied ID or retry
-API is added. Body keys remain exactly version/request_id/resource_id/telemetry/
-reported_effects. The five counters are zero, latency is null and effects empty.
-The checked method, bearer header, byte length, JSON media type, signal and
-redirect policy are the unchanged client's actual fetch arguments.
+`refuse_libpq_environment` rejects any ambient PG-prefixed key, including service
+inputs, before library loading/connection. It examines keys only, not their
+values, and reports only `libpq_environment`. The parent needs a separately
+reviewed clean environment and synthetic-only default credential context.
+Node's small child environment is not a libpq parent environment sanitizer.
 
-CLI input is private JSON-lines on stdin, never a key in argv or environment.
-No secret environment fallback is supported. Contract initial frame:
+Pure tests use synthetic DSNs and fake mappings, including mappings that raise
+if values are read. They never import psycopg or connect. These checks cannot
+prove that a loopback port is disposable: the independent custodian must bind the
+exact instance/namespace/port and prevent production forwarding or unrelated
+mounts/routes **before contact**. Matching DB name/role/version after connecting
+cannot undo a contact to the wrong instance. R2 remains OPEN/HOLD.
 
-```json
-{"mode":"contract","config":{"endpoint":"http://127.0.0.1:8080/v1/evaluations","project":"customer-zero-contract","key":"FAKE-contract-only-key"}}
-```
+## F2: drift detection versus external authority
 
-This mode injects a pipe-backed fake fetch. It emits one fixed synthetic request
-frame `{type:"request",body:<actual body>}`. The parent responds privately with
-`{status:<integer>,body:<real serialized service response or test mutation>}`.
-The real client validates that response, including request correlation, schema,
-advisory_only=true and enforcement_applied=false. There is no HTTP or network in
-this mode. The private request frame is synthetic protocol data, not a public
-observation; it contains no key/header/prompt/customer content. Parent tests keep
-it in memory. Final frame is `{type:"result",result:<sanitized allowlist>}`.
+`require_approved_candidate` returns the independently expected digest only after
+an equality check. It never substitutes a freshly calculated digest. The same
+expected value is retained from approval through pre-connection checks and child
+input. The child wrapper verifies both current bytes and the exact supplied child
+digest before doing anything; resource execution still stops at the missing
+external boundary. A second computation that differs causes `source_integrity`.
 
-Output contains only version, evidence label, request count/ID, observed status,
-accepted advisory flag (true only for an accepted evaluated response, null on
-unavailability), enforcement=false and two bounded correlated observations.
-Explanations, raw responses, keys, DSNs and exceptions are excluded. A failure
-produces a fixed HOLD frame/nonzero exit; it is never a fabricated success.
-HTTP status is null if no response reached the wrapper. It is only a mocked
-status in contract mode, never evidence of a real HTTP response.
-
-Client deadline remains the original 500 ms across headers/body. No retries,
-refunds, quota reset or result synthesis. Subprocess deadline is a separate
-8-second outer bound (explicit smaller bounds for fault tests). Private frame
-input is bounded to 16 KiB per frame / 32 KiB total, emitted frame to 8 KiB and
-final result to 4 KiB; parent reads each output stream live up to16 KiB (not an
-unbounded `communicate`). Parent writes nonblocking bounded pipe messages and
-kills/reaps its owned active process group on failure/deadline/overflow. Errors
-are redacted. Trusted Python callbacks are not a hard real-time isolation layer;
-the test invocation itself should also have a finite supervisor deadline.
-
-## Resource-free validation
-
-Use preexisting Node24.22.2 and Python with existing backend dependencies. No
-npm/pip install, blanket suite, listener, database, browser or provider is needed.
-Inspect the exact tests/imports before each invocation. Example selected commands
-for a later authorized rerun, all from the new worktree:
-
-```sh
-timeout 30s node --check tests/ask-gv/customer-zero-commercial-smoke-driver.mjs
-timeout 30s node --test tests/ask-gv/decision-client.test.mjs
-PYTHONDONTWRITEBYTECODE=1 timeout 90s python -B tests/integration/test_customer_zero_commercial_smoke.py
-```
-
-Default Python execution runs only `PureContracts` plus a visibly skipped
-`DisposableSmoke` case. The pure class uses stdlib unittest, finite private-pipe
-Node processes, synthetic in-memory keys/authorizer/quota, the preserved real
-Python evaluator/service and response serializer. It does not import existing
-test modules. It validates the actual client body -> real service envelope ->
-actual client's strict parser round trip. It checks one request, zero telemetry,
-correlation, advice flags, provider-not-attempted, replay at the service layer,
-error/invalid-envelope unavailability, cancellation/deadline, redaction, bounded
-output/process termination, import safety and fail-closed missing approval.
-
-No-resource round trip is **connectivity contract evidence only**. A fixed zero
-sample predictably produces ALLOW/green/0; that is not meaningful threat
-detection, prompt safety, actual spend monitoring, safe-effects proof or an
-execution grant. Service-layer replay is not proof of an HTTP409 or PostgreSQL
-transaction. A mocked HTTP status is labeled mocked. No listener is created even
-when the synthetic endpoint contains a loopback URL.
-
-## Future disposable section: not authorized or run by this build
-
-`DisposableSmoke.test_disposable_http_postgresql_smoke` is skipped unless
-`GVAI_CUSTOMER_ZERO_DISPOSABLE=1`. Opting in additionally requires:
-
-- `GVAI_CUSTOMER_ZERO_EXECUTION_AUTHORIZED=one-disposable-advisory-smoke`;
-- absolute `GVAI_CUSTOMER_ZERO_FIXTURE_FILE` and its independently supplied
-  `GVAI_CUSTOMER_ZERO_FIXTURE_SHA256`;
-- absolute `GVAI_CUSTOMER_ZERO_APPROVAL_FILE` and its independently supplied
-  `GVAI_CUSTOMER_ZERO_APPROVAL_SHA256`.
-
-These environment values are non-secret admission inputs, not credentials.
-Missing/mismatched prerequisites after opt-in cause HOLD/failure, not a skip or
-PASS. This code never creates an approval. An independent reviewer/operator must
-supply approval and its digest out of band after reviewing the candidate,
-fixture isolation and a distinct explicit resource-execution authorization.
-A digest detects changed bytes; it does not authenticate the reviewer or prove
-isolation. Anyone controlling all these inputs can self-assert them; independent
-custody/review is a required external trust boundary, not provided by this test.
-Do not set these inputs merely to make tests pass. No authorization issuer or
-replacement trusted launcher is implemented here.
-
-Both input files must be non-symlink regular files, single link, current-user
-owned, mode0400/0600, <=16 KiB, immediately in a current-user-owned0700 directory.
-The file bytes must match the supplied SHA256 before parsing (strict duplicate
-and nonfinite JSON rejection). Parent directory custody remains a trusted
-operator prerequisite; this is not a proof against same-UID replacement/races.
-Only synthetic disposable secrets may appear in the private fixture file; never
-Lab-01, production or real customer credentials. No such files are generated by
-this build or by default tests.
-
-Fixture exact fields:
-
-- `fixture_id`: `customer-zero-` plus1..64 lowercase letters/digits/hyphens;
-- `synthetic_only`: true (operator attestation, not a proof);
-- `project`: same identifier prefix/shape, reviewed owned evaluation resource;
-- `evaluation_key`: evaluate-only synthetic `gvai_customer_v1_...` key;
-- `usage_key`: distinct usage-read synthetic customer key;
-- `expected_database`: `gvai_advisory_test_customer_zero_` plus1..40 lowercase
-  letters/digits/underscores;
-- `expected_runtime_role`: `customer_zero_` plus1..40 lowercase
-  letters/digits/underscores;
-- `expected_server_version`: exact six-digit PostgreSQL server_version_num;
-- `runtime_config`: exact L staging config keys mode/database_dsn/
-  verifier_secret_hex/authority/port/max_connections. Mode private-staging,
-  port integer0, max_connections integer2,32-byte lowercase hex verifier secret.
-  Authority is exactly authority_id=customer-zero-disposable, epoch=1,
-  trust_domain=customer-zero-disposable. DSN requires literal127.0.0.1, approved
-  database/user/password and only host/hostaddr/port/dbname/user/password fields.
-
-Approval exact fields: `scope`=one-disposable-advisory-smoke, `fixture_id`,
-`fixture_sha256`, `candidate_sha256`, `authorized`=true, nonempty identifier
-`review_id`, integer `expires_unix` (future, at most24 hours away). Fixture ID and
-fixture hash must match. Candidate digest is SHA256 of UTF-8 records sorted by
-relative file path, one per five scoped files:
+Candidate digest format remains SHA256 over sorted five-file records:
 `relative_path + NUL + lowercase_file_sha256 + newline`.
-Approval lives outside the candidate, so it creates no circular self-hash.
-Changing any scoped file invalidates approval. Existing imports also remain
-pinned by the documented Git blobs. After commit, separately record its SHA.
+Reads are bounded, regular-file/single-link, no-follow and checked for identity
+changes. Five-file hashing does **not** bind backend/runtime/installed SQL.
 
-The later reviewer must independently provision an isolated disposable database,
-non-superuser schema owner and distinct restricted runtime, apply only reviewed
-migrations001-003, initialize the exact synthetic authority and active pilot
-cap3, and issue evaluate-only and usage-read keys. Runtime must have only schema
-USAGE and the three advisory entry EXECUTE grants. This test implements no
-Docker/DB/role/key lifecycle, migrations or schema reset; it must not reuse an
-existing arbitrary DSN just because its name matches. DB identity labels are
-checks, not proof of disposal or uniqueness. Review exact runtime/dependency and
-infrastructure identities; L's psycopg requirement is a range, not an exact lock.
+The inert `verify_execution_sources` helper additionally checks independently
+expected Git HEAD/path/branch, full clean status (including ignored artifacts and
+hidden index flags), actual tracked backend/migration/dependency declaration bytes
+against Git blobs, unchanged backend context against L, and origins of already
+loaded gvai modules. It does not import product modules. Git reads have finite
+deadlines/live output caps. Module file paths do not authenticate already loaded
+code objects, import hooks, plugins, dependencies or this mutable verifier.
 
-Only after admission, the test constructs L PrivateStagingApplication: this
-connects to PostgreSQL and binds loopback HTTP, even before start(). It verifies
-actual database/user/server version, L runtime-role/function rules and baseline
-allowance3/consumed0/reserved0/completed0/failed0. The evaluation key must not read
-usage. It then starts only the commercial loopback listener at a random port.
-Node receives only endpoint/project/evaluation key plus non-secret admission
-identity through stdin. It receives no DSN, verifier, usage key or owner secret.
-A minimized child environment includes only PATH/TZ and externally approved
-resource-admission scope/digest. Standalone driver native mode rejects absent
-admission environment, invalid fixture/candidate digests or nonliteral-loopback
-endpoints; valid JSON alone does not activate native mode.
+Node resolution is bound once to an absolute executable/stat identity and checked
+for drift before subsequent launches. This is not an independently approved
+runtime hash or an attestation of the loaded libraries. The supported later
+runtime remains Node24.22.2; pure tests need only an inspected existing runtime.
 
-Future native mode calls global fetch once with the unchanged client, and
-requires Node24.22.2. No OpenAI, provider or Ask GV server path is imported.
-Acceptance: actual HTTP200 and evaluated0/green/ALLOW with matching ID/advice
-flags, provider-not-attempted, then durable usage allowance3/consumed1/reserved0/
-completed1/failed0/remaining2. Connection leases/listener are shut down in finally.
-No refund/retry or database deletion is performed. External infrastructure and
-post-run reconciliation/cleanup remain reviewer/operator responsibilities.
-If a client times out, rejects a response, or a shutdown fails, result is HOLD;
-committed units may still be charged. Reconcile actual durable state before any
-new invocation, including after an empty/partial result. Do not rerun against a
-nonzero baseline or reset counts. The candidate's explicit minimal acceptance
-does not assert evaluator invocation count via DB internals; count/correlation
-and usage are the available evidence, not full exactly-once proof.
+**F2 remains BLOCKING.** Required external evidence: an independently pinned,
+trusted frozen execution tree/import context, exact reviewed correction commit,
+Python/Node/dependency/library identities, installed SQL review and safe process
+supervision. Code must be protected from untrusted writes throughout execution.
+A self-supplied record or environment value cannot authenticate that boundary.
+The hard-HOLD functions deliberately have no runtime enable flag. Replacing them
+requires a separate reviewed change, not setting another assertion field.
+No mutable-code self-authentication or trusted-launcher approval is claimed.
 
-## Incomplete and intentionally unchanged
+## F3: owned child lifecycle, limited scope
 
-- Actual HTTP/PostgreSQL smoke, real auth/role enforcement and durable charge:
-  NOT RUN. Default skip is nonexecution, not integration success.
-- Native-fetch cancellation, response loss, real replay/conflict diagnostics,
-  clean restart/crash durability, quota exhaustion, auth/expiry/revocation,
-  accounting/commit ambiguity and infrastructure shutdown/cleanup matrix remain
-  later separately reviewed slices. No mocked result substitutes for them.
-- N4 expiry during synchronized authority-lock wait; N7 lock-client abort/late
-  database outcome; N8 real connection-capacity exhaustion/privilege revocation;
-  N12 key revocation between reservation acknowledgment/completion remain OPEN.
-- Node validateDecision requires decision to follow score/band, but Python can
-  validly BLOCK a caller-reported authority-expansion effect while score remains
-  green. Fixed empty-effects adapter input avoids that incompatibility here.
-  Neither validator nor evaluator is relaxed; no red score is invented.
-- Advisory never enforces independent STOP. BLOCK/error/timeout do not control
-  provider admission. Existing disable/drain/budget/circuit and non-atomic
-  readiness windows remain unchanged. Abort is not remote termination or quota
-  rollback. No STOP/ARM authority integration or grant is added.
-- P1: old diagnostic fault matrix shares a latched stderr stream state, so later
-  matrix cases do not freshly exercise fallback writes. Not fixed or closed by
-  new clean-sink tests.
-- P2: old advisory Python fixture has an unbounded Node check_output; default
-  Python CI lacks explicit supported Node setup and docs omit that fixture.
-  New driver subprocesses are bounded, but old fixture/CI/docs finding stays OPEN.
-- Commercial evaluator starts fresh guard state per request. Fixed zeros do not
-  measure tokens/spend/cumulative risk or threats; empty reported effects prove
-  nothing about actual effects. Meaningful measured telemetry is future work.
-- Logs are bounded best-effort observations, not guaranteed durable audit
-  delivery; same-process timing is not hard real-time isolation. Host isolation,
-  private ingress/TLS, secret mounts, audit retention and independent release
-  review remain unverified. No billing, paid entitlement or production approval.
+All Popen, identity capture, selector setup, I/O, cancellation and cleanup now sit
+inside `OwnedProcess`. The Linux implementation requires pidfds, WNOWAIT, default
+SIGCHLD handling and a main-thread trusted exclusive waiter. It records the
+child's parent/session/group/start-time identity, retains the leader **unreaped**
+even after exit, and never calls `poll()` to discard that PID/session anchor.
+Before a group signal it verifies the still-owned unreaped child and exact
+identity. No numeric process-group signal occurs after reaping. A new session
+means the group is separate from other jobs; no name-based or broad PID kill.
 
-Smallest next preservation action: review the exact five-file diff, pins, test
-results and omissions, then separately authorize staging exactly these five
-paths and one local checkpoint commit on this new branch. No commit, push,
-resource run or missing-launcher approval is included in this build.
+If identity is missing/changed, cleanup does not guess a numeric group: only the
+original pidfd may signal its leader, reaping remains finite, and incomplete group
+cleanup becomes `cleanup_failure`/HOLD. A partial identity or OS failure is never
+reported clean. Leader-exit with descendants still causes anchored group cleanup;
+a bounded read-only membership check must confirm no same-session descendants
+before reaping, including members that changed process groups. Such an escape is
+HOLD rather than permission to signal additional groups.
+Kernel/process permission failures or persistent descendants cause HOLD.
+
+Temporary cooperative SIGTERM/SIGINT handlers mark cancellation and are restored
+after cleanup. Every live I/O loop checks the flag. Setup errors still close
+selectors/pipes/handles and reap within the owned cleanup scope. The client500ms
+timer stays unchanged; child communication default8s, individual operations are
+bounded, cleanup has finite descendant/reap bounds. Trusted synchronous callbacks
+are not preemptible by this helper's clock.
+
+This does NOT control the entire Python service lifetime, uncooperative parent
+termination, SIGKILL, a hostile same-process reaper, escaped process sessions,
+OS/kernel failure or independently provisioned infrastructure. A separate trusted
+supervisor must own the whole job/process set and prove cleanup even when Python
+cannot run finally. A plain timeout on Python's group is not that proof because
+the child starts a new session. No cgroup/supervisor is created by this source.
+F3 whole-job/external-supervisor prerequisite remains OPEN/HOLD. Mock lifecycle
+checks prove control flow only; no actual descendant/service/isolation fault run
+is claimed. Real resource-free child tests use only leaf Node scripts, no listeners.
+
+## F4/F5: truthful results and precise evidence
+
+`completionFrame` applies narrow Node-side disposable acceptance: one request,
+native evidence label, HTTP200, accepted advice-only/false-enforcement, correlated
+evaluated ALLOW/green/0 and provider-not-attempted. Unavailable/timeout/cancelled or
+other failures produce a sanitized HOLD frame and exit2. Contract-mode negative
+tests can still return expected unavailable observations with exit0. Neither mode
+changes product advisory admission semantics. Pure mocked classification tests do
+not prove actual native transport. Native entry is independently hard-HOLD now.
+
+Node exit0 alone never establishes integration acceptance. Python still requires
+the actual database baseline/after counts and full result checks. Default skipped
+integration is NOT RUN; it is never PASS. Direct native use remains unauthorized.
+No retry, refund, quota reset or fabricated grant/result is added.
+
+`Hold` retains only fixed redacted codes and bounded safe evidence: child-start
+acknowledgement, cleanup verification and numeric exit status. Deadline, output
+overflow, spawn failure, process exit, protocol and cleanup/ownership failures are
+distinct. No raw stderr, DSN, key, response or private exception is emitted.
+Selected limit tests require the exact intended code, a private child-start marker
+and verified cleanup. Lifecycle/partial-setup/cancellation/ownership-change/reap
+faults use deterministic fakes, never real descendant trees or broad signals.
+A mocked CLI admission test supplies synthetic private input and fetch/listener/
+connect guards; it requires exit2 before any mock fetch invocation. A bounded
+source-read test rejects pathname replacement using inert filesystem mocks.
+A missing runtime cannot satisfy the deadline/overflow evidence checks.
+
+## Pure validation boundaries
+
+Inspect imports, child snippets and selected test effects before each invocation.
+The selected classes are `PureContracts`, `SourceAdmissionContracts`,
+`LifecycleFaultContracts`; do not select the disposable class or run blanket suites.
+Python bytecode/cache writes should be disabled. Python AST/in-memory compilation,
+node --check and exact imported client tests are allowed under finite deadlines
+and bounded output. No installation, HTTP listener, native fetch, PostgreSQL,
+Docker, provider, migration or infrastructure lifecycle is needed or authorized.
+Tests invoke the unchanged client using fake transport/private pipes and the real
+Python evaluator/service in synthetic memory. The500ms timeout is unchanged.
+
+Inert context checks on this dirty correction worktree correctly HOLD; a future
+clean reviewed correction commit must be explicitly pinned. Mock context tests
+exercise backend drift and import-origin rejection without executing backend code.
+Successful pure tests do not clear F2 or turn fixture assertions into approval.
+
+## Dormant future fixture contract: not an executable authorization
+
+The prior fixture format additionally requires `expected_database_port`; approval
+additionally requires `source_head` for the exact reviewed correction commit.
+The existing digest/expiry/fixture checks remain consistency checks only. Approval
+and expected hashes need independent custody; caller-controlled values can be
+self-asserted. R1 remains OPEN. Expiry/one-run consumption semantics are externally
+defined; the source does not mint or consume an authenticated grant (R6 OPEN).
+No fixture, approval or credential file is created by this correction or tests.
+Resource admission currently HOLDs before reading such files/importing psycopg.
+
+A future reviewed integration must establish a fresh exclusive cap3 pilot, exact
+synthetic authority, distinct non-superuser owner/restricted runtime, reviewed
+L migrations001-003 and pgcrypto/grants, evaluate-only and usage-read-only keys.
+Keep owner credentials out of Python/Node; Node receives only its synthetic
+customer key privately. Same-UID delivery reduction is not OS isolation (R3).
+Exact runtime/dependency/installed-function identities need external review (R4).
+The code has no Docker/DB/migration/role provisioning, refund or schema reset.
+
+The dormant happy case remains narrow: matching-ID actual evaluated advice,
+provider-not-attempted, aggregate usage0->1/completed1/remaining2. Exclusive fixture
+ownership and sanitized per-run evidence are external requirements. Aggregates do
+not prove request-level exactly-once; ambiguous commits/results can still charge.
+Quarantine/reconcile before another run, never hide it with a new ID or reset (R5).
+No native/DB case, real replay/conflict/restart/cleanup or failure matrix is run.
+
+## Remaining limitations and disposition
+
+R1-R6 stay open wherever noted: independent approval, disposable identity,
+same-UID custody, runtime/SQL attestation, accounting attribution/reconciliation,
+expiry/single-invocation policy. F1 parsing/environment and F4/F5 source changes
+are not independent execution approval; F3 external containment is unverified.
+P1 old latched-stream diagnostic matrix and P2 old unbounded Node fixture/default
+Python CI/docs gap remain OPEN. N4 expiry under authority lock wait; N7 client abort/
+late outcome; N8 capacity exhaustion/privilege revocation; N12 key revocation between
+reservation/completion remain OPEN. No earlier mock test is upgraded to runtime proof.
+
+Python can validly produce effect-based BLOCK with a green score; unchanged Node
+strict score/band mapping rejects that. Fixed empty effects avoid the mismatch,
+not resolve it. Fixed all-zero telemetry/null latency/empty effects ALLOW/green/0
+is connectivity evidence only, never meaningful risk/threat detection, actual
+spend measurement, safe-effects proof or enforcement. Guard state is fresh per call.
+Advisory does not enforce independent STOP/ARM; BLOCK/errors/timeouts do not govern
+provider admission or prove remote termination/rollback. No production readiness,
+TLS/host isolation/audit retention/billing/launch approval.
+
+STOP for review. No commit, push, preservation checkpoint, PR, merge, deployment
+or resource execution is authorized by this correction. Any later changes to the
+external boundary need explicit scope and independent review, not a hidden toggle.

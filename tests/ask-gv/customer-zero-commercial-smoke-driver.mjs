@@ -45,6 +45,34 @@ export async function runSmoke(config,{fetchImpl,signal,evidence='mocked-contrac
   need(Buffer.byteLength(JSON.stringify(result))<=4096);return result;
 }
 
+// Pure policy over sanitized client observations; a mock label is not native evidence.
+export function disposableSmokeAccepted(result) {
+  const pre=result?.observations?.[0], provider=result?.observations?.[1];
+  return exact(result,['version','evidence','requests','request_id','http_status','accepted_advisory_only','enforcement_applied','observations']) &&
+    result.version==='customer-zero-advisory-smoke-v1' && result.evidence==='disposable-connectivity-only' &&
+    result.requests===1 && typeof result.request_id==='string' && ID.test(result.request_id) &&
+    result.http_status===200 && result.accepted_advisory_only===true && result.enforcement_applied===false &&
+    Array.isArray(result.observations) && result.observations.length===2 &&
+    pre?.phase==='pre_dispatch' && pre.status==='evaluated' && pre.decision==='ALLOW' && pre.risk_band==='green' && pre.risk_score===0 &&
+    pre.request_id===result.request_id && pre.mode==='advisory' && pre.enforcement_applied===false &&
+    provider?.phase==='provider' && provider.request_id===result.request_id && provider.mode==='advisory' &&
+    provider.enforcement_applied===false && provider.provider_outcome==='not_attempted';
+}
+export function completionFrame(result,mode) {
+  if(mode==='disposable' && !disposableSmokeAccepted(result)) {
+    const pre=result?.observations?.[0];
+    return {exitCode:2,frame:{type:'hold',reason:'disposable_smoke_not_accepted',
+      ...(typeof result?.request_id==='string' && ID.test(result.request_id)?{request_id:result.request_id}:{}),
+      ...(['evaluated','unavailable','timeout','cancelled'].includes(pre?.status)?{status:pre.status}:{})}};
+  }
+  need(mode==='contract' || mode==='disposable');
+  return {exitCode:0,frame:{type:'result',result}};
+}
+export function requireExternalNativeBoundary() {
+  // No environment flag or self-supplied approval record enables native execution.
+  throw Error('HOLD: external_execution_boundary_required');
+}
+
 // This is an admission check for a separately reviewed caller, NOT an authorization issuer.
 export function validateDisposableInput(input) {
   need(exact(input,['mode','config','authorization']) && input.mode==='disposable');
@@ -100,10 +128,12 @@ async function main() {
       }});
     }else {
       validateDisposableInput(input);
+      requireExternalNativeBoundary();
       need(process.version==='v24.22.2');
       result=await runSmoke(input.config,{fetchImpl:globalThis.fetch,evidence:'disposable-connectivity-only'});
     }
-    await send({type:'result',result});
+    const completed=completionFrame(result,input.mode);
+    process.exitCode=completed.exitCode;await send(completed.frame);
   }catch {await send({type:'hold',reason:'smoke_prerequisite_or_contract_failed'});process.exitCode=2;}
   finally {reader.close();}
 }
